@@ -1,0 +1,16 @@
+README.md
+VERSION
+package.json
+package-lock.json
+services/api/package.json
+services/api/src/app.js
+packages/contracts/package.json
+docs/architecture/P0-V2-SOURCE-BASELINE.md
+docs/architecture/P0-V2-IMPLEMENTATION-INVENTORY.md
+docs/architecture/P0-V2-EXTRACTION-MAP.md
+docs/architecture/P0-V2-DEPENDENCY-RISKS.md
+docs/architecture/P0-V2-EXTRACTION-MAP.json
+docs/release/V2_MANIFEST.md
+docs/testing/P0-V2-ACCEPTANCE.md
+docs/testing/PHASE-0-ACCEPTANCE.md
+test/p0-v2-extraction-map.test.js

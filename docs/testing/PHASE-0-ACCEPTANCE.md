@@ -1,4 +1,4 @@
-# Phase 0 V1 Acceptance
+# Phase 0 V1 Acceptance (Historical Gate)
 
 ## Automated verification
 
@@ -29,7 +29,7 @@ Then open:
 http://localhost:4100/health
 ```
 
-Expected HTTP 200 with `status = ok`, `phase = 0`, and version `0.1.0-phase0`.
+Expected HTTP 200 with `status = ok`, `phase = 0`, and version `0.1.0-phase0` (V1 checkpoint).
 
 ## Docker check
 
@@ -49,3 +49,6 @@ V1 is accepted when:
 4. Current-state audit is reviewed against AkshaERP.
 5. SystemSender/realtime invariants are accepted as migration regression requirements.
 6. No ERP business logic has been duplicated into the standalone repository.
+
+
+Current acceptance gate: `P0-V2-ACCEPTANCE.md`.

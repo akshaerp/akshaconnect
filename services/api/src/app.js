@@ -1,6 +1,6 @@
 'use strict';
 
-const VERSION = '0.1.0-phase0';
+const VERSION = '0.2.0-phase0';
 const SERVICE_NAME = process.env.AKSHACONNECT_SERVICE_NAME || 'akshaconnect-api';
 
 function writeJson(res, statusCode, body) {

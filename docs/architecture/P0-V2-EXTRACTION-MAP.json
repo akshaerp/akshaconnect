@@ -1,0 +1,649 @@
+{
+  "schema_version": "1.0",
+  "phase": "P0-V2",
+  "generated_for_repository": "akshaerp/akshaconnect",
+  "standalone_base_commit": "7fe19047fbc61f2ba7daefbfd9c963c49e630293",
+  "source_repository": "akshaerp/aksha",
+  "source_commit": "21f72ba86bb1cb2e09012285a7b01d71a45280e0",
+  "source_date": "2026-08-31",
+  "allowed_dispositions": [
+    "MOVE",
+    "ADAPT",
+    "KEEP_IN_ERP",
+    "SHARED_CONTRACT",
+    "TRANSITIONAL",
+    "DEPRECATE_LATER"
+  ],
+  "entries": [
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/graphql/acnCollaborationSchema.graphql",
+      "area": "server.graphql",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/graphql/",
+      "reason": "Collaboration API surface belongs to AkshaConnect; preserve wire behavior while versioning standalone schema."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/graphql/acnPresenceSchema.graphql",
+      "area": "server.graphql",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/graphql/",
+      "reason": "Collaboration API surface belongs to AkshaConnect; preserve wire behavior while versioning standalone schema."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/graphql/acnCollaborationResolvers.js",
+      "area": "server.graphql",
+      "disposition": "ADAPT",
+      "target": "services/api/src/modules/collaboration/graphql/",
+      "reason": "Resolver plumbing moves only after replacing ERP request context, errors and direct ERP lookups with standalone boundaries."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/graphql/acnPresenceResolvers.js",
+      "area": "server.graphql",
+      "disposition": "ADAPT",
+      "target": "services/api/src/modules/collaboration/graphql/",
+      "reason": "Resolver plumbing moves only after replacing ERP request context, errors and direct ERP lookups with standalone boundaries."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnAssociations.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnChannelEntityLinkModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnChannelMemberModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnChannelModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnMessageAttachmentModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnMessageEditModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnMessageMentionModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnMessageModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnMessageReactionModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnUserChannelStateModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnUserPresenceStatusModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/models/acnWorkspaceModel.js",
+      "area": "server.persistence",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/models/",
+      "reason": "Durable collaboration entities are AkshaConnect-owned. Replace ERP database bootstrap import with standalone database package."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/repositories/acnCollaborationRepository.js",
+      "area": "server.persistence",
+      "disposition": "ADAPT",
+      "target": "services/api/src/modules/collaboration/repositories/",
+      "reason": "Core persistence belongs in AkshaConnect, but current repository imports ERP parseFilters/error helpers and Access Management user model.",
+      "dependencies": "amUserModel, parseFilters, ERP errorHandler"
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/repositories/acnCollaborationRepositoryV2.js",
+      "area": "server.persistence",
+      "disposition": "ADAPT",
+      "target": "services/api/src/modules/collaboration/repositories/",
+      "reason": "V2 persistence contains valuable sender/member enrichment but directly reads am_users and optionally hr_employees; identity enrichment must go through an ERP identity contract.",
+      "dependencies": "amUserModel, hr_employees, ERP sequelize/errorHandler"
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/repositories/acnPresenceRepository.js",
+      "area": "server.persistence",
+      "disposition": "ADAPT",
+      "target": "services/api/src/modules/collaboration/repositories/",
+      "reason": "Presence persistence moves, but organization authorization currently queries am_user_org/am_users directly and must be replaced by verified identity/organization claims or ERP identity API.",
+      "dependencies": "am_user_org, am_users"
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/repositories/acnErpRecordLookupRepository.js",
+      "area": "erp.lookup",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP Integration/Lookup API",
+      "reason": "ERP record discovery searches ERP-owned modules and records, so the database lookup implementation must remain inside AkshaERP."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/services/acnCollaborationService.js",
+      "area": "server.domain",
+      "disposition": "ADAPT",
+      "target": "services/api/src/modules/collaboration/services/",
+      "reason": "Core domain behavior moves, but current service imports ERP transaction/error utilities and ERP push service.",
+      "dependencies": "ERP transactionService, ERP errorHandler, ApplicationManagement push"
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/services/acnCollaborationServiceV2.js",
+      "area": "server.domain",
+      "disposition": "ADAPT",
+      "target": "services/api/src/modules/collaboration/services/",
+      "reason": "V2 collaboration behavior is the preferred compatibility baseline; replace ERP utilities and ApplicationManagement push with local boundaries.",
+      "dependencies": "ERP transactionService, ERP errorHandler, ApplicationManagement push"
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/services/acnAttachmentStorageService.js",
+      "area": "attachments",
+      "disposition": "ADAPT",
+      "target": "services/api/src/modules/attachments/",
+      "reason": "Attachment ownership moves to AkshaConnect but storage configuration, authorization and URL behavior need standalone object-storage contracts."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/services/acnMessageCryptoService.js",
+      "area": "security",
+      "disposition": "MOVE",
+      "target": "services/api/src/modules/collaboration/security/",
+      "reason": "Message encryption is collaboration-owned. Preserve ciphertext compatibility and key-version behavior while moving configuration to standalone secret management."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/services/acnPresenceService.js",
+      "area": "presence",
+      "disposition": "ADAPT",
+      "target": "services/realtime + services/api",
+      "reason": "Presence/status behavior moves, but organization-access checks must no longer depend on ERP tables directly.",
+      "dependencies": "ERP organization authorization"
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/services/acnRetentionService.js",
+      "area": "retention",
+      "disposition": "MOVE",
+      "target": "services/notification-worker/src/retention/",
+      "reason": "Retention is collaboration-owned and can move after schema compatibility is established."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/services/acnRetentionSchedulerService.js",
+      "area": "retention",
+      "disposition": "ADAPT",
+      "target": "services/notification-worker/src/retention/",
+      "reason": "Scheduling mechanism should move out of ERP server startup into an AkshaConnect worker/operational schedule."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/services/acnErpRecordLookupService.js",
+      "area": "erp.lookup",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP Integration/Lookup API",
+      "reason": "ERP record lookup is ERP-owned; expose a secured versioned API rather than copying module-specific discovery logic."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/realtime/acnRealtimeHub.js",
+      "area": "realtime",
+      "disposition": "ADAPT",
+      "target": "services/realtime/src/",
+      "reason": "Realtime ownership moves, but current hub verifies ERP JWT_SECRET and directly queries am_user_org/am_users. Replace with standalone token verification/identity introspection while preserving channel membership authorization.",
+      "dependencies": "JWT_SECRET, am_user_org, am_users, shared database"
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/realtime/acnRealtimeServer.js",
+      "area": "realtime",
+      "disposition": "ADAPT",
+      "target": "services/realtime/src/",
+      "reason": "Standalone realtime service should preserve heartbeat, presence and authorization behavior but not start from the ERP HTTP server process."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/realtime/acnPresenceSocketTracker.js",
+      "area": "realtime",
+      "disposition": "MOVE",
+      "target": "services/realtime/src/",
+      "reason": "Socket presence tracking is collaboration-owned; adapt only local imports/configuration."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/realtime/acnCrossProcessRealtimeRelay.js",
+      "area": "realtime",
+      "disposition": "TRANSITIONAL",
+      "target": "temporary compatibility bridge",
+      "reason": "PostgreSQL NOTIFY relay exists because CHUB is a separate ERP process writing into the same collaboration database. Retain until CHUB publishes versioned events directly to AkshaConnect; then remove."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/routes/acnAttachmentRoutes.js",
+      "area": "attachments",
+      "disposition": "ADAPT",
+      "target": "services/api/src/modules/attachments/routes/",
+      "reason": "Route semantics move after replacing ERP Express auth/context with standalone auth and storage boundaries."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/utils/acnAttachmentSecurity.js",
+      "area": "attachments",
+      "disposition": "ADAPT",
+      "target": "services/api/src/modules/attachments/security/",
+      "reason": "Authorization logic should move, but tenant/user authority must be derived from verified standalone request context."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/Collaboration/docs/server_js_realtime_integration_notes.js",
+      "area": "documentation",
+      "disposition": "DEPRECATE_LATER",
+      "target": "docs/archive/",
+      "reason": "ERP-host integration note becomes obsolete after standalone realtime startup is implemented; keep only as migration evidence until cutover."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/UserDirectory/graphql/acnUserDirectorySchema.graphql",
+      "area": "identity",
+      "disposition": "SHARED_CONTRACT",
+      "target": "packages/contracts + AkshaERP identity endpoint",
+      "reason": "The LOV shape is useful to standalone clients, but identity authority stays in AkshaERP."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/UserDirectory/graphql/acnUserDirectoryResolvers.js",
+      "area": "identity",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP identity/user-directory API",
+      "reason": "Implementation reads Access Management/am_user_org and must remain on the ERP side; standalone calls it through SDK."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/UserDirectory/repositories/acnUserDirectoryRepository.js",
+      "area": "identity",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP identity/user-directory API",
+      "reason": "Implementation reads Access Management/am_user_org and must remain on the ERP side; standalone calls it through SDK."
+    },
+    {
+      "source_path": "server/src/modules/AkshaConnect/UserDirectory/services/acnUserDirectoryService.js",
+      "area": "identity",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP identity/user-directory API",
+      "reason": "Implementation reads Access Management/am_user_org and must remain on the ERP side; standalone calls it through SDK."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnActivityPanel.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnAddChannelMemberDialog.js",
+      "area": "client.web",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "UI behavior is reusable but current component is coupled to ERP Apollo/Redux, identity lookup, ERP routes or attachment endpoints."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnChannelMembersDrawer.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnCollaborationHome.js",
+      "area": "client.web",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "UI behavior is reusable but current component is coupled to ERP Apollo/Redux, identity lookup, ERP routes or attachment endpoints."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnComposer.js",
+      "area": "client.web",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "UI behavior is reusable but current component is coupled to ERP Apollo/Redux, identity lookup, ERP routes or attachment endpoints."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnConnectLauncher.js",
+      "area": "client.web",
+      "disposition": "TRANSITIONAL",
+      "target": "AkshaERP embedded launcher + apps/web shell",
+      "reason": "Keep an ERP launcher during migration, but standalone web must not depend on ERP Redux/Apollo/push utilities. Later launcher becomes a deep-link/open-standalone entry point."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnConversationHeader.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnConversationList.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnCreateChannelDialog.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnEntityConversationDialog.js",
+      "area": "client.web",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "UI behavior is reusable but current component is coupled to ERP Apollo/Redux, identity lookup, ERP routes or attachment endpoints."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnErpEventCard.js",
+      "area": "client.web",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "UI behavior is reusable but current component is coupled to ERP Apollo/Redux, identity lookup, ERP routes or attachment endpoints."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnFilesDrawer.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnMessageBubble.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnPinnedDrawer.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnProfilePresenceDrawer.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnRichText.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnSavedPanel.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnSearchPanel.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnSetStatusDialog.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnStartDirectMessageDialog.js",
+      "area": "client.web",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "UI behavior is reusable but current component is coupled to ERP Apollo/Redux, identity lookup, ERP routes or attachment endpoints."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnThreadDrawer.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/components/AcnWorkspaceSetup.js",
+      "area": "client.web",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Collaboration presentation logic is AkshaConnect-owned and can be migrated with import/theme cleanup after API compatibility is frozen."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/graphql/acnCollaborationFragments.js",
+      "area": "client.api",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/api/",
+      "reason": "Preserve operation semantics while pointing the standalone client to AkshaConnect API and versioned ERP integration endpoints."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/graphql/acnCollaborationMutations.js",
+      "area": "client.api",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/api/",
+      "reason": "Preserve operation semantics while pointing the standalone client to AkshaConnect API and versioned ERP integration endpoints."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/graphql/acnCollaborationQueries.js",
+      "area": "client.api",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/api/",
+      "reason": "Preserve operation semantics while pointing the standalone client to AkshaConnect API and versioned ERP integration endpoints."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/graphql/acnPresenceGraphql.js",
+      "area": "client.api",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/api/",
+      "reason": "Preserve operation semantics while pointing the standalone client to AkshaConnect API and versioned ERP integration endpoints."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/hooks/useAcnRealtime.js",
+      "area": "client.realtime",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/realtime/",
+      "reason": "Realtime client behavior moves but endpoint/token derivation must target the standalone realtime service."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/utils/acnAttachmentApi.js",
+      "area": "client.attachments",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/api/attachments/",
+      "reason": "Current URL/auth assumptions target ERP /api/acn/attachments; standalone endpoint and token handling change."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/utils/acnConstants.js",
+      "area": "client.shared",
+      "disposition": "ADAPT",
+      "target": "packages/ui or apps/web/src/features/collaboration/",
+      "reason": "Domain constants move; current user/org extraction must be replaced by standalone authenticated context."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/utils/acnDateTime.js",
+      "area": "client.shared",
+      "disposition": "MOVE",
+      "target": "packages/ui or apps/web/src/features/collaboration/",
+      "reason": "Pure collaboration date/time presentation utility."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/Collaboration/utils/acnDraftStore.js",
+      "area": "client.shared",
+      "disposition": "MOVE",
+      "target": "apps/web/src/features/collaboration/",
+      "reason": "Local draft persistence is collaboration-owned; later namespace by tenant/org/user."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/UserDirectory/components/AcnUserAutocomplete.js",
+      "area": "client.identity",
+      "disposition": "ADAPT",
+      "target": "apps/web/src/features/identity/",
+      "reason": "Keep UI behavior, replace embedded ERP GraphQL source with SDK identity endpoint."
+    },
+    {
+      "source_path": "client/src/modules/AkshaConnect/UserDirectory/graphql/acnUserDirectoryQueries.js",
+      "area": "client.identity",
+      "disposition": "SHARED_CONTRACT",
+      "target": "packages/sdk + apps/web/src/api/identity/",
+      "reason": "User-directory query shape is a cross-system contract; data remains ERP-owned."
+    },
+    {
+      "source_path": "client/src/router/routes/AkshaConnectRoutes.js",
+      "area": "erp.host",
+      "disposition": "TRANSITIONAL",
+      "target": "AkshaERP lightweight entry/deep-link",
+      "reason": "Embedded route stays during parity period; after cutover it should open/redirect into standalone AkshaConnect."
+    },
+    {
+      "source_path": "server/src/server.js",
+      "area": "erp.host",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP host",
+      "reason": "Do not move the ERP server bootstrap. Extract only AkshaConnect mount/startup requirements into standalone services."
+    },
+    {
+      "source_path": "database/modules/acn/module.json",
+      "area": "database",
+      "disposition": "ADAPT",
+      "target": "database/migrations/",
+      "reason": "Use these as authoritative schema history/evidence, but create a clean standalone migration chain instead of replaying ERP module packaging blindly."
+    },
+    {
+      "source_path": "database/modules/acn/migrations/010000_acn_pre_schema.sql",
+      "area": "database",
+      "disposition": "ADAPT",
+      "target": "database/migrations/",
+      "reason": "Use these as authoritative schema history/evidence, but create a clean standalone migration chain instead of replaying ERP module packaging blindly."
+    },
+    {
+      "source_path": "database/modules/acn/post_migrations/090000_acn_post_schema.sql",
+      "area": "database",
+      "disposition": "ADAPT",
+      "target": "database/migrations/",
+      "reason": "Use these as authoritative schema history/evidence, but create a clean standalone migration chain instead of replaying ERP module packaging blindly."
+    },
+    {
+      "source_path": "database/modules/acn/post_migrations/202608191710__acn_v2_security_retention_encryption_search.sql",
+      "area": "database",
+      "disposition": "ADAPT",
+      "target": "database/migrations/",
+      "reason": "Use these as authoritative schema history/evidence, but create a clean standalone migration chain instead of replaying ERP module packaging blindly."
+    },
+    {
+      "source_path": "database/modules/acn/post_migrations/202608231115__acn_v22_productivity.sql",
+      "area": "database",
+      "disposition": "ADAPT",
+      "target": "database/migrations/",
+      "reason": "Use these as authoritative schema history/evidence, but create a clean standalone migration chain instead of replaying ERP module packaging blindly."
+    },
+    {
+      "source_path": "database/modules/acn/post_migrations/202608242130__acn_presence_user_status.sql",
+      "area": "database",
+      "disposition": "ADAPT",
+      "target": "database/migrations/",
+      "reason": "Use these as authoritative schema history/evidence, but create a clean standalone migration chain instead of replaying ERP module packaging blindly."
+    },
+    {
+      "source_path": "server/src/modules/CommunicationHub/Outbox/services/chubOutboxProcessor.js",
+      "area": "integration.chub",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP CHUB",
+      "reason": "CHUB routing, retry and external-channel orchestration remain ERP-owned."
+    },
+    {
+      "source_path": "server/src/modules/CommunicationHub/Outbox/services/chubAcnSystemSenderBridge.js",
+      "area": "integration.systemsender",
+      "disposition": "TRANSITIONAL",
+      "target": "AkshaERP producer -> AkshaConnect event API",
+      "reason": "Preserve first-class SYSTEM sender semantics during migration; replace in-process monkey-patch bridge with versioned event delivery after standalone receiver exists."
+    },
+    {
+      "source_path": "server/src/modules/CommunicationHub/Outbox/services/chubAcnDocArtifactAttachmentBridge.js",
+      "area": "integration.documents",
+      "disposition": "TRANSITIONAL",
+      "target": "AkshaERP producer -> AkshaConnect event/attachment reference contract",
+      "reason": "Document/report attachment bridge must evolve into a protected artifact reference contract instead of writing directly into collaboration internals."
+    },
+    {
+      "source_path": "server/src/workers/chubOutboxRunner.js",
+      "area": "integration.chub",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP CHUB worker",
+      "reason": "Worker remains in ERP. During transition preserve SystemSender-before-realtime-publisher installation order exactly."
+    },
+    {
+      "source_path": "database/modules/chub/post_migrations/202608231300__chub_acn_bridge_hardening.sql",
+      "area": "integration.chub",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP CHUB database",
+      "reason": "CHUB bridge configuration/hardening is ERP-owned."
+    },
+    {
+      "source_path": "database/modules/chub/post_migrations/202608091900__chub_template_akshaconnect_variants.sql",
+      "area": "integration.chub",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP CHUB database",
+      "reason": "Communication templates and routing configuration remain CHUB-owned."
+    },
+    {
+      "source_path": "server/src/modules/ApplicationManagement/PushNotifications/services/appPushNotificationService.js",
+      "area": "integration.push",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP Application Management",
+      "reason": "Current dependency remains ERP-owned. AkshaConnect will implement its own device registry/push worker and must stop importing this service."
+    },
+    {
+      "source_path": "server/src/modules/AccessManagement/Users/models/amUserModel.js",
+      "area": "identity",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP Access Management",
+      "reason": "Canonical employee/user identity remains ERP-owned; standalone references user IDs and calls identity contract."
+    },
+    {
+      "source_path": "server/src/middleware/auth.js",
+      "area": "identity",
+      "disposition": "KEEP_IN_ERP",
+      "target": "AkshaERP auth boundary",
+      "reason": "ERP auth middleware remains ERP-owned. Standalone gets a separate token validation/introspection implementation consistent with the auth contract."
+    }
+  ]
+}

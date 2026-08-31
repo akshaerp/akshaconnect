@@ -1,20 +1,30 @@
 # AkshaConnect
 
-AkshaConnect is the standalone collaboration product for AkshaERP. It will provide web and mobile messaging while keeping AkshaERP authoritative for ERP identity, permissions, workflow, approvals, reporting, Job Management (JBM), and CHUB routing.
+AkshaConnect is the standalone collaboration product for AkshaERP. It provides the target web/mobile collaboration boundary while keeping AkshaERP authoritative for ERP identity, permissions, workflow/approvals, reporting, Job Management (JBM), ERP record lookup and CHUB routing.
 
-This repository starts with **Phase 0: current-state audit and extraction foundation**.
+The repository is currently in **Phase 0: audit, contracts and extraction preparation**.
 
-## Phase 0 V1 contents
+## Current checkpoint — P0-V2
 
-- Runnable Node.js API health/readiness service
-- Zero-dependency JavaScript validation/test baseline
-- GitHub Actions CI baseline
-- Docker baseline
-- Versioned ERP event contract (`1.0`)
-- Current AkshaERP AkshaConnect inventory
-- SystemSender preservation rules
-- Authentication/tenant-context boundary
-- Extraction ownership matrix and sequencing
+Version: `0.2.0-phase0`
+
+P0-V2 pins the source AkshaERP implementation to commit `21f72ba86bb1cb2e09012285a7b01d71a45280e0` and converts the broad V1 audit into a machine-readable, file-level extraction map.
+
+Added in V2:
+
+- exact source baseline and source SHA
+- file-level `MOVE` / `ADAPT` / `KEEP_IN_ERP` / `SHARED_CONTRACT` / `TRANSITIONAL` / `DEPRECATE_LATER` decisions
+- dependency-risk analysis for identity, realtime, CHUB, push, ERP lookup and database migration
+- ordered extraction sequence
+- automated tests that protect critical ownership boundaries
+
+V1 foundation remains intact:
+
+- runnable health/readiness API
+- CI and Docker baseline
+- ERP event contract `1.0`
+- auth/tenant-context contract
+- SystemSender migration invariants
 
 ## Requirements
 
@@ -44,14 +54,18 @@ Expected health payload includes:
   "status": "ok",
   "service": "akshaconnect-api",
   "phase": "0",
-  "version": "0.1.0-phase0"
+  "version": "0.2.0-phase0"
 }
 ```
 
 ## Architecture boundary
 
-AkshaConnect owns collaboration data and user experience. AkshaERP remains the system of record for business identity, authorization, workflow, approvals, reports, scheduled jobs, and external communication routing.
+AkshaConnect owns collaboration data and UX. AkshaERP remains the system of record for identity/organization authority and business actions. Do not copy ERP approval, record-lookup or CHUB logic into this repository.
 
-Do not copy ERP approval/business rules into this repository. An action shown by AkshaConnect is only a request; AkshaERP must authorize and execute it.
+Read these before extracting production code:
 
-See `docs/architecture/PHASE-0-CURRENT-STATE-AUDIT.md` and `docs/architecture/PHASE-0-EXTRACTION-BOUNDARIES.md` before moving production code.
+- `docs/architecture/P0-V2-SOURCE-BASELINE.md`
+- `docs/architecture/P0-V2-IMPLEMENTATION-INVENTORY.md`
+- `docs/architecture/P0-V2-EXTRACTION-MAP.md`
+- `docs/architecture/P0-V2-DEPENDENCY-RISKS.md`
+- `docs/architecture/P0-V2-EXTRACTION-MAP.json`
