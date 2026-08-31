@@ -6,6 +6,9 @@ const { createConfiguredPorts, isEnabled } = require('./configuredPorts');
 const { createErpHttpAdapters } = require('./erpHttpAdapter');
 const { createHttpJsonTransport } = require('./httpJsonTransport');
 const { signServiceRequest } = require('./serviceToServiceSigner');
+const { createLocalIdentityAdapter } = require('./localIdentityAdapter');
+const { createUnavailableErpGateway } = require('./unavailableErpGateway');
+const { resolveProviderConfiguration } = require('./providerConfiguration');
 
 module.exports = {
   createIntegrationBoundaryService,
@@ -16,4 +19,7 @@ module.exports = {
   createErpHttpAdapters,
   createHttpJsonTransport,
   signServiceRequest,
+  createLocalIdentityAdapter,
+  createUnavailableErpGateway,
+  resolveProviderConfiguration,
 };

@@ -61,3 +61,7 @@ The standalone API now also contains executable identity/ERP/notification ports.
 ## P0-V4 cumulative gate
 
 The P0-V3 ports now have a versioned, signed HTTP transport implementation that is disabled by default and fails closed. No AkshaERP-side endpoint is assumed to exist yet. See `P0-V4-ACCEPTANCE.md`.
+
+## P0-V5 cumulative gate
+
+AkshaConnect core is now explicitly provider-neutral. `LOCAL` identity with `NONE` business integration is a valid standalone composition and must not instantiate or call the AkshaERP connector. See `P0-V5-ACCEPTANCE.md`.

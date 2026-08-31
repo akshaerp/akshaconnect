@@ -1,12 +1,20 @@
 # AkshaConnect
 
-AkshaConnect is the standalone collaboration product for AkshaERP. It provides the target web/mobile collaboration boundary while keeping AkshaERP authoritative for ERP identity, permissions, workflow/approvals, reporting, Job Management (JBM), ERP record lookup and CHUB routing.
+AkshaConnect is an independent enterprise collaboration product with web/mobile clients and pluggable identity/business providers. AkshaERP is its deepest native integration, but AkshaConnect core can run without AkshaERP.
 
 The repository is currently in **Phase 0: audit, contracts and extraction preparation**.
 
-## Current checkpoint — P0-V4
+## Current checkpoint — P0-V5
 
-Version: `0.4.0-phase0`
+Version: `0.5.0-phase0`
+
+P0-V5 makes standalone independence explicit:
+
+- `LOCAL` identity + `NONE` business provider is the pure AkshaConnect mode
+- AkshaERP is a native provider/connector, not a mandatory runtime dependency
+- standalone composition must not require ERP URL, shared secret or network access
+- ERP-only capabilities fail explicitly when no business provider is configured
+
 
 
 P0-V4 adds the fail-closed, versioned AkshaERP HTTP transport underneath the P0-V3 ports. Integration remains disabled by default until matching AkshaERP endpoints are implemented and validated.
@@ -73,13 +81,14 @@ Expected health payload includes:
   "status": "ok",
   "service": "akshaconnect-api",
   "phase": "0",
-  "version": "0.2.0-phase0"
+  "checkpoint": "P0-V5",
+  "version": "0.5.0-phase0"
 }
 ```
 
 ## Architecture boundary
 
-AkshaConnect owns collaboration data and UX. AkshaERP remains the system of record for identity/organization authority and business actions. Do not copy ERP approval, record-lookup or CHUB logic into this repository.
+AkshaConnect owns collaboration data and UX. In `LOCAL/NONE` mode it also owns collaboration identity/session state. When the AkshaERP provider is enabled, AkshaERP remains authoritative for ERP identity context and business actions. Do not copy ERP approval, record-lookup or CHUB logic into this repository.
 
 Read these before extracting production code:
 
