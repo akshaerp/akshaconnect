@@ -29,15 +29,7 @@ Then open:
 http://localhost:4100/health
 ```
 
-Expected HTTP 200 with `status = ok`, `phase = 0`, and version `0.1.0-phase0` (V1 checkpoint).
-
-## Docker check
-
-```bash
-docker compose up --build
-```
-
-Then call the same health endpoint on port 4100.
+Expected HTTP 200 with `status = ok`, `phase = 0`, and the current checkpoint/version.
 
 ## Phase 0 V1 pass gate
 
@@ -50,18 +42,18 @@ V1 is accepted when:
 5. SystemSender/realtime invariants are accepted as migration regression requirements.
 6. No ERP business logic has been duplicated into the standalone repository.
 
-
-Current acceptance gate: `P0-V2-ACCEPTANCE.md`.
-
 ## P0-V3 cumulative gate
 
-The standalone API now also contains executable identity/ERP/notification ports. Verified scope must come from the identity gateway and new boundary code must not import ERP Access Management, CHUB, or ERP push implementations directly. See `P0-V3-ACCEPTANCE.md`.
-
+The standalone API contains executable identity/ERP/notification ports. Verified scope must come from the identity gateway and new boundary code must not import ERP Access Management, CHUB, or ERP push implementations directly. See `P0-V3-ACCEPTANCE.md`.
 
 ## P0-V4 cumulative gate
 
-The P0-V3 ports now have a versioned, signed HTTP transport implementation that is disabled by default and fails closed. No AkshaERP-side endpoint is assumed to exist yet. See `P0-V4-ACCEPTANCE.md`.
+P0-V4 introduced the first versioned ERP transport and HMAC signing helper. Its HMAC runtime authentication assumption is superseded by P0-V6B; the helper remains historical Phase 0 code.
 
 ## P0-V5 cumulative gate
 
-AkshaConnect core is now explicitly provider-neutral. `LOCAL` identity with `NONE` business integration is a valid standalone composition and must not instantiate or call the AkshaERP connector. See `P0-V5-ACCEPTANCE.md`.
+AkshaConnect core is provider-neutral. `LOCAL` identity with `NONE` business integration is a valid standalone composition and must not instantiate or call the AkshaERP connector. See `P0-V5-ACCEPTANCE.md`.
+
+## P0-V6B cumulative gate
+
+The AkshaERP provider must authenticate through the existing AkshaERP Integration Gateway with `x-api-client-id` and `x-api-key`, unwrap the standard IGW response envelope, keep the ERP user Bearer token limited to identity verification, and never require ERP configuration in `LOCAL/NONE` mode. See `P0-V6B-ACCEPTANCE.md`.

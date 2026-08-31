@@ -1,6 +1,6 @@
 'use strict';
 
-const VERSION = '0.5.0-phase0';
+const VERSION = '0.6.0-phase0';
 const SERVICE_NAME = process.env.AKSHACONNECT_SERVICE_NAME || 'akshaconnect-api';
 
 function writeJson(res, statusCode, body) {
@@ -22,7 +22,7 @@ function createRequestHandler() {
         status: 'ok',
         service: SERVICE_NAME,
         phase: '0',
-        checkpoint: 'P0-V5',
+        checkpoint: 'P0-V6B',
         version: VERSION,
         timestamp: new Date().toISOString(),
       });

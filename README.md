@@ -4,28 +4,29 @@ AkshaConnect is an independent enterprise collaboration product with web/mobile 
 
 The repository is currently in **Phase 0: audit, contracts and extraction preparation**.
 
-## Current checkpoint — P0-V5
+## Current checkpoint — P0-V6B
 
-Version: `0.5.0-phase0`
+Version: `0.6.0-phase0`
+
+P0-V6B aligns the AkshaERP native provider with the real AkshaERP Integration Gateway security and response model:
+
+- AkshaERP service authentication uses `x-api-client-id` + `x-api-key`
+- the standalone connector unwraps the standard IGW `{ success, message, data, requestId }` envelope
+- the user Bearer token is still sent only to the identity verification endpoint
+- HMAC/shared-secret signing is no longer used by the active AkshaERP runtime connector
+- timeout/network/non-2xx failures remain normalized and fail closed
+- `LOCAL/NONE` standalone mode still requires no ERP URL, credentials or network access
+
+P0-V6A lives in the AkshaERP repository and provides the matching secured receiver under `/api/v1/akshaconnect/*`.
 
 P0-V5 makes standalone independence explicit:
 
 - `LOCAL` identity + `NONE` business provider is the pure AkshaConnect mode
 - AkshaERP is a native provider/connector, not a mandatory runtime dependency
-- standalone composition must not require ERP URL, shared secret or network access
+- standalone composition must not require ERP URL, credentials or network access
 - ERP-only capabilities fail explicitly when no business provider is configured
 
-
-
-P0-V4 adds the fail-closed, versioned AkshaERP HTTP transport underneath the P0-V3 ports. Integration remains disabled by default until matching AkshaERP endpoints are implemented and validated.
-
-P0-V4 adds:
-
-- contract `1.0` service paths for identity verification, user search, ERP lookup and ERP actions
-- HMAC-SHA256 service request signing with timestamp, nonce and body digest
-- timeout/network/non-2xx normalization
-- environment feature flag disabled by default
-- no direct ERP models/tables or CHUB/push imports
+P0-V4 introduced the first versioned HTTP transport and an HMAC signing helper. P0-V6B supersedes HMAC as the active AkshaERP authentication model because AkshaERP already owns a mature Integration Gateway credential/scope/IP boundary. The signing helper remains historical Phase 0 code only and is not called by the V6B runtime transport.
 
 P0-V3 remains the executable boundary layer:
 
@@ -36,14 +37,6 @@ P0-V3 remains the executable boundary layer:
 - automated guards against direct Access Management, CHUB and ERP push coupling
 
 P0-V2 pins the source AkshaERP implementation to commit `21f72ba86bb1cb2e09012285a7b01d71a45280e0` and converts the broad V1 audit into a machine-readable, file-level extraction map.
-
-Added in V2:
-
-- exact source baseline and source SHA
-- file-level `MOVE` / `ADAPT` / `KEEP_IN_ERP` / `SHARED_CONTRACT` / `TRANSITIONAL` / `DEPRECATE_LATER` decisions
-- dependency-risk analysis for identity, realtime, CHUB, push, ERP lookup and database migration
-- ordered extraction sequence
-- automated tests that protect critical ownership boundaries
 
 V1 foundation remains intact:
 
@@ -81,10 +74,22 @@ Expected health payload includes:
   "status": "ok",
   "service": "akshaconnect-api",
   "phase": "0",
-  "checkpoint": "P0-V5",
-  "version": "0.5.0-phase0"
+  "checkpoint": "P0-V6B",
+  "version": "0.6.0-phase0"
 }
 ```
+
+## AkshaERP provider configuration
+
+When either provider is `AKSHAERP`, configure:
+
+```text
+AKSHACONNECT_ERP_BASE_URL=https://your-erp-host
+AKSHACONNECT_ERP_API_CLIENT_ID=<IGW client code>
+AKSHACONNECT_ERP_API_KEY=<IGW API key from secret store>
+```
+
+Do not place a production API key in source control. The matching AkshaERP Integration Gateway client must be tenant-bound and granted only the required `akshaconnect.*` scopes.
 
 ## Architecture boundary
 
@@ -97,3 +102,4 @@ Read these before extracting production code:
 - `docs/architecture/P0-V2-EXTRACTION-MAP.md`
 - `docs/architecture/P0-V2-DEPENDENCY-RISKS.md`
 - `docs/architecture/P0-V2-EXTRACTION-MAP.json`
+- `docs/architecture/P0-V6B-IGW-CLIENT-TRANSPORT.md`

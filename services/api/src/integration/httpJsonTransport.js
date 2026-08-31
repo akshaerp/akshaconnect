@@ -1,7 +1,6 @@
 'use strict';
 
 const { boundaryError } = require('../core/boundaryError');
-const { signServiceRequest } = require('./serviceToServiceSigner');
 
 function positiveMs(value, fallback = 5000, max = 30000) {
   const parsed = Number(value);
@@ -21,26 +20,48 @@ function normalizeBaseUrl(value) {
   return text;
 }
 
+function requiredCredential(value, code, message) {
+  const text = String(value || '').trim();
+  if (!text) throw boundaryError(code, message);
+  return text;
+}
+
+function unwrapIgwEnvelope(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw boundaryError(
+      'ERP_INTEGRATION_RESPONSE_INVALID',
+      'AkshaERP integration returned an invalid response envelope',
+      502
+    );
+  }
+  if (payload.success !== true || !Object.prototype.hasOwnProperty.call(payload, 'data')) {
+    throw boundaryError(
+      'ERP_INTEGRATION_RESPONSE_INVALID',
+      'AkshaERP integration returned an invalid response envelope',
+      502
+    );
+  }
+  return payload.data;
+}
+
 function createHttpJsonTransport({
   baseUrl,
-  sharedSecret,
-  serviceId,
-  contractVersion,
+  apiClientId,
+  apiKey,
   timeoutMs = 5000,
   fetchImpl = global.fetch,
-  now = () => new Date().toISOString(),
-  nonce = () => require('crypto').randomUUID(),
 } = {}) {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
-  if (!String(sharedSecret || '').trim()) {
-    throw boundaryError('ERP_INTEGRATION_SECRET_REQUIRED', 'ERP integration shared secret is required');
-  }
-  if (!String(serviceId || '').trim()) {
-    throw boundaryError('ERP_INTEGRATION_SERVICE_ID_REQUIRED', 'ERP integration service id is required');
-  }
-  if (!String(contractVersion || '').trim()) {
-    throw boundaryError('ERP_INTEGRATION_CONTRACT_REQUIRED', 'ERP integration contract version is required');
-  }
+  const normalizedApiClientId = requiredCredential(
+    apiClientId,
+    'ERP_INTEGRATION_API_CLIENT_ID_REQUIRED',
+    'ERP Integration Gateway API client id is required'
+  );
+  const normalizedApiKey = requiredCredential(
+    apiKey,
+    'ERP_INTEGRATION_API_KEY_REQUIRED',
+    'ERP Integration Gateway API key is required'
+  );
   if (typeof fetchImpl !== 'function') {
     throw boundaryError('ERP_INTEGRATION_FETCH_REQUIRED', 'A fetch implementation is required');
   }
@@ -51,17 +72,8 @@ function createHttpJsonTransport({
     if (!requestPath.startsWith('/')) {
       throw boundaryError('ERP_INTEGRATION_PATH_INVALID', 'ERP integration path must begin with /');
     }
+
     const bodyText = body === undefined || body === null ? '' : JSON.stringify(body);
-    const signedHeaders = signServiceRequest({
-      method,
-      path: requestPath,
-      bodyText,
-      sharedSecret,
-      serviceId,
-      contractVersion,
-      timestamp: now(),
-      nonce: nonce(),
-    });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     if (typeof timer.unref === 'function') timer.unref();
@@ -73,7 +85,8 @@ function createHttpJsonTransport({
         headers: {
           accept: 'application/json',
           'content-type': 'application/json',
-          ...signedHeaders,
+          'x-api-client-id': normalizedApiClientId,
+          'x-api-key': normalizedApiKey,
           ...headers,
         },
         body: bodyText || undefined,
@@ -104,11 +117,12 @@ function createHttpJsonTransport({
         response.status >= 500 ? 502 : response.status
       );
       error.remote_status = response.status;
-      error.remote_code = payload?.code || null;
+      error.remote_code = payload?.errorCode || payload?.code || null;
+      error.remote_request_id = payload?.requestId || null;
       throw error;
     }
 
-    return payload;
+    return unwrapIgwEnvelope(payload);
   }
 
   return Object.freeze({ request });
@@ -117,4 +131,5 @@ function createHttpJsonTransport({
 module.exports = {
   createHttpJsonTransport,
   normalizeBaseUrl,
+  unwrapIgwEnvelope,
 };

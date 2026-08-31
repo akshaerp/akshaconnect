@@ -23,6 +23,10 @@ function jsonResponse(status, payload) {
   };
 }
 
+function success(data) {
+  return { success: true, message: 'ok', data, requestId: 'req-1' };
+}
+
 test('ERP integration is disabled by default and fails closed', async () => {
   const ports = createConfiguredPorts({ env: {}, notificationPort: notificationPort() });
   assert.equal(ports.integration_enabled, false);
@@ -32,15 +36,19 @@ test('ERP integration is disabled by default and fails closed', async () => {
   });
 });
 
-test('enabled ERP integration requires a base URL and shared secret', () => {
+test('enabled ERP integration requires a base URL and Integration Gateway credentials', () => {
   assert.throws(() => createConfiguredPorts({
     env: { AKSHACONNECT_ERP_INTEGRATION_ENABLED: 'Y' },
     notificationPort: notificationPort(),
-    fetchImpl: async () => jsonResponse(200, {}),
-  }), (error) => ['ERP_INTEGRATION_BASE_URL_REQUIRED', 'ERP_INTEGRATION_SECRET_REQUIRED'].includes(error.code));
+    fetchImpl: async () => jsonResponse(200, success({})),
+  }), (error) => [
+    'ERP_INTEGRATION_BASE_URL_REQUIRED',
+    'ERP_INTEGRATION_API_CLIENT_ID_REQUIRED',
+    'ERP_INTEGRATION_API_KEY_REQUIRED',
+  ].includes(error.code));
 });
 
-test('service request signing is deterministic for fixed transport inputs', () => {
+test('historical P0-V4 service request signing helper remains deterministic', () => {
   const headers = signServiceRequest({
     method: 'POST',
     path: '/api/v1/example',
@@ -57,38 +65,40 @@ test('service request signing is deterministic for fixed transport inputs', () =
   assert.notEqual(headers['x-aksha-signature'], 'test-secret');
 });
 
-test('identity verification uses the versioned ERP path, signed headers and bearer token', async () => {
+test('identity verification uses the versioned ERP path, IGW credentials and bearer token', async () => {
   let request;
   const adapters = createErpHttpAdapters({
     baseUrl: 'https://erp.example.test',
-    sharedSecret: 'secret',
-    serviceId: 'akshaconnect',
+    apiClientId: 'akshaconnect-test',
+    apiKey: 'test-api-key',
     fetchImpl: async (url, options) => {
       request = { url, options };
-      return jsonResponse(200, {
+      return jsonResponse(200, success({
         user_id: 7,
         tenant_id: 'TENANT',
         active_organization_id: 11,
         session_id: 's1',
-      });
+      }));
     },
   });
   const result = await adapters.identityGateway.verifyAccessToken('user-token');
   assert.equal(result.user_id, 7);
   assert.equal(request.url, `https://erp.example.test${ERP_INTEGRATION_PATHS.VERIFY_ACCESS_TOKEN}`);
   assert.equal(request.options.headers.authorization, 'Bearer user-token');
-  assert.match(request.options.headers['x-aksha-signature'], /^[a-f0-9]{64}$/);
+  assert.equal(request.options.headers['x-api-client-id'], 'akshaconnect-test');
+  assert.equal(request.options.headers['x-api-key'], 'test-api-key');
+  assert.equal(request.options.headers['x-aksha-signature'], undefined);
 });
 
 test('user search, record lookup and action execution use versioned transport paths', async () => {
   const seen = [];
   const adapters = createErpHttpAdapters({
     baseUrl: 'https://erp.example.test',
-    sharedSecret: 'secret',
-    serviceId: 'akshaconnect',
+    apiClientId: 'akshaconnect-test',
+    apiKey: 'test-api-key',
     fetchImpl: async (url, options) => {
       seen.push({ url, body: JSON.parse(options.body) });
-      return jsonResponse(200, { ok: true });
+      return jsonResponse(200, success({ ok: true }));
     },
   });
   await adapters.identityGateway.searchUsers({ organization_id: 11 });
@@ -104,14 +114,20 @@ test('user search, record lookup and action execution use versioned transport pa
 test('remote non-success status fails closed without trusting remote text', async () => {
   const adapters = createErpHttpAdapters({
     baseUrl: 'https://erp.example.test',
-    sharedSecret: 'secret',
-    serviceId: 'akshaconnect',
-    fetchImpl: async () => jsonResponse(403, { code: 'ERP_FORBIDDEN', message: 'detail' }),
+    apiClientId: 'akshaconnect-test',
+    apiKey: 'test-api-key',
+    fetchImpl: async () => jsonResponse(403, {
+      success: false,
+      errorCode: 'IGW_SCOPE_DENIED',
+      message: 'detail must not escape',
+      requestId: 'req-denied',
+    }),
   });
   await assert.rejects(() => adapters.erpGateway.lookupRecords({}), (error) => {
     assert.equal(error.code, 'ERP_INTEGRATION_HTTP_ERROR');
     assert.equal(error.remote_status, 403);
-    assert.equal(error.remote_code, 'ERP_FORBIDDEN');
+    assert.equal(error.remote_code, 'IGW_SCOPE_DENIED');
+    assert.equal(error.remote_request_id, 'req-denied');
     assert.equal(error.message, 'AkshaERP integration returned HTTP 403');
     return true;
   });
@@ -120,8 +136,8 @@ test('remote non-success status fails closed without trusting remote text', asyn
 test('transport network errors become a generic unavailable boundary error', async () => {
   const adapters = createErpHttpAdapters({
     baseUrl: 'https://erp.example.test',
-    sharedSecret: 'secret',
-    serviceId: 'akshaconnect',
+    apiClientId: 'akshaconnect-test',
+    apiKey: 'test-api-key',
     fetchImpl: async () => { throw new Error('socket detail should not escape'); },
   });
   await assert.rejects(() => adapters.erpGateway.executeAction({}), (error) => {
@@ -131,7 +147,7 @@ test('transport network errors become a generic unavailable boundary error', asy
   });
 });
 
-test('P0-V4 transport code contains no direct ERP module or table coupling', () => {
+test('P0-V4/V6B transport code contains no direct ERP module or table coupling', () => {
   const root = path.resolve(__dirname, '..', 'services', 'api', 'src', 'integration');
   const files = fs.readdirSync(root).filter((name) => name.endsWith('.js'));
   const forbidden = [

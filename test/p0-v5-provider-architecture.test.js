@@ -153,7 +153,8 @@ test('AKSHAERP can remain the identity provider while business integration is NO
       AKSHACONNECT_IDENTITY_PROVIDER: 'AKSHAERP',
       AKSHACONNECT_BUSINESS_PROVIDER: 'NONE',
       AKSHACONNECT_ERP_BASE_URL: 'https://erp.example.test',
-      AKSHACONNECT_ERP_SHARED_SECRET: 'test-only-secret',
+      AKSHACONNECT_ERP_API_CLIENT_ID: 'acn-test',
+      AKSHACONNECT_ERP_API_KEY: 'test-key',
     },
     notificationPort: notificationPort(),
     fetchImpl: async (url) => {
@@ -164,10 +165,15 @@ test('AKSHAERP can remain the identity provider while business integration is NO
         status: 200,
         async text() {
           return JSON.stringify({
-            user_id: 7,
-            tenant_id: 'ERP_TENANT',
-            active_organization_id: 11,
-            session_id: 'erp-session',
+            success: true,
+            message: 'ok',
+            data: {
+              user_id: 7,
+              tenant_id: 'ERP_TENANT',
+              active_organization_id: 11,
+              session_id: 'erp-session',
+            },
+            requestId: 'req-1',
           });
         },
       };
@@ -183,7 +189,7 @@ test('AKSHAERP can remain the identity provider while business integration is NO
   assert.equal(calls, 1);
 });
 
-test('AKSHAERP provider still requires the P0-V4 connector configuration', () => {
+test('AKSHAERP provider requires the P0-V6B Integration Gateway connector configuration', () => {
   assert.throws(() => createConfiguredPorts({
     env: {
       AKSHACONNECT_IDENTITY_PROVIDER: 'AKSHAERP',
@@ -191,7 +197,11 @@ test('AKSHAERP provider still requires the P0-V4 connector configuration', () =>
     },
     notificationPort: notificationPort(),
   }), (error) => {
-    assert.ok(['ERP_INTEGRATION_BASE_URL_REQUIRED', 'ERP_INTEGRATION_SECRET_REQUIRED'].includes(error.code));
+    assert.ok([
+      'ERP_INTEGRATION_BASE_URL_REQUIRED',
+      'ERP_INTEGRATION_API_CLIENT_ID_REQUIRED',
+      'ERP_INTEGRATION_API_KEY_REQUIRED',
+    ].includes(error.code));
     return true;
   });
 });

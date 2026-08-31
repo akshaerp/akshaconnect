@@ -1,6 +1,6 @@
 {
   "name": "@akshaerp/akshaconnect-api",
-  "version": "0.5.0-phase0",
+  "version": "0.6.0-phase0",
   "private": true,
   "main": "src/server.js"
 }

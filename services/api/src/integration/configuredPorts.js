@@ -24,9 +24,8 @@ function disabledGateway(name, methods) {
 function createErpAdapters(env, fetchImpl) {
   return createErpHttpAdapters({
     baseUrl: env.AKSHACONNECT_ERP_BASE_URL,
-    sharedSecret: env.AKSHACONNECT_ERP_SHARED_SECRET,
-    serviceId: env.AKSHACONNECT_SERVICE_ID || 'akshaconnect',
-    contractVersion: env.AKSHACONNECT_ERP_CONTRACT_VERSION || '1.0',
+    apiClientId: env.AKSHACONNECT_ERP_API_CLIENT_ID,
+    apiKey: env.AKSHACONNECT_ERP_API_KEY,
     timeoutMs: env.AKSHACONNECT_ERP_TIMEOUT_MS || 5000,
     fetchImpl,
   });
@@ -41,8 +40,9 @@ function createConfiguredPorts({
   const pushPort = assertPort('notificationPort', notificationPort);
   const providerConfig = resolveProviderConfiguration(env);
 
-  // Preserve the exact P0-V4 disabled semantics for installations that have
-  // not yet opted into provider configuration.
+  // Preserve the P0-V4 activation flag semantics for installations that have
+  // not yet opted into explicit provider configuration. The transport behind
+  // that flag is now the P0-V6B Integration Gateway credential model.
   if (providerConfig.mode === 'LEGACY_V4' && !providerConfig.erp_required) {
     return Object.freeze({
       identityGateway: disabledGateway('identityGateway', ['verifyAccessToken', 'searchUsers']),

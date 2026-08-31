@@ -1,16 +1,12 @@
 'use strict';
 
 const {
-  ERP_INTEGRATION_CONTRACT_VERSION,
   ERP_INTEGRATION_PATHS,
 } = require('../../../../packages/contracts/src/integrationTransportV1');
 const { createHttpJsonTransport } = require('./httpJsonTransport');
 
 function createErpHttpAdapters(options = {}) {
-  const transport = createHttpJsonTransport({
-    ...options,
-    contractVersion: options.contractVersion || ERP_INTEGRATION_CONTRACT_VERSION,
-  });
+  const transport = createHttpJsonTransport(options);
 
   const identityGateway = Object.freeze({
     verifyAccessToken(accessToken) {
