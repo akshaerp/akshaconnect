@@ -1,0 +1,51 @@
+# Phase 0 V1 Acceptance
+
+## Automated verification
+
+Run from repository root:
+
+```bash
+npm ci
+npm run verify
+```
+
+Expected:
+
+- all JavaScript files pass `node --check`
+- API health test passes
+- unknown API routes fail with 404
+- ERP event contract tests pass
+- repository structure test passes
+
+## Runtime smoke check
+
+```bash
+npm run start:api
+```
+
+Then open:
+
+```text
+http://localhost:4100/health
+```
+
+Expected HTTP 200 with `status = ok`, `phase = 0`, and version `0.1.0-phase0`.
+
+## Docker check
+
+```bash
+docker compose up --build
+```
+
+Then call the same health endpoint on port 4100.
+
+## Phase 0 V1 pass gate
+
+V1 is accepted when:
+
+1. CI/test baseline runs from a clean clone.
+2. Health endpoint works locally.
+3. Docker image builds.
+4. Current-state audit is reviewed against AkshaERP.
+5. SystemSender/realtime invariants are accepted as migration regression requirements.
+6. No ERP business logic has been duplicated into the standalone repository.

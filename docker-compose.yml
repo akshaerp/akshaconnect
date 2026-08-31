@@ -1,0 +1,10 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.api
+    environment:
+      NODE_ENV: production
+      PORT: 4100
+    ports:
+      - "4100:4100"

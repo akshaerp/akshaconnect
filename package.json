@@ -1,0 +1,19 @@
+{
+  "name": "@akshaerp/akshaconnect",
+  "version": "0.1.0-phase0",
+  "private": true,
+  "description": "AkshaConnect standalone product monorepo foundation",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "start:api": "node services/api/src/server.js",
+    "lint": "node scripts/check-js.js",
+    "test": "node --test",
+    "verify": "npm run lint && npm test"
+  }
+}
