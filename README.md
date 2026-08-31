@@ -4,12 +4,22 @@ AkshaConnect is the standalone collaboration product for AkshaERP. It provides t
 
 The repository is currently in **Phase 0: audit, contracts and extraction preparation**.
 
-## Current checkpoint — P0-V3
+## Current checkpoint — P0-V4
 
-Version: `0.3.0-phase0`
+Version: `0.4.0-phase0`
 
 
-P0-V3 turns the V2 extraction map into executable standalone service boundaries:
+P0-V4 adds the fail-closed, versioned AkshaERP HTTP transport underneath the P0-V3 ports. Integration remains disabled by default until matching AkshaERP endpoints are implemented and validated.
+
+P0-V4 adds:
+
+- contract `1.0` service paths for identity verification, user search, ERP lookup and ERP actions
+- HMAC-SHA256 service request signing with timestamp, nonce and body digest
+- timeout/network/non-2xx normalization
+- environment feature flag disabled by default
+- no direct ERP models/tables or CHUB/push imports
+
+P0-V3 remains the executable boundary layer:
 
 - verified request context sourced only from the identity gateway
 - fail-closed `identityGateway`, `erpGateway` and `notificationPort` contracts

@@ -56,3 +56,8 @@ Current acceptance gate: `P0-V2-ACCEPTANCE.md`.
 ## P0-V3 cumulative gate
 
 The standalone API now also contains executable identity/ERP/notification ports. Verified scope must come from the identity gateway and new boundary code must not import ERP Access Management, CHUB, or ERP push implementations directly. See `P0-V3-ACCEPTANCE.md`.
+
+
+## P0-V4 cumulative gate
+
+The P0-V3 ports now have a versioned, signed HTTP transport implementation that is disabled by default and fails closed. No AkshaERP-side endpoint is assumed to exist yet. See `P0-V4-ACCEPTANCE.md`.

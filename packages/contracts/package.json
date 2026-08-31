@@ -1,6 +1,6 @@
 {
   "name": "@akshaerp/akshaconnect-contracts",
-  "version": "0.3.0-phase0",
+  "version": "0.4.0-phase0",
   "private": true,
   "main": "src/index.js"
 }
