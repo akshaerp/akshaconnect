@@ -52,3 +52,7 @@ V1 is accepted when:
 
 
 Current acceptance gate: `P0-V2-ACCEPTANCE.md`.
+
+## P0-V3 cumulative gate
+
+The standalone API now also contains executable identity/ERP/notification ports. Verified scope must come from the identity gateway and new boundary code must not import ERP Access Management, CHUB, or ERP push implementations directly. See `P0-V3-ACCEPTANCE.md`.
