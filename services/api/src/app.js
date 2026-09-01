@@ -2,7 +2,7 @@
 
 const { BoundaryError, boundaryError } = require('./core/boundaryError');
 
-const VERSION = '0.9.0-phase1';
+const VERSION = '0.10.0-phase1';
 const SERVICE_NAME = process.env.AKSHACONNECT_SERVICE_NAME || 'akshaconnect-api';
 const MAX_JSON_BYTES = 32 * 1024;
 
@@ -69,7 +69,7 @@ function createRequestHandler({
           status: 'ok',
           service: SERVICE_NAME,
           phase: '1',
-          checkpoint: 'P1-V3',
+          checkpoint: 'P1-V4',
           version: VERSION,
           timestamp: new Date().toISOString(),
         });
