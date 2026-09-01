@@ -52,6 +52,17 @@ function createIntegrationBoundaryService(rawPorts) {
 
   async function searchUsers(context, input = {}) {
     const trusted = assertVerifiedRequestContext(context);
+
+    if (trusted.workspace_id) {
+      return ports.identityGateway.searchUsers({
+        workspace_id: trusted.workspace_id,
+        requester_identity_id: trusted.identity_id,
+        requester_member_id: trusted.workspace_member_id,
+        search_text: clean(input.search_text ?? input.searchText) || '',
+        limit: safeLimit(input.limit, 50, 100),
+      });
+    }
+
     return ports.identityGateway.searchUsers({
       tenant_id: trusted.tenant_id,
       organization_id: trusted.active_organization_id,

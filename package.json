@@ -1,8 +1,8 @@
 {
   "name": "@akshaerp/akshaconnect",
-  "version": "0.7.0-phase0",
+  "version": "0.8.0-phase1",
   "private": true,
-  "description": "AkshaConnect standalone product monorepo foundation",
+  "description": "AkshaConnect standalone product monorepo",
   "engines": {
     "node": ">=20"
   },

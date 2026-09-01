@@ -5,8 +5,8 @@ const http = require('node:http');
 const test = require('node:test');
 const { createRequestHandler, VERSION } = require('../services/api/src/app');
 
-async function withServer(run) {
-  const server = http.createServer(createRequestHandler());
+async function withServer(run, options = {}) {
+  const server = http.createServer(createRequestHandler(options));
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const address = server.address();
@@ -18,7 +18,7 @@ async function withServer(run) {
   }
 }
 
-test('GET /health returns Phase 0 service status', async () => {
+test('GET /health returns Phase 1 P1-V2 service status', async () => {
   await withServer(async (baseUrl) => {
     const response = await fetch(`${baseUrl}/health`);
     const payload = await response.json();
@@ -26,7 +26,8 @@ test('GET /health returns Phase 0 service status', async () => {
     assert.equal(response.status, 200);
     assert.equal(payload.status, 'ok');
     assert.equal(payload.service, 'akshaconnect-api');
-    assert.equal(payload.phase, '0');
+    assert.equal(payload.phase, '1');
+    assert.equal(payload.checkpoint, 'P1-V2');
     assert.equal(payload.version, VERSION);
     assert.ok(!Number.isNaN(Date.parse(payload.timestamp)));
   });

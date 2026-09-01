@@ -28,8 +28,6 @@ function resolveProviderConfiguration(env = {}) {
   const explicitBusiness = clean(env.AKSHACONNECT_BUSINESS_PROVIDER);
   const legacyErpEnabled = isEnabled(env.AKSHACONNECT_ERP_INTEGRATION_ENABLED);
 
-  // P0-V4 compatibility: environments with neither new provider setting keep
-  // the old enabled/disabled ERP behavior until they opt into provider mode.
   if (!explicitIdentity && !explicitBusiness) {
     return Object.freeze({
       mode: 'LEGACY_V4',
@@ -52,6 +50,17 @@ function resolveProviderConfiguration(env = {}) {
     'BUSINESS_PROVIDER_INVALID',
     'AKSHACONNECT_BUSINESS_PROVIDER'
   );
+
+  if (
+    identityProvider === IDENTITY_PROVIDERS.LOCAL &&
+    businessProvider === BUSINESS_PROVIDERS.AKSHAERP
+  ) {
+    throw boundaryError(
+      'PROVIDER_COMBINATION_UNSUPPORTED',
+      'LOCAL identity cannot execute AkshaERP business operations until a trusted actor mapping exists',
+      500
+    );
+  }
 
   return Object.freeze({
     mode: 'PROVIDER_V1',

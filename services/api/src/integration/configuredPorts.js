@@ -4,6 +4,7 @@ const { boundaryError } = require('../core/boundaryError');
 const { createAkshaErpHttpAdapters } = require('./erpHttpAdapter');
 const { assertPort } = require('./portContracts');
 const { createLocalIdentityAdapter } = require('./localIdentityAdapter');
+const { createLocalIdentityProvider } = require('./localIdentityProvider');
 const { createUnavailableBusinessGateway } = require('./unavailableBusinessGateway');
 const { resolveProviderConfiguration, isEnabled } = require('./providerConfiguration');
 const {
@@ -36,12 +37,11 @@ function createConfiguredPorts({
   fetchImpl = global.fetch,
   notificationPort,
   localIdentityProvider,
+  localIdentityService,
 } = {}) {
   const pushPort = assertPort('notificationPort', notificationPort);
   const providerConfig = resolveProviderConfiguration(env);
 
-  // Preserve the historical P0-V4 activation flag behavior for installations
-  // that have not yet moved to explicit identity/business provider variables.
   if (providerConfig.mode === 'LEGACY_V4' && !providerConfig.erp_required) {
     return Object.freeze({
       identityGateway: disabledGateway('identityGateway', ['verifyAccessToken', 'searchUsers']),
@@ -61,7 +61,9 @@ function createConfiguredPorts({
 
   let identityGateway;
   if (providerConfig.identity_provider === IDENTITY_PROVIDERS.LOCAL) {
-    identityGateway = createLocalIdentityAdapter(localIdentityProvider);
+    const provider = localIdentityProvider ||
+      (localIdentityService ? createLocalIdentityProvider(localIdentityService) : null);
+    identityGateway = createLocalIdentityAdapter(provider);
   } else if (providerConfig.identity_provider === IDENTITY_PROVIDERS.AKSHAERP) {
     identityGateway = akshaErpAdapters.identityGateway;
   } else {

@@ -1,31 +1,67 @@
 # AkshaConnect
 
-AkshaConnect is an independent enterprise collaboration product with web/mobile clients and pluggable identity/business providers. AkshaERP is its deepest native integration, but AkshaConnect core can run without AkshaERP.
+AkshaConnect is an independent enterprise collaboration product with web/mobile clients and pluggable identity/business providers. AkshaERP is a native integration, not a mandatory runtime dependency.
 
-The repository is currently in **Phase 0: audit, contracts and extraction preparation**.
+The repository is currently in **Phase 1: standalone minimum viable application**.
 
-## Current checkpoint — P0-V6D
+## Current checkpoint — P1-V2
 
-Version: `0.7.0-phase0`
+Version: `0.8.0-phase1`
 
-P0-V6D corrects the business-integration boundary so the AkshaConnect core is genuinely provider-neutral:
+P1-V1 established the standalone collaboration PostgreSQL model and tenant/workspace isolation.
 
-- core depends on `businessGateway`, not `erpGateway`
-- core operations are `searchBusinessRecords()` and `executeBusinessAction()`
-- the generic request carries `resource_type`, `resource_id` and `action`
-- AkshaERP module codes, function codes and security-table concepts do not cross the core boundary
-- the AkshaERP adapter translates the generic contract to its provider-specific IGW transport
-- `LOCAL/NONE` remains the pure standalone mode and requires no ERP URL, credentials or network access
+P1-V2 adds the first AkshaConnect-owned LOCAL identity/session runtime:
 
-P0-V6B remains the transport baseline for the AkshaERP provider:
+- workspace-scoped local login
+- password verification through PostgreSQL `pgcrypto`
+- opaque bearer session tokens
+- only SHA-256 token hashes are persisted
+- session expiry and revocation
+- active workspace/member/identity validation on every session lookup
+- provider-neutral trusted request context for LOCAL identities
+- fail-closed database-name verification before the API listens
+- AkshaERP identity/business provider behavior remains isolated behind adapters
 
-- service authentication uses `x-api-client-id` + `x-api-key`
-- the adapter unwraps the standard IGW `{ success, message, data, requestId }` envelope
-- the user Bearer token is sent only to the identity verification endpoint
-- HMAC/shared-secret signing is not used by the active AkshaERP runtime connector
-- timeout/network/non-2xx failures remain normalized and fail closed
+## Pure standalone mode
 
-P0-V6A lives in the AkshaERP repository and provides the secured receiver under `/api/v1/akshaconnect/*`. The matching P0-V6D ERP-side adapter consumes the generic AkshaConnect request and maps it to AkshaERP-native authorization and data services.
+```text
+AKSHACONNECT_IDENTITY_PROVIDER=LOCAL
+AKSHACONNECT_BUSINESS_PROVIDER=NONE
+```
+
+AkshaConnect uses its own PostgreSQL database. It must not directly query, join, reference, or create foreign keys into an AkshaERP database.
+
+## Local runtime configuration
+
+Set these values locally; do not commit real credentials:
+
+```text
+AKSHACONNECT_DATABASE_URL=postgresql://<user>:<password>@127.0.0.1:5432/akshaconnect
+AKSHACONNECT_DATABASE_EXPECTED_NAME=akshaconnect
+AKSHACONNECT_LOCAL_SESSION_TTL_SECONDS=28800
+```
+
+The API refuses startup if `current_database()` does not match `AKSHACONNECT_DATABASE_EXPECTED_NAME`.
+
+## Local auth endpoints
+
+```text
+POST /api/v1/auth/local/login
+GET  /api/v1/auth/session
+POST /api/v1/auth/logout
+```
+
+Login body:
+
+```json
+{
+  "workspace_code": "DEV_ALPHA",
+  "login_name": "dev-alice",
+  "password": "<local password>"
+}
+```
+
+A successful login returns an opaque bearer token. The raw token is never stored in PostgreSQL.
 
 ## Provider modes
 
@@ -50,38 +86,21 @@ AKSHACONNECT_IDENTITY_PROVIDER=AKSHAERP
 AKSHACONNECT_BUSINESS_PROVIDER=NONE
 ```
 
-## Core boundary
-
-```text
-AkshaConnect core
-  -> identityGateway
-  -> businessGateway
-       -> searchRecords()
-       -> executeAction()
-  -> notificationPort
-```
-
-The core does not know AkshaERP module/function codes, tables, role models or security implementation details. A provider adapter owns those translations.
+`LOCAL` identity with `AKSHAERP` business provider is intentionally rejected in P1-V2 because no trusted local-to-ERP actor mapping exists yet.
 
 ## Requirements
 
 - Node.js 20 or newer
 - npm 10 or newer recommended
+- PostgreSQL 16 recommended for the standalone database
 - Docker optional
 
 ## Verify locally
 
 ```bash
-npm ci
+npm install
 npm run verify
 npm run start:api
-```
-
-Health endpoints:
-
-```text
-GET http://localhost:4100/health
-GET http://localhost:4100/ready
 ```
 
 Expected health payload includes:
@@ -90,33 +109,19 @@ Expected health payload includes:
 {
   "status": "ok",
   "service": "akshaconnect-api",
-  "phase": "0",
-  "checkpoint": "P0-V6D",
-  "version": "0.7.0-phase0"
+  "phase": "1",
+  "checkpoint": "P1-V2",
+  "version": "0.8.0-phase1"
 }
 ```
 
-## AkshaERP provider configuration
-
-When either provider is `AKSHAERP`, configure:
-
-```text
-AKSHACONNECT_ERP_BASE_URL=https://your-erp-host
-AKSHACONNECT_ERP_API_CLIENT_ID=<IGW client code>
-AKSHACONNECT_ERP_API_KEY=<IGW API key from secret store>
-```
-
-Do not place a production API key in source control. The matching AkshaERP Integration Gateway client must be tenant-bound and granted only the required `akshaconnect.*` scopes.
-
 ## Architecture boundary
 
-AkshaConnect owns collaboration data and UX. In `LOCAL/NONE` mode it also owns collaboration identity/session state. When a business provider is enabled, that provider remains authoritative for its own records, actions and authorization decisions.
+AkshaConnect owns collaboration identity/session state in LOCAL mode. Provider-specific IDs remain provider data; collaboration identity is represented by AkshaConnect UUIDs.
 
-Read these before extracting production code:
+Read:
 
-- `docs/architecture/P0-V2-SOURCE-BASELINE.md`
-- `docs/architecture/P0-V2-IMPLEMENTATION-INVENTORY.md`
-- `docs/architecture/P0-V2-EXTRACTION-MAP.md`
-- `docs/architecture/P0-V5-PROVIDER-ARCHITECTURE.md`
-- `docs/architecture/P0-V6B-IGW-CLIENT-TRANSPORT.md`
 - `docs/architecture/P0-V6D-GENERIC-BUSINESS-BOUNDARY.md`
+- `docs/architecture/P1-V1-COLLABORATION-PERSISTENCE.md`
+- `docs/architecture/P1-V1-PHASE1-EXECUTION-PLAN.md`
+- `docs/architecture/P1-V2-LOCAL-IDENTITY-SESSION.md`
