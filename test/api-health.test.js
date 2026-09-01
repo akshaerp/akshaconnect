@@ -18,7 +18,7 @@ async function withServer(run, options = {}) {
   }
 }
 
-test('GET /health returns Phase 1 P1-V2 service status', async () => {
+test('GET /health returns Phase 1 P1-V3 service status', async () => {
   await withServer(async (baseUrl) => {
     const response = await fetch(`${baseUrl}/health`);
     const payload = await response.json();
@@ -27,7 +27,7 @@ test('GET /health returns Phase 1 P1-V2 service status', async () => {
     assert.equal(payload.status, 'ok');
     assert.equal(payload.service, 'akshaconnect-api');
     assert.equal(payload.phase, '1');
-    assert.equal(payload.checkpoint, 'P1-V2');
+    assert.equal(payload.checkpoint, 'P1-V3');
     assert.equal(payload.version, VERSION);
     assert.ok(!Number.isNaN(Date.parse(payload.timestamp)));
   });

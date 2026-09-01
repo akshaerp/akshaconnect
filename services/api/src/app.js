@@ -2,7 +2,7 @@
 
 const { BoundaryError, boundaryError } = require('./core/boundaryError');
 
-const VERSION = '0.8.0-phase1';
+const VERSION = '0.9.0-phase1';
 const SERVICE_NAME = process.env.AKSHACONNECT_SERVICE_NAME || 'akshaconnect-api';
 const MAX_JSON_BYTES = 32 * 1024;
 
@@ -56,7 +56,10 @@ function requestMetadata(req) {
   };
 }
 
-function createRequestHandler({ localIdentityService = null } = {}) {
+function createRequestHandler({
+  localIdentityService = null,
+  collaborationService = null,
+} = {}) {
   return async function requestHandler(req, res) {
     try {
       const url = new URL(req.url || '/', 'http://localhost');
@@ -66,7 +69,7 @@ function createRequestHandler({ localIdentityService = null } = {}) {
           status: 'ok',
           service: SERVICE_NAME,
           phase: '1',
-          checkpoint: 'P1-V2',
+          checkpoint: 'P1-V3',
           version: VERSION,
           timestamp: new Date().toISOString(),
         });
@@ -107,6 +110,72 @@ function createRequestHandler({ localIdentityService = null } = {}) {
         if (req.method === 'POST' && url.pathname === '/api/v1/auth/logout') {
           const result = await localIdentityService.logout(bearerToken(req));
           writeJson(res, 200, result);
+          return;
+        }
+      }
+
+      const isCollaborationRoute = (
+        url.pathname === '/api/v1/workspace/members' ||
+        url.pathname === '/api/v1/channels' ||
+        url.pathname === '/api/v1/direct-messages'
+      );
+
+      if (isCollaborationRoute) {
+        if (!localIdentityService) {
+          throw boundaryError(
+            'LOCAL_IDENTITY_NOT_CONFIGURED',
+            'LOCAL identity service is not configured',
+            503
+          );
+        }
+
+        if (!collaborationService) {
+          throw boundaryError(
+            'COLLABORATION_NOT_CONFIGURED',
+            'Collaboration service is not configured',
+            503
+          );
+        }
+
+        const claims = await localIdentityService.verifyAccessToken(bearerToken(req));
+
+        if (req.method === 'GET' && url.pathname === '/api/v1/workspace/members') {
+          const members = await localIdentityService.searchUsers({
+            workspace_id: claims.workspace_id,
+            requester_member_id: claims.workspace_member_id,
+            search_text: url.searchParams.get('query') || '',
+            limit: url.searchParams.get('limit') || undefined,
+          });
+
+          writeJson(res, 200, { members });
+          return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/v1/channels') {
+          const channels = await collaborationService.listChannels(claims);
+          writeJson(res, 200, { channels });
+          return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/api/v1/channels') {
+          const body = await readJson(req);
+          const channel = await collaborationService.createChannel(claims, body);
+          writeJson(res, 201, { channel });
+          return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/v1/direct-messages') {
+          const directMessages = await collaborationService.listDirectMessages(claims);
+          writeJson(res, 200, { direct_messages: directMessages });
+          return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/api/v1/direct-messages') {
+          const body = await readJson(req);
+          const directMessage = await collaborationService.startDirectMessage(claims, body);
+          writeJson(res, directMessage.created ? 201 : 200, {
+            direct_message: directMessage,
+          });
           return;
         }
       }
