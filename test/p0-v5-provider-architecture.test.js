@@ -70,14 +70,14 @@ test('LOCAL identity mode fails composition when local identity provider is abse
       AKSHACONNECT_BUSINESS_PROVIDER: 'NONE',
     },
     notificationPort: notificationPort(),
-    fetchImpl: async () => { throw new Error('ERP network must not be used'); },
+    fetchImpl: async () => { throw new Error('AkshaERP network must not be used'); },
   }), (error) => {
     assert.equal(error.code, 'LOCAL_IDENTITY_PROVIDER_REQUIRED');
     return true;
   });
 });
 
-test('LOCAL/NONE standalone composition needs no ERP configuration or network', async () => {
+test('LOCAL/NONE standalone composition needs no AkshaERP configuration or network', async () => {
   let networkCalls = 0;
   const ports = createConfiguredPorts({
     env: {
@@ -112,7 +112,7 @@ test('LOCAL/NONE standalone composition needs no ERP configuration or network', 
   assert.equal(networkCalls, 0);
 });
 
-test('NONE business provider leaves collaboration identity valid but ERP features unavailable', async () => {
+test('NONE business provider leaves collaboration identity valid but business features unavailable', async () => {
   const ports = createConfiguredPorts({
     env: {
       AKSHACONNECT_IDENTITY_PROVIDER: 'LOCAL',
@@ -124,24 +124,22 @@ test('NONE business provider leaves collaboration identity valid but ERP feature
   const service = createIntegrationBoundaryService(ports);
   const context = await service.authenticate('local-token');
 
-  await assert.rejects(() => service.lookupErpRecords(context, {
-    module_code: 'SALES',
-    function_code: 'ORDER',
-    entity_type: 'SALES_ORDER',
+  await assert.rejects(() => service.searchBusinessRecords(context, {
+    resource_type: 'SALES_ORDER',
   }), (error) => {
-    assert.equal(error.code, 'ERP_FEATURE_UNAVAILABLE');
+    assert.equal(error.code, 'BUSINESS_FEATURE_UNAVAILABLE');
     return true;
   });
 
-  await assert.rejects(() => service.executeErpAction(context, {
+  await assert.rejects(() => service.executeBusinessAction(context, {
     action_attempt_id: 'A1',
     event_id: 'E1',
     correlation_id: 'C1',
-    entity_type: 'SALES_ORDER',
-    entity_id: 1,
-    action_code: 'APPROVE',
+    resource_type: 'SALES_ORDER',
+    resource_id: '1',
+    action: 'APPROVE',
   }), (error) => {
-    assert.equal(error.code, 'ERP_FEATURE_UNAVAILABLE');
+    assert.equal(error.code, 'BUSINESS_FEATURE_UNAVAILABLE');
     return true;
   });
 });
@@ -189,7 +187,7 @@ test('AKSHAERP can remain the identity provider while business integration is NO
   assert.equal(calls, 1);
 });
 
-test('AKSHAERP provider requires the P0-V6B Integration Gateway connector configuration', () => {
+test('AKSHAERP provider requires Integration Gateway connector configuration', () => {
   assert.throws(() => createConfiguredPorts({
     env: {
       AKSHACONNECT_IDENTITY_PROVIDER: 'AKSHAERP',
@@ -206,13 +204,13 @@ test('AKSHAERP provider requires the P0-V6B Integration Gateway connector config
   });
 });
 
-test('P0-V5 provider architecture contains no direct ERP implementation or table coupling', () => {
+test('provider architecture contains no direct AkshaERP implementation or table coupling', () => {
   const root = path.resolve(__dirname, '..', 'services', 'api', 'src', 'integration');
   const files = [
     'configuredPorts.js',
     'localIdentityAdapter.js',
     'providerConfiguration.js',
-    'unavailableErpGateway.js',
+    'unavailableBusinessGateway.js',
   ];
   const forbidden = [
     'AccessManagement/', 'CommunicationHub/', 'ApplicationManagement/',

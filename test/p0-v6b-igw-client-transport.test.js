@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHttpJsonTransport } = require('../services/api/src/integration/httpJsonTransport');
-const { createErpHttpAdapters } = require('../services/api/src/integration/erpHttpAdapter');
+const { createAkshaErpHttpAdapters } = require('../services/api/src/integration/erpHttpAdapter');
 const { createConfiguredPorts } = require('../services/api/src/integration/configuredPorts');
 
 function notificationPort() {
@@ -74,7 +74,7 @@ test('malformed 2xx Integration Gateway envelopes fail closed', async () => {
 
 test('runtime transport sends IGW credentials and never emits P0-V4 HMAC headers', async () => {
   let options;
-  const adapters = createErpHttpAdapters({
+  const adapters = createAkshaErpHttpAdapters({
     baseUrl: 'https://erp.example.test',
     apiClientId: 'acn-client',
     apiKey: 'acn-key',
@@ -93,7 +93,7 @@ test('runtime transport sends IGW credentials and never emits P0-V4 HMAC headers
 
 test('user Bearer token is sent only by identity verification', async () => {
   const seen = [];
-  const adapters = createErpHttpAdapters({
+  const adapters = createAkshaErpHttpAdapters({
     baseUrl: 'https://erp.example.test',
     apiClientId: 'acn-client',
     apiKey: 'acn-key',
@@ -109,13 +109,13 @@ test('user Bearer token is sent only by identity verification', async () => {
   });
   await adapters.identityGateway.verifyAccessToken('erp-user-token');
   await adapters.identityGateway.searchUsers({ tenant_id: 'T', organization_id: 11, requester_user_id: 7 });
-  await adapters.erpGateway.lookupRecords({ tenant_id: 'T', organization_id: 11, user_id: 7 });
+  await adapters.businessGateway.searchRecords({ tenant_id: 'T', organization_id: 11, actor_user_id: 7, resource_type: 'SALES_ORDER' });
   assert.equal(seen[0].authorization, 'Bearer erp-user-token');
   assert.equal(seen[1].authorization, null);
   assert.equal(seen[2].authorization, null);
 });
 
-test('P0-V6B runtime connector has no active HMAC/shared-secret dependency', () => {
+test('P0-V6B/V6D runtime connector has no active HMAC/shared-secret dependency', () => {
   const integrationRoot = path.resolve(__dirname, '..', 'services', 'api', 'src', 'integration');
   for (const file of ['httpJsonTransport.js', 'erpHttpAdapter.js', 'configuredPorts.js']) {
     const text = fs.readFileSync(path.join(integrationRoot, file), 'utf8');

@@ -1,10 +1,10 @@
 'use strict';
 
 const { boundaryError } = require('../core/boundaryError');
-const { createErpHttpAdapters } = require('./erpHttpAdapter');
+const { createAkshaErpHttpAdapters } = require('./erpHttpAdapter');
 const { assertPort } = require('./portContracts');
 const { createLocalIdentityAdapter } = require('./localIdentityAdapter');
-const { createUnavailableErpGateway } = require('./unavailableErpGateway');
+const { createUnavailableBusinessGateway } = require('./unavailableBusinessGateway');
 const { resolveProviderConfiguration, isEnabled } = require('./providerConfiguration');
 const {
   IDENTITY_PROVIDERS,
@@ -15,14 +15,14 @@ function disabledGateway(name, methods) {
   return Object.freeze(Object.fromEntries(methods.map((method) => [method, async () => {
     throw boundaryError(
       'ERP_INTEGRATION_DISABLED',
-      `${name}.${method} is unavailable because AkshaERP integration is disabled`,
+      `${name}.${method} is unavailable because the legacy AkshaERP integration flag is disabled`,
       503
     );
   }])));
 }
 
-function createErpAdapters(env, fetchImpl) {
-  return createErpHttpAdapters({
+function createAkshaErpAdapters(env, fetchImpl) {
+  return createAkshaErpHttpAdapters({
     baseUrl: env.AKSHACONNECT_ERP_BASE_URL,
     apiClientId: env.AKSHACONNECT_ERP_API_CLIENT_ID,
     apiKey: env.AKSHACONNECT_ERP_API_KEY,
@@ -40,13 +40,12 @@ function createConfiguredPorts({
   const pushPort = assertPort('notificationPort', notificationPort);
   const providerConfig = resolveProviderConfiguration(env);
 
-  // Preserve the P0-V4 activation flag semantics for installations that have
-  // not yet opted into explicit provider configuration. The transport behind
-  // that flag is now the P0-V6B Integration Gateway credential model.
+  // Preserve the historical P0-V4 activation flag behavior for installations
+  // that have not yet moved to explicit identity/business provider variables.
   if (providerConfig.mode === 'LEGACY_V4' && !providerConfig.erp_required) {
     return Object.freeze({
       identityGateway: disabledGateway('identityGateway', ['verifyAccessToken', 'searchUsers']),
-      erpGateway: disabledGateway('erpGateway', ['lookupRecords', 'executeAction']),
+      businessGateway: disabledGateway('businessGateway', ['searchRecords', 'executeAction']),
       notificationPort: pushPort,
       integration_enabled: false,
       identity_provider: 'DISABLED',
@@ -55,25 +54,27 @@ function createConfiguredPorts({
     });
   }
 
-  let erpAdapters = null;
-  if (providerConfig.erp_required) erpAdapters = createErpAdapters(env, fetchImpl);
+  let akshaErpAdapters = null;
+  if (providerConfig.erp_required) {
+    akshaErpAdapters = createAkshaErpAdapters(env, fetchImpl);
+  }
 
   let identityGateway;
   if (providerConfig.identity_provider === IDENTITY_PROVIDERS.LOCAL) {
     identityGateway = createLocalIdentityAdapter(localIdentityProvider);
   } else if (providerConfig.identity_provider === IDENTITY_PROVIDERS.AKSHAERP) {
-    identityGateway = erpAdapters.identityGateway;
+    identityGateway = akshaErpAdapters.identityGateway;
   } else {
     throw boundaryError('IDENTITY_PROVIDER_INVALID', 'Unsupported identity provider');
   }
 
-  const erpGateway = providerConfig.business_provider === BUSINESS_PROVIDERS.AKSHAERP
-    ? erpAdapters.erpGateway
-    : createUnavailableErpGateway();
+  const businessGateway = providerConfig.business_provider === BUSINESS_PROVIDERS.AKSHAERP
+    ? akshaErpAdapters.businessGateway
+    : createUnavailableBusinessGateway();
 
   return Object.freeze({
     identityGateway,
-    erpGateway,
+    businessGateway,
     notificationPort: pushPort,
     integration_enabled: providerConfig.erp_required,
     identity_provider: providerConfig.identity_provider,

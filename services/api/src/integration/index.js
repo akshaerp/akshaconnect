@@ -3,11 +3,14 @@
 const { createIntegrationBoundaryService } = require('./integrationBoundaryService');
 const { PORT_METHODS, assertBoundaryPorts } = require('./portContracts');
 const { createConfiguredPorts, isEnabled } = require('./configuredPorts');
-const { createErpHttpAdapters } = require('./erpHttpAdapter');
+const {
+  createAkshaErpHttpAdapters,
+  createErpHttpAdapters,
+} = require('./erpHttpAdapter');
 const { createHttpJsonTransport } = require('./httpJsonTransport');
 const { signServiceRequest } = require('./serviceToServiceSigner');
 const { createLocalIdentityAdapter } = require('./localIdentityAdapter');
-const { createUnavailableErpGateway } = require('./unavailableErpGateway');
+const { createUnavailableBusinessGateway } = require('./unavailableBusinessGateway');
 const { resolveProviderConfiguration } = require('./providerConfiguration');
 
 module.exports = {
@@ -16,10 +19,11 @@ module.exports = {
   assertBoundaryPorts,
   createConfiguredPorts,
   isEnabled,
+  createAkshaErpHttpAdapters,
   createErpHttpAdapters,
   createHttpJsonTransport,
   signServiceRequest,
   createLocalIdentityAdapter,
-  createUnavailableErpGateway,
+  createUnavailableBusinessGateway,
   resolveProviderConfiguration,
 };

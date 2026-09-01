@@ -4,7 +4,7 @@ const { boundaryError } = require('../core/boundaryError');
 
 const PORT_METHODS = Object.freeze({
   identityGateway: Object.freeze(['verifyAccessToken', 'searchUsers']),
-  erpGateway: Object.freeze(['lookupRecords', 'executeAction']),
+  businessGateway: Object.freeze(['searchRecords', 'executeAction']),
   notificationPort: Object.freeze(['enqueuePush']),
 });
 
@@ -31,7 +31,7 @@ function assertPort(name, port) {
 function assertBoundaryPorts(ports = {}) {
   return Object.freeze({
     identityGateway: assertPort('identityGateway', ports.identityGateway),
-    erpGateway: assertPort('erpGateway', ports.erpGateway),
+    businessGateway: assertPort('businessGateway', ports.businessGateway),
     notificationPort: assertPort('notificationPort', ports.notificationPort),
   });
 }

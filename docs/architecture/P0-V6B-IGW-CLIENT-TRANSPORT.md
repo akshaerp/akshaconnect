@@ -1,5 +1,7 @@
 # P0-V6B Integration Gateway Client Transport
 
+> **P0-V6D clarification:** P0-V6B remains the AkshaERP provider transport. P0-V6D changes only the AkshaConnect core-facing contract to generic `businessGateway`; the AkshaERP adapter still uses the secured IGW paths documented here.
+
 **Standalone base:** `f77859911a6edc3356a45b7e2e62592c2b9a203f`
 **Matching ERP receiver branch checkpoint:** `155d5d083dbc746319ec74cd53b302b67626fc91`
 
@@ -7,7 +9,7 @@ P0-V6B aligns the standalone AkshaERP provider with the security boundary that a
 
 ## Runtime authentication
 
-The active connector now sends:
+The active connector sends:
 
 ```text
 x-api-client-id: <IGW client code>
@@ -22,7 +24,7 @@ The ERP user's Bearer token is sent only to:
 POST /api/v1/akshaconnect/identity/verify
 ```
 
-User search, ERP record lookup and ERP action execution use the verified context produced by the standalone integration boundary and the service credentials; they do not forward the user's Bearer token.
+User search and business-provider record/action requests use the verified context produced by the standalone integration boundary and the service credentials; they do not forward the user's Bearer token.
 
 ## Why HMAC is no longer the active connector
 
@@ -43,7 +45,7 @@ AkshaERP IGW returns:
 }
 ```
 
-P0-V6B requires a valid object envelope with `success === true` and a `data` property. It returns only `data` to the existing identity/business ports.
+P0-V6B requires a valid object envelope with `success === true` and a `data` property. It returns only `data` to the identity/business provider adapters.
 
 Malformed 2xx envelopes fail closed with `ERP_INTEGRATION_RESPONSE_INVALID`.
 
@@ -64,7 +66,7 @@ No ERP configuration is required or read in `LOCAL/NONE` mode.
 
 Before integrated local/server testing, the matching AkshaERP environment must:
 
-1. deploy P0-V6A receiver code;
+1. deploy the AkshaConnect IGW receiver code;
 2. run `database/modules/igw/post_migrations/202608312100__igw_akshaconnect_scopes.sql`;
 3. create/configure a tenant-bound AkshaConnect IGW API client;
 4. grant only the required `akshaconnect.*` scopes;

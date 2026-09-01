@@ -15,7 +15,7 @@ function makePorts(overrides = {}) {
   const calls = {
     verify: [],
     searchUsers: [],
-    lookup: [],
+    searchRecords: [],
     action: [],
     push: [],
   };
@@ -37,9 +37,9 @@ function makePorts(overrides = {}) {
         return [];
       },
     },
-    erpGateway: {
-      async lookupRecords(input) {
-        calls.lookup.push(input);
+    businessGateway: {
+      async searchRecords(input) {
+        calls.searchRecords.push(input);
         return [];
       },
       async executeAction(input) {
@@ -97,7 +97,7 @@ test('a fabricated plain object is not accepted as a verified request context', 
 
 test('integration boundary fails closed when a required port is absent', () => {
   const { ports } = makePorts();
-  delete ports.erpGateway;
+  delete ports.businessGateway;
   assert.throws(
     () => createIntegrationBoundaryService(ports),
     (error) => error.code === 'BOUNDARY_PORT_REQUIRED'
@@ -138,42 +138,49 @@ test('user search cannot override trusted tenant or organization context', async
   });
 });
 
-test('ERP record lookup uses trusted actor and organization, not client overrides', async () => {
+test('business record search uses trusted actor/scope and generic resource type', async () => {
   const { ports, calls } = makePorts();
   const service = createIntegrationBoundaryService(ports);
   const context = await service.authenticate('verified-token');
 
-  await service.lookupErpRecords(context, {
+  await service.searchBusinessRecords(context, {
     tenant_id: 'EVIL',
     organization_id: 999,
-    user_id: 999,
-    module_code: 'SALES',
-    function_code: 'ORDER',
-    entity_type: 'SALES_ORDER',
+    branch_id: 999,
+    actor_user_id: 999,
+    resource_type: 'sales_order',
+    module_code: 'SHOULD_NOT_CROSS',
+    function_code: 'SHOULD_NOT_CROSS',
     query: 'SO-1',
   });
 
-  assert.equal(calls.lookup[0].tenant_id, 'VISALAANDHRA');
-  assert.equal(calls.lookup[0].organization_id, 11);
-  assert.equal(calls.lookup[0].branch_id, 16);
-  assert.equal(calls.lookup[0].user_id, 2);
+  assert.deepEqual(calls.searchRecords[0], {
+    tenant_id: 'VISALAANDHRA',
+    organization_id: 11,
+    branch_id: 16,
+    actor_user_id: 2,
+    resource_type: 'SALES_ORDER',
+    query: 'SO-1',
+    limit: 25,
+    correlation_id: null,
+  });
 });
 
-test('ERP action request binds actor and scope to the verified context', async () => {
+test('business action binds actor/scope to verified context and uses generic identifiers', async () => {
   const { ports, calls } = makePorts();
   const service = createIntegrationBoundaryService(ports);
   const context = await service.authenticate('verified-token');
 
-  const result = await service.executeErpAction(context, {
+  const result = await service.executeBusinessAction(context, {
     tenant_id: 'EVIL',
     organization_id: 999,
-    user_id: 999,
+    actor_user_id: 999,
     action_attempt_id: 'attempt-1',
     event_id: 'event-1',
     correlation_id: 'corr-1',
-    entity_type: 'SALES_ORDER',
-    entity_id: 1045,
-    action_code: 'approve',
+    resource_type: 'sales_order',
+    resource_id: 1045,
+    action: 'approve',
     client_context: { surface: 'MOBILE' },
   });
 
@@ -186,10 +193,10 @@ test('ERP action request binds actor and scope to the verified context', async (
     tenant_id: 'VISALAANDHRA',
     organization_id: 11,
     branch_id: 16,
-    user_id: 2,
-    entity_type: 'SALES_ORDER',
-    entity_id: 1045,
-    action_code: 'APPROVE',
+    actor_user_id: 2,
+    resource_type: 'SALES_ORDER',
+    resource_id: '1045',
+    action: 'APPROVE',
     client_context: { surface: 'MOBILE' },
   });
 });
@@ -214,7 +221,7 @@ test('push requests route through the AkshaConnect notification port', async () 
   assert.equal(calls.push[0].recipient_user_id, 8);
 });
 
-test('new standalone boundary code does not import ERP implementation modules or tables', () => {
+test('generic core boundary does not import provider implementation modules or tables', () => {
   const root = path.join(__dirname, '..', 'services', 'api', 'src');
   const files = [
     path.join(root, 'core', 'verifiedRequestContext.js'),

@@ -5,10 +5,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  ERP_INTEGRATION_PATHS,
+  AKSHAERP_CONNECTOR_PATHS,
 } = require('../packages/contracts/src/integrationTransportV1');
 const { signServiceRequest } = require('../services/api/src/integration/serviceToServiceSigner');
-const { createErpHttpAdapters } = require('../services/api/src/integration/erpHttpAdapter');
+const { createAkshaErpHttpAdapters } = require('../services/api/src/integration/erpHttpAdapter');
 const { createConfiguredPorts } = require('../services/api/src/integration/configuredPorts');
 
 function notificationPort() {
@@ -27,16 +27,20 @@ function success(data) {
   return { success: true, message: 'ok', data, requestId: 'req-1' };
 }
 
-test('ERP integration is disabled by default and fails closed', async () => {
+test('legacy ERP integration is disabled by default and fails closed', async () => {
   const ports = createConfiguredPorts({ env: {}, notificationPort: notificationPort() });
   assert.equal(ports.integration_enabled, false);
   await assert.rejects(() => ports.identityGateway.verifyAccessToken('token'), (error) => {
     assert.equal(error.code, 'ERP_INTEGRATION_DISABLED');
     return true;
   });
+  await assert.rejects(() => ports.businessGateway.searchRecords({}), (error) => {
+    assert.equal(error.code, 'ERP_INTEGRATION_DISABLED');
+    return true;
+  });
 });
 
-test('enabled ERP integration requires a base URL and Integration Gateway credentials', () => {
+test('enabled AkshaERP provider requires a base URL and Integration Gateway credentials', () => {
   assert.throws(() => createConfiguredPorts({
     env: { AKSHACONNECT_ERP_INTEGRATION_ENABLED: 'Y' },
     notificationPort: notificationPort(),
@@ -65,9 +69,9 @@ test('historical P0-V4 service request signing helper remains deterministic', ()
   assert.notEqual(headers['x-aksha-signature'], 'test-secret');
 });
 
-test('identity verification uses the versioned ERP path, IGW credentials and bearer token', async () => {
+test('identity verification uses AkshaERP connector path, IGW credentials and bearer token', async () => {
   let request;
-  const adapters = createErpHttpAdapters({
+  const adapters = createAkshaErpHttpAdapters({
     baseUrl: 'https://erp.example.test',
     apiClientId: 'akshaconnect-test',
     apiKey: 'test-api-key',
@@ -83,16 +87,16 @@ test('identity verification uses the versioned ERP path, IGW credentials and bea
   });
   const result = await adapters.identityGateway.verifyAccessToken('user-token');
   assert.equal(result.user_id, 7);
-  assert.equal(request.url, `https://erp.example.test${ERP_INTEGRATION_PATHS.VERIFY_ACCESS_TOKEN}`);
+  assert.equal(request.url, `https://erp.example.test${AKSHAERP_CONNECTOR_PATHS.VERIFY_ACCESS_TOKEN}`);
   assert.equal(request.options.headers.authorization, 'Bearer user-token');
   assert.equal(request.options.headers['x-api-client-id'], 'akshaconnect-test');
   assert.equal(request.options.headers['x-api-key'], 'test-api-key');
   assert.equal(request.options.headers['x-aksha-signature'], undefined);
 });
 
-test('user search, record lookup and action execution use versioned transport paths', async () => {
+test('user search and generic business operations use provider-specific AkshaERP paths', async () => {
   const seen = [];
-  const adapters = createErpHttpAdapters({
+  const adapters = createAkshaErpHttpAdapters({
     baseUrl: 'https://erp.example.test',
     apiClientId: 'akshaconnect-test',
     apiKey: 'test-api-key',
@@ -102,17 +106,17 @@ test('user search, record lookup and action execution use versioned transport pa
     },
   });
   await adapters.identityGateway.searchUsers({ organization_id: 11 });
-  await adapters.erpGateway.lookupRecords({ organization_id: 11 });
-  await adapters.erpGateway.executeAction({ organization_id: 11, action_code: 'APPROVE' });
+  await adapters.businessGateway.searchRecords({ organization_id: 11, resource_type: 'SALES_ORDER' });
+  await adapters.businessGateway.executeAction({ organization_id: 11, resource_type: 'SALES_ORDER', action: 'APPROVE' });
   assert.deepEqual(seen.map((x) => new URL(x.url).pathname), [
-    ERP_INTEGRATION_PATHS.SEARCH_USERS,
-    ERP_INTEGRATION_PATHS.LOOKUP_RECORDS,
-    ERP_INTEGRATION_PATHS.EXECUTE_ACTION,
+    AKSHAERP_CONNECTOR_PATHS.SEARCH_USERS,
+    AKSHAERP_CONNECTOR_PATHS.SEARCH_RECORDS,
+    AKSHAERP_CONNECTOR_PATHS.EXECUTE_ACTION,
   ]);
 });
 
 test('remote non-success status fails closed without trusting remote text', async () => {
-  const adapters = createErpHttpAdapters({
+  const adapters = createAkshaErpHttpAdapters({
     baseUrl: 'https://erp.example.test',
     apiClientId: 'akshaconnect-test',
     apiKey: 'test-api-key',
@@ -123,7 +127,7 @@ test('remote non-success status fails closed without trusting remote text', asyn
       requestId: 'req-denied',
     }),
   });
-  await assert.rejects(() => adapters.erpGateway.lookupRecords({}), (error) => {
+  await assert.rejects(() => adapters.businessGateway.searchRecords({}), (error) => {
     assert.equal(error.code, 'ERP_INTEGRATION_HTTP_ERROR');
     assert.equal(error.remote_status, 403);
     assert.equal(error.remote_code, 'IGW_SCOPE_DENIED');
@@ -134,20 +138,20 @@ test('remote non-success status fails closed without trusting remote text', asyn
 });
 
 test('transport network errors become a generic unavailable boundary error', async () => {
-  const adapters = createErpHttpAdapters({
+  const adapters = createAkshaErpHttpAdapters({
     baseUrl: 'https://erp.example.test',
     apiClientId: 'akshaconnect-test',
     apiKey: 'test-api-key',
     fetchImpl: async () => { throw new Error('socket detail should not escape'); },
   });
-  await assert.rejects(() => adapters.erpGateway.executeAction({}), (error) => {
+  await assert.rejects(() => adapters.businessGateway.executeAction({}), (error) => {
     assert.equal(error.code, 'ERP_INTEGRATION_UNAVAILABLE');
     assert.equal(error.message, 'AkshaERP integration request failed');
     return true;
   });
 });
 
-test('P0-V4/V6B transport code contains no direct ERP module or table coupling', () => {
+test('provider transport code contains no direct AkshaERP implementation or table coupling', () => {
   const root = path.resolve(__dirname, '..', 'services', 'api', 'src', 'integration');
   const files = fs.readdirSync(root).filter((name) => name.endsWith('.js'));
   const forbidden = [

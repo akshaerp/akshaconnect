@@ -1,5 +1,7 @@
 # P0-V3 Standalone Service Boundaries
 
+> **Historical note (P0-V6D):** P0-V3 originally named the business port `erpGateway`. P0-V6D supersedes that core shape with provider-neutral `businessGateway`, `searchBusinessRecords()` and `executeBusinessAction()`. The remainder below records the original P0-V3 checkpoint.
+
 **Checkpoint:** P0-V3  
 **Standalone base:** `3c95c8b37862c1311303d7dce30ab690301e3f02`  
 **ERP audit baseline:** `21f72ba86bb1cb2e09012285a7b01d71a45280e0`
@@ -10,8 +12,8 @@ P0-V3 turns the P0-V2 extraction decisions into executable standalone ports. It 
 
 | Port | AkshaConnect uses it for | Implementation owner |
 | --- | --- | --- |
-| `identityGateway` | token verification and organization-scoped user search | AkshaERP integration adapter |
-| `erpGateway` | ERP record lookup and business action requests | AkshaERP secured integration adapter |
+| `identityGateway` | token verification and organization-scoped user search | identity provider adapter |
+| `erpGateway` *(historical P0-V3 name; superseded by `businessGateway` in P0-V6D)* | ERP record lookup and business action requests | AkshaERP secured integration adapter |
 | `notificationPort` | queueing mobile push work | AkshaConnect |
 
 The service refuses to start its integration boundary if a required port is absent or incomplete.
@@ -34,7 +36,7 @@ Client payloads may provide search text, entity/action identifiers and UI metada
 
 ## ERP action rule
 
-`executeErpAction()` only constructs a request. AkshaERP remains authoritative and must revalidate workflow state, permission, segregation-of-duties rules and record status before mutating any ERP record.
+`executeErpAction()` was the P0-V3 name. P0-V6D replaces it with generic `executeBusinessAction()`. In both cases the provider remains authoritative and must revalidate workflow state, permission, segregation-of-duties rules and record status before mutation.
 
 ## Explicitly not implemented in P0-V3
 
