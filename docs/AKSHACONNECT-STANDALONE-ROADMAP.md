@@ -7,6 +7,16 @@
 **Document status:** Initial approved direction  
 **Date:** 31 August 2026
 
+### P0-V6D supersession — 1 September 2026
+
+P0-V6D establishes AkshaConnect as a provider-neutral standalone product. Earlier references in this roadmap that describe AkshaERP as the mandatory identity/business owner are historical Phase-0 assumptions. From P0-V6D onward:
+
+- `LOCAL` identity with no business provider is a valid pure standalone deployment.
+- AkshaERP is one optional identity/business provider through a connector.
+- AkshaConnect owns its collaboration identity, workspace, membership, conversation, channel, message, read-state and collaboration data.
+- Provider-specific module codes, function codes, tables, role models and security implementation details must not enter AkshaConnect core contracts.
+- Phase 1 brings a minimum functional web UI forward so backend capabilities can be practically tested as they are built, while automated security/persistence tests remain mandatory.
+
 ---
 
 ## 1. Executive Decision
@@ -357,28 +367,75 @@ Exit criteria:
 
 ### Phase 1 — Standalone minimum viable application
 
-**Goal:** Users can independently open AkshaConnect and communicate reliably.
+**Goal:** Users can independently open AkshaConnect and communicate reliably in pure standalone mode or with an optional identity/business provider.
 
-Deliverables:
+**Development sequence:**
 
-- Standalone web shell
-- Android/iOS application shell
-- AkshaERP login and tenant context
-- Direct messages and channels
-- Message history and pagination
-- Real-time send/receive
-- Basic read state and unread counts
-- Mobile push notifications
-- SystemSender support
-- Basic file attachment support
+1. **P1-V1 — Collaboration persistence + tenant isolation**
+   - workspace, identity/provider-link and membership foundation
+   - channels, conversations and participants
+   - messages, revisions, read cursors and SystemSender
+   - client/event idempotency
+   - structural cross-workspace protection
 
-Exit criteria:
+2. **P1-V2 — LOCAL identity + session bootstrap**
+   - standalone login/session foundation
+   - trusted workspace context
+   - provider-neutral identity contract
+   - optional AkshaERP identity adapter remains behind the provider boundary
+
+3. **P1-V3 — Channel + direct-message APIs**
+   - channel create/list/membership
+   - direct-message creation/discovery
+   - authorization and tenant-isolation tests
+
+4. **P1-V4 — Minimum functional web UI**
+   - login
+   - workspace/channel/direct-message sidebar
+   - conversation history
+   - message composer
+   - enough UI to test each subsequent backend feature with two browser sessions
+
+5. **P1-V5 — Durable messaging**
+   - send/history/pagination
+   - read cursors/unread state
+   - duplicate protection
+   - SystemSender
+
+6. **P1-V6 — Realtime gateway**
+   - WebSocket connect/send/receive
+   - ordering
+   - reconnect/resume without duplicate messages
+
+7. **P1-V7 — Web UX hardening**
+   - responsive layout
+   - reconnect state
+   - unread counters
+   - basic attachment UI
+
+8. **P1-V8 — Mobile shell**
+   - React Native Android/iOS application shell
+   - same identity/messaging contracts
+   - device registration and push foundation
+
+9. **P1-V9 — Full Phase-1 E2E**
+   - web ↔ web
+   - web ↔ mobile
+   - reconnect/restart
+   - tenant isolation
+   - SystemSender
+   - basic attachment smoke test
+
+**Testing rule:** every checkpoint must have an automated gate and, once P1-V4 exists, a practical UI gate. UI clicking never replaces tenant/security/idempotency tests.
+
+**Exit criteria:**
 
 - Two users can exchange messages across web and mobile
 - Messages survive reconnects and application restarts
 - Duplicate events do not create duplicate messages
 - Tenant-isolation tests pass
 - A system message is distinguishable from a human message
+- Pure `LOCAL` standalone mode works without AkshaERP network/configuration
 
 ### Phase 2 — Full collaboration experience
 
