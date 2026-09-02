@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ApiError,
   createChannel,
@@ -7,6 +7,7 @@ import {
   listDirectMessages,
   listMembers,
   listMessages,
+  listUnreadCounts,
   markRead,
   loginLocal,
   logout,
@@ -18,6 +19,11 @@ import {
   loadStoredSession,
   saveStoredSession,
 } from './sessionStore.js';
+import {
+  createRealtimeClient,
+  playIncomingMessageSound,
+  unlockNotificationSound,
+} from './realtime.js';
 
 function initials(name = '') {
   return name
@@ -119,7 +125,7 @@ function LoginScreen({ onLogin }) {
           </button>
         </form>
 
-        <p className="login-footnote">P1-V5 durable messaging web client</p>
+        <p className="login-footnote">P1-V6 realtime messaging web client</p>
       </section>
     </main>
   );
@@ -298,7 +304,15 @@ function formatMessageTime(value) {
   });
 }
 
-function ConversationView({ token, session, selected, onApiFailure }) {
+function ConversationView({
+  token,
+  session,
+  selected,
+  onApiFailure,
+  realtimeMessage,
+  reconnectEpoch,
+  onReadConversation,
+}) {
   const [messages, setMessages] = useState([]);
   const [page, setPage] = useState({ has_more: false, next_before_message_id: null });
   const [loading, setLoading] = useState(false);
@@ -323,9 +337,11 @@ function ConversationView({ token, session, selected, onApiFailure }) {
 
       const latest = nextMessages[nextMessages.length - 1];
       if (!appendOlder && latest?.message_id) {
-        markRead(token, selected.id, latest.message_id).catch((requestError) => {
-          onApiFailure(requestError);
-        });
+        markRead(token, selected.id, latest.message_id)
+          .then(() => onReadConversation?.(selected.id))
+          .catch((requestError) => {
+            onApiFailure(requestError);
+          });
       }
     } catch (requestError) {
       if (!onApiFailure(requestError)) {
@@ -336,7 +352,7 @@ function ConversationView({ token, session, selected, onApiFailure }) {
       setLoadingOlder(false);
       setRefreshing(false);
     }
-  }, [selected?.id, token, onApiFailure]);
+  }, [selected?.id, token, onApiFailure, onReadConversation]);
 
   useEffect(() => {
     setMessages([]);
@@ -344,6 +360,27 @@ function ConversationView({ token, session, selected, onApiFailure }) {
     setDraft('');
     if (selected?.id) load();
   }, [selected?.id, load]);
+
+  useEffect(() => {
+    if (!selected?.id || reconnectEpoch <= 0) return;
+    load();
+  }, [reconnectEpoch, selected?.id, load]);
+
+  useEffect(() => {
+    const event = realtimeMessage;
+    if (!event?.message || event.conversation_id !== selected?.id) return;
+
+    setMessages((current) => current.some((item) => item.message_id === event.message.message_id)
+      ? current
+      : [...current, event.message]);
+
+    const pageVisible = document.visibilityState === 'visible' && document.hasFocus();
+    if (pageVisible && event.message.message_id) {
+      markRead(token, selected.id, event.message.message_id)
+        .then(() => onReadConversation?.(selected.id))
+        .catch((requestError) => onApiFailure(requestError));
+    }
+  }, [realtimeMessage, selected?.id, token, onApiFailure, onReadConversation]);
 
   async function submit(event) {
     event.preventDefault();
@@ -363,9 +400,11 @@ function ConversationView({ token, session, selected, onApiFailure }) {
         : [...current, message]);
       setDraft('');
       if (message?.message_id) {
-        markRead(token, selected.id, message.message_id).catch((requestError) => {
-          onApiFailure(requestError);
-        });
+        markRead(token, selected.id, message.message_id)
+          .then(() => onReadConversation?.(selected.id))
+          .catch((requestError) => {
+            onApiFailure(requestError);
+          });
       }
     } catch (requestError) {
       if (!onApiFailure(requestError)) {
@@ -405,7 +444,7 @@ function ConversationView({ token, session, selected, onApiFailure }) {
           >
             {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
-          <span className="phase-badge">P1-V5</span>
+          <span className="phase-badge">P1-V6</span>
         </div>
       </header>
 
@@ -498,6 +537,18 @@ export default function App() {
   const [globalError, setGlobalError] = useState('');
   const [showChannelCreate, setShowChannelCreate] = useState(false);
   const [showDmPicker, setShowDmPicker] = useState(false);
+  const [unreadCounts, setUnreadCounts] = useState({});
+  const [realtimeStatus, setRealtimeStatus] = useState('disconnected');
+  const [realtimeMessage, setRealtimeMessage] = useState(null);
+  const [reconnectEpoch, setReconnectEpoch] = useState(0);
+  const [notificationToast, setNotificationToast] = useState(null);
+  const selectedRef = useRef(selected);
+  const sessionRef = useRef(session);
+  const navigationRef = useRef({ channels, directMessages });
+
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { sessionRef.current = session; }, [session]);
+  useEffect(() => { navigationRef.current = { channels, directMessages }; }, [channels, directMessages]);
 
   const clearSession = useCallback(() => {
     clearStoredSession();
@@ -506,6 +557,10 @@ export default function App() {
     setChannels([]);
     setDirectMessages([]);
     setSelected(null);
+    setUnreadCounts({});
+    setRealtimeMessage(null);
+    setRealtimeStatus('disconnected');
+    setNotificationToast(null);
     setLoadingWorkspace(false);
   }, []);
 
@@ -517,6 +572,16 @@ export default function App() {
     }
     return false;
   }, [clearSession]);
+
+  const refreshUnreadCounts = useCallback(async (activeToken) => {
+    const payload = await listUnreadCounts(activeToken);
+    const next = {};
+    for (const item of payload.unread_counts || []) {
+      next[item.conversation_id] = Number(item.unread_count || 0);
+    }
+    setUnreadCounts(next);
+    return next;
+  }, []);
 
   const refreshNavigation = useCallback(async (activeToken, preferredSelection = null) => {
     const [channelPayload, dmPayload] = await Promise.all([
@@ -578,7 +643,10 @@ export default function App() {
         const inspected = await inspectSession(token);
         if (cancelled) return;
         setSession(inspected.claims);
-        await refreshNavigation(token);
+        await Promise.all([
+          refreshNavigation(token),
+          refreshUnreadCounts(token),
+        ]);
       } catch (error) {
         if (!cancelled && !handleApiFailure(error)) {
           clearSession();
@@ -593,7 +661,90 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [token, refreshNavigation, handleApiFailure, clearSession]);
+  }, [token, refreshNavigation, refreshUnreadCounts, handleApiFailure, clearSession]);
+
+  useEffect(() => {
+    if (!token || !session) return undefined;
+
+    const unlock = () => unlockNotificationSound();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+
+    const client = createRealtimeClient({
+      token,
+      onStatus: setRealtimeStatus,
+      onEvent: (event) => {
+        if (event.type === 'ready') {
+          setReconnectEpoch((value) => value + 1);
+          Promise.all([
+            refreshNavigation(token),
+            refreshUnreadCounts(token),
+          ]).catch((error) => handleApiFailure(error));
+          return;
+        }
+
+        if (event.type === 'read_cursor.updated') {
+          setUnreadCounts((current) => ({ ...current, [event.conversation_id]: 0 }));
+          return;
+        }
+
+        if (event.type !== 'message.created' || !event.message) return;
+
+        setRealtimeMessage({ ...event, received_at: Date.now() });
+        const currentSession = sessionRef.current;
+        const ownMessage = event.message.sender_type === 'HUMAN'
+          && event.message.sender_member_id === currentSession?.workspace_member_id;
+        if (ownMessage) return;
+
+        const currentSelection = selectedRef.current;
+        const activeAndVisible = currentSelection?.id === event.conversation_id
+          && document.visibilityState === 'visible'
+          && document.hasFocus();
+
+        if (!activeAndVisible) {
+          setUnreadCounts((current) => ({
+            ...current,
+            [event.conversation_id]: Number(current[event.conversation_id] || 0) + 1,
+          }));
+        }
+
+        playIncomingMessageSound();
+        const nav = navigationRef.current;
+        const channel = nav.channels.find((item) => item.conversation_id === event.conversation_id);
+        const dm = nav.directMessages.find((item) => item.conversation_id === event.conversation_id);
+        setNotificationToast({
+          id: `${event.message.message_id}-${Date.now()}`,
+          sender: event.message.sender_display_name || 'New message',
+          conversation: channel?.channel_name ? `#${channel.channel_name}` : dm?.other_display_name || 'Conversation',
+          preview: event.message.body_text || '',
+        });
+      },
+    });
+
+    return () => {
+      client.stop();
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, [token, session, refreshNavigation, refreshUnreadCounts, handleApiFailure]);
+
+  useEffect(() => {
+    if (!notificationToast) return undefined;
+    const timer = window.setTimeout(() => setNotificationToast(null), 4200);
+    return () => window.clearTimeout(timer);
+  }, [notificationToast]);
+
+  const selectConversation = useCallback((next) => {
+    setSelected(next);
+    if (next?.id) {
+      setUnreadCounts((current) => ({ ...current, [next.id]: 0 }));
+    }
+  }, []);
+
+  const handleReadConversation = useCallback((conversationId) => {
+    if (!conversationId) return;
+    setUnreadCounts((current) => ({ ...current, [conversationId]: 0 }));
+  }, []);
 
   async function handleLogin(credentials) {
     setGlobalError('');
@@ -679,7 +830,7 @@ export default function App() {
               <strong>{session.workspace_name}</strong>
               <span>{session.workspace_code}</span>
             </div>
-            <span className="workspace-status-dot" title="Connected" />
+            <span className={`workspace-status-dot realtime-${realtimeStatus}`} title={`Realtime: ${realtimeStatus}`} />
           </div>
         </div>
 
@@ -709,7 +860,7 @@ export default function App() {
                     type="button"
                     className={`nav-item ${active ? 'active' : ''}`}
                     key={channel.channel_id}
-                    onClick={() => setSelected({
+                    onClick={() => selectConversation({
                       kind: 'channel',
                       id: channel.conversation_id,
                       title: channel.channel_name,
@@ -718,6 +869,9 @@ export default function App() {
                   >
                     <span className="nav-icon">#</span>
                     <span className="nav-label">{channel.channel_name}</span>
+                    {Number(unreadCounts[channel.conversation_id] || 0) > 0 ? (
+                      <span className="unread-badge">{Math.min(99, unreadCounts[channel.conversation_id])}</span>
+                    ) : null}
                     {channel.visibility === 'PRIVATE' ? <span className="private-dot">•</span> : null}
                   </button>
                 );
@@ -752,7 +906,7 @@ export default function App() {
                     type="button"
                     className={`nav-item dm-nav-item ${active ? 'active' : ''}`}
                     key={dm.conversation_id}
-                    onClick={() => setSelected({
+                    onClick={() => selectConversation({
                       kind: 'dm',
                       id: dm.conversation_id,
                       title: dm.other_display_name,
@@ -761,6 +915,9 @@ export default function App() {
                   >
                     <span className="avatar avatar-tiny">{initials(dm.other_display_name)}</span>
                     <span className="nav-label">{dm.other_display_name}</span>
+                    {Number(unreadCounts[dm.conversation_id] || 0) > 0 ? (
+                      <span className="unread-badge">{Math.min(99, unreadCounts[dm.conversation_id])}</span>
+                    ) : null}
                   </button>
                 );
               })}
@@ -781,8 +938,29 @@ export default function App() {
 
       <main className="conversation-panel">
         {globalError ? <div className="global-banner in-app-banner">{globalError}</div> : null}
-        <ConversationView token={token} session={session} selected={selected} onApiFailure={handleApiFailure} />
+        <ConversationView
+          token={token}
+          session={session}
+          selected={selected}
+          onApiFailure={handleApiFailure}
+          realtimeMessage={realtimeMessage}
+          reconnectEpoch={reconnectEpoch}
+          onReadConversation={handleReadConversation}
+        />
       </main>
+
+      {notificationToast ? (
+        <button
+          type="button"
+          className="message-toast"
+          onClick={() => setNotificationToast(null)}
+          aria-label="Dismiss message notification"
+        >
+          <strong>{notificationToast.sender}</strong>
+          <span>{notificationToast.conversation}</span>
+          <small>{notificationToast.preview}</small>
+        </button>
+      ) : null}
     </div>
   );
 }

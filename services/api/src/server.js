@@ -10,6 +10,8 @@ const { createCollaborationService } = require('./collaboration/collaborationSer
 const { createMessagingRepository } = require('./messaging/messagingRepository');
 const { createMessagingService } = require('./messaging/messagingService');
 const { createMessageCryptoFromEnv } = require('./messaging/messageCrypto');
+const { createRealtimeEventBus } = require('./realtime/realtimeEventBus');
+const { attachRealtimeGateway } = require('./realtime/realtimeGateway');
 
 const port = Number(process.env.PORT || 4100);
 
@@ -21,7 +23,10 @@ async function start() {
   let pool = null;
   let localIdentityService = null;
   let collaborationService = null;
+  let messagingRepository = null;
   let messagingService = null;
+  let realtimeGateway = null;
+  const realtimeEventBus = createRealtimeEventBus();
 
   if (identityProvider === 'LOCAL') {
     pool = createPostgresPool(process.env);
@@ -39,8 +44,10 @@ async function start() {
     collaborationService = createCollaborationService(collaborationRepository);
 
     const messageCrypto = createMessageCryptoFromEnv(process.env);
-    const messagingRepository = createMessagingRepository(pool, { messageCrypto });
-    messagingService = createMessagingService(messagingRepository);
+    messagingRepository = createMessagingRepository(pool, { messageCrypto });
+    messagingService = createMessagingService(messagingRepository, {
+      eventPublisher: realtimeEventBus,
+    });
   }
 
   const server = http.createServer(createRequestHandler({
@@ -49,11 +56,22 @@ async function start() {
     messagingService,
   }));
 
+  if (localIdentityService && messagingRepository) {
+    realtimeGateway = attachRealtimeGateway({
+      server,
+      localIdentityService,
+      messagingRepository,
+      eventBus: realtimeEventBus,
+    });
+  }
+
   await new Promise((resolve) => server.listen(port, '0.0.0.0', resolve));
   console.log(`AkshaConnect API ${VERSION} listening on port ${port}`);
 
   async function shutdown(signal) {
     console.log(`Received ${signal}; shutting down AkshaConnect API`);
+
+    if (realtimeGateway) await realtimeGateway.close();
 
     await new Promise((resolve) => {
       server.close(() => resolve());

@@ -20,6 +20,11 @@ export default defineConfig({
         target: apiTarget,
         changeOrigin: false,
       },
+      '/ws': {
+        target: apiTarget,
+        ws: true,
+        changeOrigin: false,
+      },
     },
   },
   preview: {

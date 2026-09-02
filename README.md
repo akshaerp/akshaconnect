@@ -4,9 +4,9 @@ AkshaConnect is an independent enterprise collaboration product with web/mobile 
 
 The repository is currently in **Phase 1: standalone minimum viable application**.
 
-## Current checkpoint — P1-V5A
+## Current checkpoint — P1-V6
 
-Version: `0.11.1-phase1`
+Version: `0.12.0-phase1`
 
 P1-V1 established standalone collaboration persistence and tenant/workspace isolation. P1-V2 added LOCAL identity/session runtime. P1-V3 added workspace member discovery plus create/list channel and direct-message APIs. P1-V4 added the first standalone React web client.
 
@@ -23,7 +23,7 @@ P1-V5 activates durable messaging:
 
 P1-V5A hardens P1-V5 before commit by encrypting all stored message/revision bodies with application-level AES-256-GCM and physically removing plaintext body columns. It is encryption at rest, not E2EE.
 
-P1-V5/P1-V5A intentionally do not add WebSocket/EventSource delivery. Realtime fan-out remains P1-V6.
+P1-V6 adds authenticated WebSocket fan-out, reconnect recovery, unread-count reconciliation, realtime read-cursor propagation, incoming-message sound, and in-app notification toasts. The browser never places the bearer token in the WebSocket URL; authentication occurs in the first frame after upgrade. Realtime remains an acceleration layer over durable encrypted storage, so missed events are recovered from PostgreSQL after reconnect.
 
 ## Pure standalone mode
 
@@ -103,9 +103,10 @@ GET  /api/v1/conversations/:conversationId/messages?limit=50&before=<messageId>
 POST /api/v1/conversations/:conversationId/messages
 GET  /api/v1/conversations/:conversationId/read-cursor
 PUT  /api/v1/conversations/:conversationId/read-cursor
+GET  /api/v1/unread-counts
 ```
 
-The human send route accepts `body_text`, `client_message_id`, and an optional `reply_to_message_id`. Workspace and human sender are derived only from the verified session. SystemSender persistence is an internal trusted service boundary; P1-V5 does not expose a public SystemSender HTTP route.
+The human send route accepts `body_text`, `client_message_id`, and an optional `reply_to_message_id`. Workspace and human sender are derived only from the verified session. SystemSender persistence is an internal trusted service boundary. P1-V6 adds `/ws` as the realtime transport; the first client frame must authenticate with the existing AkshaConnect bearer session.
 
 ## Provider modes
 
@@ -152,8 +153,8 @@ Expected health payload includes:
   "status": "ok",
   "service": "akshaconnect-api",
   "phase": "1",
-  "checkpoint": "P1-V5A",
-  "version": "0.11.1-phase1"
+  "checkpoint": "P1-V6",
+  "version": "0.12.0-phase1"
 }
 ```
 
@@ -171,3 +172,4 @@ Read:
 - `docs/architecture/P1-V4-MINIMUM-WEB-UI.md`
 - `docs/architecture/P1-V5-DURABLE-MESSAGING.md`
 - `docs/architecture/P1-V5A-MESSAGE-ENCRYPTION-AT-REST.md`
+- `docs/architecture/P1-V6-REALTIME-MESSAGING.md`

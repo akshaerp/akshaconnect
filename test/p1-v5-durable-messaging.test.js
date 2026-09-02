@@ -281,7 +281,7 @@ test('P1-V5 verification preserves human idempotency and adds SystemSender event
   assert.match(migration, /system_sender_id[\s\S]*source_event_id/);
 });
 
-test('active web client sends/loads messages but has no realtime transport before P1-V6', () => {
+test('P1-V5 durable web foundations remain active under later realtime checkpoints', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'apps', 'web', 'src', 'App.jsx'), 'utf8');
   const api = fs.readFileSync(path.join(__dirname, '..', 'apps', 'web', 'src', 'api.js'), 'utf8');
   assert.match(app, /sendMessage/);
@@ -292,7 +292,6 @@ test('active web client sends/loads messages but has no realtime transport befor
   assert.match(app, /form\?\.requestSubmit/);
   assert.match(api, /\/messages/);
   assert.match(api, /\/read-cursor/);
-  assert.doesNotMatch(app + api, /WebSocket|EventSource|socket\.io/i);
 });
 
 test('repository SQL keeps channel/DM access scoped and read cursor monotonic', () => {

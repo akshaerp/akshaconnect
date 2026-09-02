@@ -86,8 +86,16 @@ function sameNullable(left, right) {
   return (left || null) === (right || null);
 }
 
-function createMessagingService(repository) {
+function createMessagingService(repository, { eventPublisher = null } = {}) {
   if (!repository) throw new TypeError('Messaging repository is required');
+
+  function publishRealtime(event) {
+    try {
+      eventPublisher?.publish?.(Object.freeze(event));
+    } catch {
+      // Durable persistence is authoritative; realtime fan-out is best effort.
+    }
+  }
 
   async function requireActiveActor(claims) {
     const actor = requireTrustedWorkspaceClaims(claims);
@@ -190,6 +198,12 @@ function createMessagingService(repository) {
         clientMessageId: message.clientMessageId,
         replyToMessageId: message.replyToMessageId,
       });
+      publishRealtime({
+        type: 'message.created',
+        workspace_id: actor.workspaceId,
+        conversation_id: allowed.conversationId,
+        message: created,
+      });
       return { created: true, message: created };
     } catch (error) {
       if (error?.code === '23505' && error?.constraint === 'uq_ac_message_client_id') {
@@ -256,7 +270,31 @@ function createMessagingService(repository) {
       workspaceMemberId: actor.workspaceMemberId,
       lastReadMessageId,
     });
+    if (cursor) {
+      publishRealtime({
+        type: 'read_cursor.updated',
+        workspace_id: actor.workspaceId,
+        workspace_member_id: actor.workspaceMemberId,
+        conversation_id: allowed.conversationId,
+        last_read_message_id: cursor.last_read_message_id,
+        read_at: cursor.read_at || null,
+      });
+    }
     return { read_cursor: cursor };
+  }
+
+  async function listUnreadCounts(claims) {
+    const { actor } = await requireActiveActor(claims);
+    const rows = await repository.listUnreadCounts({
+      workspaceId: actor.workspaceId,
+      workspaceMemberId: actor.workspaceMemberId,
+    });
+    return {
+      unread_counts: (rows || []).map((row) => ({
+        conversation_id: row.conversation_id,
+        unread_count: Number(row.unread_count || 0),
+      })),
+    };
   }
 
   async function publishTrustedSystemMessage(authority = {}, conversationId, input = {}) {
@@ -308,6 +346,12 @@ function createMessagingService(repository) {
         bodyText: message.bodyText,
         messageType: message.messageType,
       });
+      publishRealtime({
+        type: 'message.created',
+        workspace_id: workspaceId,
+        conversation_id: cleanConversationId,
+        message: created,
+      });
       return { created: true, message: created };
     } catch (error) {
       if (error?.code === '23505' && error?.constraint === 'uq_ac_message_system_source_event') {
@@ -339,6 +383,7 @@ function createMessagingService(repository) {
     sendHumanMessage,
     getReadCursor,
     advanceReadCursor,
+    listUnreadCounts,
     publishTrustedSystemMessage,
   });
 }

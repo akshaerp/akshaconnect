@@ -508,6 +508,130 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     }
   }
 
+
+  async function listUnreadCounts({ workspaceId, workspaceMemberId }) {
+    const result = await db.query(`
+      WITH accessible_conversations AS (
+        SELECT DISTINCT
+          conv.conversation_id
+        FROM ac_conversation conv
+        LEFT JOIN ac_channel ch
+          ON ch.workspace_id = conv.workspace_id
+         AND ch.conversation_id = conv.conversation_id
+         AND ch.status = 'ACTIVE'
+        LEFT JOIN ac_channel_member cm
+          ON cm.workspace_id = ch.workspace_id
+         AND cm.channel_id = ch.channel_id
+         AND cm.workspace_member_id = $2
+         AND cm.left_at IS NULL
+        LEFT JOIN ac_conversation_participant cp
+          ON cp.workspace_id = conv.workspace_id
+         AND cp.conversation_id = conv.conversation_id
+         AND cp.workspace_member_id = $2
+         AND cp.left_at IS NULL
+        WHERE conv.workspace_id = $1
+          AND conv.status = 'ACTIVE'
+          AND (
+            (
+              conv.conversation_type = 'CHANNEL'
+              AND ch.channel_id IS NOT NULL
+              AND (ch.visibility = 'PUBLIC' OR cm.workspace_member_id IS NOT NULL)
+            )
+            OR
+            (
+              conv.conversation_type IN ('DM', 'GROUP_DM')
+              AND cp.workspace_member_id IS NOT NULL
+            )
+          )
+      ), cursor_position AS (
+        SELECT
+          rc.conversation_id,
+          rc.last_read_message_id,
+          m.created_at AS last_read_created_at
+        FROM ac_read_cursor rc
+        LEFT JOIN ac_message m
+          ON m.workspace_id = rc.workspace_id
+         AND m.conversation_id = rc.conversation_id
+         AND m.message_id = rc.last_read_message_id
+        WHERE rc.workspace_id = $1
+          AND rc.workspace_member_id = $2
+      )
+      SELECT
+        ac.conversation_id,
+        COUNT(m.message_id) FILTER (
+          WHERE m.message_id IS NOT NULL
+            AND (m.sender_type <> 'HUMAN' OR m.sender_member_id IS DISTINCT FROM $2::uuid)
+            AND (
+              cp.last_read_message_id IS NULL
+              OR (m.created_at, m.message_id) > (cp.last_read_created_at, cp.last_read_message_id)
+            )
+        )::integer AS unread_count
+      FROM accessible_conversations ac
+      LEFT JOIN cursor_position cp
+        ON cp.conversation_id = ac.conversation_id
+      LEFT JOIN ac_message m
+        ON m.workspace_id = $1
+       AND m.conversation_id = ac.conversation_id
+      GROUP BY ac.conversation_id
+      ORDER BY ac.conversation_id
+    `, [workspaceId, workspaceMemberId]);
+
+    return result.rows || [];
+  }
+
+  async function listConversationRecipientMemberIds({ workspaceId, conversationId }) {
+    const result = await db.query(`
+      SELECT DISTINCT eligible.workspace_member_id
+      FROM (
+        SELECT wm.workspace_member_id
+        FROM ac_conversation conv
+        JOIN ac_channel ch
+          ON ch.workspace_id = conv.workspace_id
+         AND ch.conversation_id = conv.conversation_id
+         AND ch.status = 'ACTIVE'
+        JOIN ac_workspace_member wm
+          ON wm.workspace_id = conv.workspace_id
+         AND wm.status = 'ACTIVE'
+        JOIN ac_identity i
+          ON i.identity_id = wm.identity_id
+         AND i.status = 'ACTIVE'
+        LEFT JOIN ac_channel_member cm
+          ON cm.workspace_id = ch.workspace_id
+         AND cm.channel_id = ch.channel_id
+         AND cm.workspace_member_id = wm.workspace_member_id
+         AND cm.left_at IS NULL
+        WHERE conv.workspace_id = $1
+          AND conv.conversation_id = $2
+          AND conv.status = 'ACTIVE'
+          AND conv.conversation_type = 'CHANNEL'
+          AND (ch.visibility = 'PUBLIC' OR cm.workspace_member_id IS NOT NULL)
+
+        UNION
+
+        SELECT cp.workspace_member_id
+        FROM ac_conversation conv
+        JOIN ac_conversation_participant cp
+          ON cp.workspace_id = conv.workspace_id
+         AND cp.conversation_id = conv.conversation_id
+         AND cp.left_at IS NULL
+        JOIN ac_workspace_member wm
+          ON wm.workspace_id = cp.workspace_id
+         AND wm.workspace_member_id = cp.workspace_member_id
+         AND wm.status = 'ACTIVE'
+        JOIN ac_identity i
+          ON i.identity_id = wm.identity_id
+         AND i.status = 'ACTIVE'
+        WHERE conv.workspace_id = $1
+          AND conv.conversation_id = $2
+          AND conv.status = 'ACTIVE'
+          AND conv.conversation_type IN ('DM', 'GROUP_DM')
+      ) eligible
+      ORDER BY eligible.workspace_member_id
+    `, [workspaceId, conversationId]);
+
+    return (result.rows || []).map((row) => row.workspace_member_id);
+  }
+
   return Object.freeze({
     getActiveWorkspaceMember,
     getConversationAccess,
@@ -521,6 +645,8 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     getActiveSystemSender,
     findSystemMessageBySourceEvent,
     createSystemMessage,
+    listUnreadCounts,
+    listConversationRecipientMemberIds,
   });
 }
 

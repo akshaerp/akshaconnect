@@ -1,6 +1,8 @@
 # AkshaConnect Web
 
-P1-V5 activates the P1-V4 conversation shell as a durable HTTP messaging client.
+P1-V6 upgrades the durable P1-V5 client with authenticated realtime delivery, unread counts, reconnect reconciliation, and incoming-message notifications.
+
+## Local development
 
 Run the API on port `4100`, then:
 
@@ -10,6 +12,6 @@ npm run start:web
 
 Open `http://127.0.0.1:4173`.
 
-The web client supports LOCAL login/session restore, channel and DM discovery/creation, durable history, message send, older-message pagination, read-cursor advancement, manual refresh, and logout.
+The Vite development server proxies `/api`, `/health`, `/ready`, and WebSocket `/ws` traffic to the standalone API. The browser sends the AkshaConnect bearer session only in the first WebSocket authentication frame; it is never placed in the WebSocket URL.
 
-P1-V5 deliberately uses HTTP only. Cross-browser realtime delivery is P1-V6.
+Realtime events accelerate the UI but do not replace durable history. On reconnect the client reloads navigation/unread state and refreshes the selected conversation from PostgreSQL-backed APIs.

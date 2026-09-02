@@ -130,3 +130,7 @@ export function markRead(token, conversationId, lastReadMessageId) {
     body: { last_read_message_id: lastReadMessageId },
   });
 }
+
+export function listUnreadCounts(token) {
+  return request('/api/v1/unread-counts', { token });
+}

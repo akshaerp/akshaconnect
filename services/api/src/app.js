@@ -2,7 +2,7 @@
 
 const { BoundaryError, boundaryError } = require('./core/boundaryError');
 
-const VERSION = '0.11.1-phase1';
+const VERSION = '0.12.0-phase1';
 const SERVICE_NAME = process.env.AKSHACONNECT_SERVICE_NAME || 'akshaconnect-api';
 const MAX_JSON_BYTES = 32 * 1024;
 
@@ -70,7 +70,7 @@ function createRequestHandler({
           status: 'ok',
           service: SERVICE_NAME,
           phase: '1',
-          checkpoint: 'P1-V5A',
+          checkpoint: 'P1-V6',
           version: VERSION,
           timestamp: new Date().toISOString(),
         });
@@ -177,6 +177,30 @@ function createRequestHandler({
           writeJson(res, directMessage.created ? 201 : 200, {
             direct_message: directMessage,
           });
+          return;
+        }
+      }
+
+      if (url.pathname === '/api/v1/unread-counts') {
+        if (!localIdentityService) {
+          throw boundaryError(
+            'LOCAL_IDENTITY_NOT_CONFIGURED',
+            'LOCAL identity service is not configured',
+            503
+          );
+        }
+        if (!messagingService) {
+          throw boundaryError(
+            'MESSAGING_NOT_CONFIGURED',
+            'Messaging service is not configured',
+            503
+          );
+        }
+
+        const claims = await localIdentityService.verifyAccessToken(bearerToken(req));
+        if (req.method === 'GET') {
+          const result = await messagingService.listUnreadCounts(claims);
+          writeJson(res, 200, result);
           return;
         }
       }

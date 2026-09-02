@@ -176,3 +176,84 @@
     padding: 7px 8px;
   }
 }
+
+.unread-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  background: #5a4bc9;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.nav-item:has(.unread-badge) .nav-label {
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.workspace-status-dot.realtime-connecting,
+.workspace-status-dot.realtime-reconnecting {
+  background: #e7a73d;
+  box-shadow: 0 0 0 3px rgba(231, 167, 61, 0.14);
+}
+
+.workspace-status-dot.realtime-disconnected {
+  background: #a0a3b1;
+  box-shadow: 0 0 0 3px rgba(160, 163, 177, 0.14);
+}
+
+.workspace-status-dot.realtime-connected {
+  background: #36a66f;
+  box-shadow: 0 0 0 3px rgba(54, 166, 111, 0.14);
+}
+
+.message-toast {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 1000;
+  width: min(340px, calc(100vw - 32px));
+  padding: 13px 15px;
+  border: 1px solid #dcddea;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 16px 42px rgba(34, 38, 64, 0.18);
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.message-toast strong {
+  color: #292c3d;
+  font-size: 12px;
+}
+
+.message-toast span {
+  color: #6457b6;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.message-toast small {
+  overflow: hidden;
+  color: #626577;
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .message-toast {
+    right: 16px;
+    bottom: 16px;
+  }
+}
