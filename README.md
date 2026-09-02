@@ -4,23 +4,26 @@ AkshaConnect is an independent enterprise collaboration product with web/mobile 
 
 The repository is currently in **Phase 1: standalone minimum viable application**.
 
-## Current checkpoint — P1-V4
+## Current checkpoint — P1-V5A
 
-Version: `0.10.0-phase1`
+Version: `0.11.1-phase1`
 
-P1-V1 established standalone collaboration persistence and tenant/workspace isolation. P1-V2 added LOCAL identity/session runtime. P1-V3 added workspace member discovery plus create/list channel and direct-message APIs.
+P1-V1 established standalone collaboration persistence and tenant/workspace isolation. P1-V2 added LOCAL identity/session runtime. P1-V3 added workspace member discovery plus create/list channel and direct-message APIs. P1-V4 added the first standalone React web client.
 
-P1-V4 adds the first standalone React web client:
+P1-V5 activates durable messaging:
 
-- LOCAL workspace login and session restore
-- channel list and channel creation
-- direct-message list and member picker
-- start/reuse canonical direct messages
-- selected conversation shell
-- disabled composer shell that makes the P1-V5 messaging boundary explicit
-- logout
+- authenticated human message send with sender derived from the verified session
+- durable message history from `ac_message`
+- cursor-based older-message pagination
+- client-message idempotency with conflict detection
+- same-conversation reply protection
+- monotonic read-cursor advancement
+- trusted internal SystemSender persistence with source-event idempotency
+- active web composer and manual cross-browser Refresh
 
-P1-V4 does not add message send/history. Durable messaging remains P1-V5.
+P1-V5A hardens P1-V5 before commit by encrypting all stored message/revision bodies with application-level AES-256-GCM and physically removing plaintext body columns. It is encryption at rest, not E2EE.
+
+P1-V5/P1-V5A intentionally do not add WebSocket/EventSource delivery. Realtime fan-out remains P1-V6.
 
 ## Pure standalone mode
 
@@ -39,6 +42,8 @@ Set these values locally; do not commit real credentials:
 AKSHACONNECT_DATABASE_URL=postgresql://<user>:<password>@127.0.0.1:5432/akshaconnect
 AKSHACONNECT_DATABASE_EXPECTED_NAME=akshaconnect
 AKSHACONNECT_LOCAL_SESSION_TTL_SECONDS=28800
+AKSHACONNECT_MESSAGE_ENCRYPTION_KEY_ID=<non-secret-key-id>
+AKSHACONNECT_MESSAGE_ENCRYPTION_KEY_B64=<base64-encoded-32-byte-secret>
 ```
 
 ## Local development
@@ -89,6 +94,19 @@ POST /api/v1/direct-messages
 
 Workspace scope is always taken from the verified session. Caller-supplied workspace IDs are not authoritative.
 
+## Messaging endpoints
+
+All routes require the AkshaConnect bearer session:
+
+```text
+GET  /api/v1/conversations/:conversationId/messages?limit=50&before=<messageId>
+POST /api/v1/conversations/:conversationId/messages
+GET  /api/v1/conversations/:conversationId/read-cursor
+PUT  /api/v1/conversations/:conversationId/read-cursor
+```
+
+The human send route accepts `body_text`, `client_message_id`, and an optional `reply_to_message_id`. Workspace and human sender are derived only from the verified session. SystemSender persistence is an internal trusted service boundary; P1-V5 does not expose a public SystemSender HTTP route.
+
 ## Provider modes
 
 Pure standalone:
@@ -134,8 +152,8 @@ Expected health payload includes:
   "status": "ok",
   "service": "akshaconnect-api",
   "phase": "1",
-  "checkpoint": "P1-V4",
-  "version": "0.10.0-phase1"
+  "checkpoint": "P1-V5A",
+  "version": "0.11.1-phase1"
 }
 ```
 
@@ -151,3 +169,5 @@ Read:
 - `docs/architecture/P1-V2-LOCAL-IDENTITY-SESSION.md`
 - `docs/architecture/P1-V3-CHANNEL-DIRECT-MESSAGE-API.md`
 - `docs/architecture/P1-V4-MINIMUM-WEB-UI.md`
+- `docs/architecture/P1-V5-DURABLE-MESSAGING.md`
+- `docs/architecture/P1-V5A-MESSAGE-ENCRYPTION-AT-REST.md`

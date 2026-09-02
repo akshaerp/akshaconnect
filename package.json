@@ -1,6 +1,6 @@
 {
   "name": "@akshaerp/akshaconnect",
-  "version": "0.10.0-phase1",
+  "version": "0.11.1-phase1",
   "private": true,
   "description": "AkshaConnect standalone product monorepo",
   "engines": {
@@ -17,6 +17,7 @@
     "build:web": "npm --workspace @akshaerp/akshaconnect-web run build",
     "lint": "node scripts/check-js.js",
     "test": "node --test",
-    "verify": "npm run lint && npm test && npm run build:web"
+    "verify": "npm run lint && npm test && npm run build:web",
+    "migrate:p1-v5a:encrypt-messages": "node scripts/p1-v5a-encrypt-existing-messages.js"
   }
 }

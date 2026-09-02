@@ -7,6 +7,9 @@ const { createLocalIdentityRepository } = require('./auth/localIdentityRepositor
 const { createLocalIdentityService } = require('./auth/localIdentityService');
 const { createCollaborationRepository } = require('./collaboration/collaborationRepository');
 const { createCollaborationService } = require('./collaboration/collaborationService');
+const { createMessagingRepository } = require('./messaging/messagingRepository');
+const { createMessagingService } = require('./messaging/messagingService');
+const { createMessageCryptoFromEnv } = require('./messaging/messageCrypto');
 
 const port = Number(process.env.PORT || 4100);
 
@@ -18,6 +21,7 @@ async function start() {
   let pool = null;
   let localIdentityService = null;
   let collaborationService = null;
+  let messagingService = null;
 
   if (identityProvider === 'LOCAL') {
     pool = createPostgresPool(process.env);
@@ -33,11 +37,16 @@ async function start() {
 
     const collaborationRepository = createCollaborationRepository(pool);
     collaborationService = createCollaborationService(collaborationRepository);
+
+    const messageCrypto = createMessageCryptoFromEnv(process.env);
+    const messagingRepository = createMessagingRepository(pool, { messageCrypto });
+    messagingService = createMessagingService(messagingRepository);
   }
 
   const server = http.createServer(createRequestHandler({
     localIdentityService,
     collaborationService,
+    messagingService,
   }));
 
   await new Promise((resolve) => server.listen(port, '0.0.0.0', resolve));

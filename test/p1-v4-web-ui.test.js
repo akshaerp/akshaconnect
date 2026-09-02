@@ -28,16 +28,18 @@ test('P1-V4 promotes apps/web into the root workspace with start/build scripts',
   assert.match(pkg.scripts.verify, /build:web/);
 });
 
-test('standalone web package pins React and Vite dependencies', () => {
+test('standalone web package keeps the Phase 1 client dependencies pinned', () => {
+  const rootPkg = json('package.json');
   const pkg = json('apps/web/package.json');
   assert.equal(pkg.name, '@akshaerp/akshaconnect-web');
-  assert.equal(pkg.version, '0.10.0-phase1');
+  assert.equal(pkg.version, rootPkg.version);
+  assert.match(pkg.version, /^0\.\d+\.\d+-phase1$/);
   assert.equal(pkg.dependencies.react, '18.3.1');
   assert.equal(pkg.dependencies['react-dom'], '18.3.1');
   assert.equal(pkg.devDependencies.vite, '6.4.3');
 });
 
-test('web API client consumes only P1-V2/P1-V3 AkshaConnect endpoints', () => {
+test('web API client retains the P1-V2/P1-V3 AkshaConnect endpoints', () => {
   const source = read('apps/web/src/api.js');
   for (const endpoint of [
     '/api/v1/auth/local/login',
@@ -49,7 +51,6 @@ test('web API client consumes only P1-V2/P1-V3 AkshaConnect endpoints', () => {
   ]) {
     assert.ok(source.includes(endpoint), `missing ${endpoint}`);
   }
-  assert.doesNotMatch(source, /\/api\/v1\/messages/i);
 });
 
 test('browser session token uses sessionStorage and never persists a password', () => {
@@ -60,22 +61,23 @@ test('browser session token uses sessionStorage and never persists a password', 
   assert.doesNotMatch(source, /password/i);
 });
 
-test('minimum UI exposes login, channels, DMs, conversation shell and disabled composer', () => {
+test('minimum UI foundations remain present as later checkpoints add messaging', () => {
   const source = read('apps/web/src/App.jsx');
   assert.match(source, /Sign in to your team/);
   assert.match(source, /Channels/);
   assert.match(source, /Direct messages/);
-  assert.match(source, /ConversationPlaceholder/);
+  assert.match(source, /ConversationView/);
   assert.match(source, /aria-label="Message composer"/);
-  assert.match(source, /<textarea\s+disabled/);
-  assert.match(source, /Messaging activates in P1-V5/);
+  assert.match(source, /<textarea/);
 });
 
-test('web client does not implement message-send behavior before P1-V5', () => {
-  const app = read('apps/web/src/App.jsx');
-  const api = read('apps/web/src/api.js');
-  assert.doesNotMatch(app, /sendMessage|createMessage|postMessage/);
-  assert.doesNotMatch(api, /sendMessage|createMessage|postMessage|\/messages/);
+test('P1-V4 navigation and session foundation remains compatible with later checkpoints', () => {
+  const source = read('apps/web/src/App.jsx');
+  assert.match(source, /handleLogin/);
+  assert.match(source, /handleLogout/);
+  assert.match(source, /ChannelCreatePanel/);
+  assert.match(source, /DirectMessagePicker/);
+  assert.match(source, /ConversationView/);
 });
 
 test('Vite development server uses a same-origin proxy to the local API', () => {

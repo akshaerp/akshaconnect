@@ -1,26 +1,15 @@
 # AkshaConnect Web
 
-P1-V4 turns the reserved `apps/web` directory into the first standalone React client.
+P1-V5 activates the P1-V4 conversation shell as a durable HTTP messaging client.
 
-## Local development
-
-Start the API in one terminal on port `4100`, then start the web client in another terminal:
+Run the API on port `4100`, then:
 
 ```text
-npm run start:api
 npm run start:web
 ```
 
-Open:
+Open `http://127.0.0.1:4173`.
 
-```text
-http://127.0.0.1:4173
-```
+The web client supports LOCAL login/session restore, channel and DM discovery/creation, durable history, message send, older-message pagination, read-cursor advancement, manual refresh, and logout.
 
-The Vite development server proxies `/api`, `/health`, and `/ready` to the standalone AkshaConnect API, so no development CORS exception is required.
-
-## P1-V4 scope
-
-The client supports LOCAL login/session restore, channel listing/creation, direct-message listing/creation, workspace member lookup, conversation selection, and logout.
-
-The conversation view and composer are intentionally non-sending shells. Durable message send/history is P1-V5.
+P1-V5 deliberately uses HTTP only. Cross-browser realtime delivery is P1-V6.

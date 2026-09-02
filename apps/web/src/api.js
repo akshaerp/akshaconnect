@@ -98,3 +98,35 @@ export function startDirectMessage(token, targetWorkspaceMemberId) {
     },
   });
 }
+
+
+export function listMessages(token, conversationId, { limit = 50, before = '' } = {}) {
+  const params = new URLSearchParams();
+  params.set('limit', String(limit));
+  if (before) params.set('before', before);
+  return request(`/api/v1/conversations/${encodeURIComponent(conversationId)}/messages?${params.toString()}`, { token });
+}
+
+export function sendMessage(token, conversationId, { bodyText, clientMessageId, replyToMessageId = null }) {
+  return request(`/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`, {
+    token,
+    method: 'POST',
+    body: {
+      body_text: bodyText,
+      client_message_id: clientMessageId,
+      reply_to_message_id: replyToMessageId,
+    },
+  });
+}
+
+export function getReadCursor(token, conversationId) {
+  return request(`/api/v1/conversations/${encodeURIComponent(conversationId)}/read-cursor`, { token });
+}
+
+export function markRead(token, conversationId, lastReadMessageId) {
+  return request(`/api/v1/conversations/${encodeURIComponent(conversationId)}/read-cursor`, {
+    token,
+    method: 'PUT',
+    body: { last_read_message_id: lastReadMessageId },
+  });
+}

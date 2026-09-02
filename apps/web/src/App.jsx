@@ -6,8 +6,11 @@ import {
   listChannels,
   listDirectMessages,
   listMembers,
+  listMessages,
+  markRead,
   loginLocal,
   logout,
+  sendMessage,
   startDirectMessage,
 } from './api.js';
 import {
@@ -116,7 +119,7 @@ function LoginScreen({ onLogin }) {
           </button>
         </form>
 
-        <p className="login-footnote">P1-V4 minimum functional web client</p>
+        <p className="login-footnote">P1-V5 durable messaging web client</p>
       </section>
     </main>
   );
@@ -279,7 +282,100 @@ function DirectMessagePicker({ token, currentMemberId, onCancel, onStart }) {
   );
 }
 
-function ConversationPlaceholder({ selected }) {
+function makeClientMessageId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function formatMessageTime(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return parsed.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function ConversationView({ token, session, selected, onApiFailure }) {
+  const [messages, setMessages] = useState([]);
+  const [page, setPage] = useState({ has_more: false, next_before_message_id: null });
+  const [loading, setLoading] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState('');
+
+  const load = useCallback(async ({ before = '', appendOlder = false, manual = false } = {}) => {
+    if (!selected?.id || !token) return;
+    if (appendOlder) setLoadingOlder(true);
+    else if (manual) setRefreshing(true);
+    else setLoading(true);
+    setError('');
+
+    try {
+      const result = await listMessages(token, selected.id, { limit: 50, before });
+      const nextMessages = result.messages || [];
+      setMessages((current) => appendOlder ? [...nextMessages, ...current] : nextMessages);
+      setPage(result.page || { has_more: false, next_before_message_id: null });
+
+      const latest = nextMessages[nextMessages.length - 1];
+      if (!appendOlder && latest?.message_id) {
+        markRead(token, selected.id, latest.message_id).catch((requestError) => {
+          onApiFailure(requestError);
+        });
+      }
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(requestError.message || 'Could not load messages');
+      }
+    } finally {
+      setLoading(false);
+      setLoadingOlder(false);
+      setRefreshing(false);
+    }
+  }, [selected?.id, token, onApiFailure]);
+
+  useEffect(() => {
+    setMessages([]);
+    setPage({ has_more: false, next_before_message_id: null });
+    setDraft('');
+    if (selected?.id) load();
+  }, [selected?.id, load]);
+
+  async function submit(event) {
+    event.preventDefault();
+    const bodyText = draft.trim();
+    if (!bodyText || sending || !selected?.id) return;
+    setSending(true);
+    setError('');
+
+    try {
+      const result = await sendMessage(token, selected.id, {
+        bodyText,
+        clientMessageId: makeClientMessageId(),
+      });
+      const message = result.message;
+      setMessages((current) => current.some((item) => item.message_id === message.message_id)
+        ? current
+        : [...current, message]);
+      setDraft('');
+      if (message?.message_id) {
+        markRead(token, selected.id, message.message_id).catch((requestError) => {
+          onApiFailure(requestError);
+        });
+      }
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(requestError.message || 'Could not send message');
+      }
+    } finally {
+      setSending(false);
+    }
+  }
+
   if (!selected) {
     return (
       <div className="conversation-empty">
@@ -300,33 +396,92 @@ function ConversationPlaceholder({ selected }) {
           </div>
           <p>{selected.subtitle}</p>
         </div>
-        <span className="phase-badge">P1-V4</span>
+        <div className="conversation-header-actions">
+          <button
+            type="button"
+            className="message-refresh-button"
+            disabled={refreshing}
+            onClick={() => load({ manual: true })}
+          >
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <span className="phase-badge">P1-V5</span>
+        </div>
       </header>
 
-      <div className="conversation-body">
-        <div className="welcome-message">
-          <div className="welcome-icon">{selected.kind === 'channel' ? '#' : initials(selected.title)}</div>
-          <h3>{selected.kind === 'channel' ? `Welcome to #${selected.title}` : `Direct message with ${selected.title}`}</h3>
-          <p>
-            This conversation shell is connected to the real AkshaConnect workspace APIs.
-            Durable message history is enabled in the next checkpoint.
-          </p>
+      <div className="conversation-body message-history" aria-live="polite">
+        {page.has_more ? (
+          <button
+            type="button"
+            className="load-older-button"
+            disabled={loadingOlder}
+            onClick={() => load({
+              before: page.next_before_message_id,
+              appendOlder: true,
+            })}
+          >
+            {loadingOlder ? 'Loading…' : 'Load older messages'}
+          </button>
+        ) : null}
+
+        {loading ? <div className="message-loading">Loading messages…</div> : null}
+
+        {!loading && messages.length === 0 ? (
+          <div className="welcome-message message-welcome">
+            <div className="welcome-icon">{selected.kind === 'channel' ? '#' : initials(selected.title)}</div>
+            <h3>{selected.kind === 'channel' ? `Welcome to #${selected.title}` : `Direct message with ${selected.title}`}</h3>
+            <p>No messages yet. Start the conversation below.</p>
+          </div>
+        ) : null}
+
+        <div className="message-list">
+          {messages.map((message) => {
+            const own = message.sender_type === 'HUMAN' && message.sender_member_id === session.workspace_member_id;
+            return (
+              <article className={`message-row ${own ? 'own-message' : ''}`} key={message.message_id}>
+                <span className={`avatar message-avatar ${message.sender_type === 'SYSTEM' ? 'system-avatar' : ''}`}>
+                  {message.sender_type === 'SYSTEM' ? 'S' : initials(message.sender_display_name)}
+                </span>
+                <div className="message-copy">
+                  <div className="message-meta">
+                    <strong>{message.sender_display_name || (message.sender_type === 'SYSTEM' ? 'System' : 'Unknown member')}</strong>
+                    <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                    {message.sender_type === 'SYSTEM' ? <span className="system-message-badge">SYSTEM</span> : null}
+                  </div>
+                  <div className="message-text">{message.body_text || ''}</div>
+                </div>
+              </article>
+            );
+          })}
         </div>
       </div>
 
       <footer className="composer-shell">
-        <div className="composer-box composer-disabled" title="Durable messaging becomes active in P1-V5">
+        {error ? <div className="composer-error" role="alert">{error}</div> : null}
+        <form className="composer-box active-composer" onSubmit={submit}>
           <textarea
-            disabled
             rows={2}
             aria-label="Message composer"
-            placeholder={`Message ${selected.kind === 'channel' ? `#${selected.title}` : selected.title} — available in P1-V5`}
+            value={draft}
+            maxLength={8000}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                if (!sending && draft.trim()) {
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }
+            }}
+            placeholder={`Message ${selected.kind === 'channel' ? `#${selected.title}` : selected.title}`}
           />
           <div className="composer-actions">
-            <span>Messaging activates in P1-V5</span>
-            <button type="button" disabled>Send</button>
+            <span>Enter to send · Shift+Enter for new line · durable history</span>
+            <button type="submit" disabled={sending || !draft.trim()}>
+              {sending ? 'Sending…' : 'Send'}
+            </button>
           </div>
-        </div>
+        </form>
       </footer>
     </>
   );
@@ -626,7 +781,7 @@ export default function App() {
 
       <main className="conversation-panel">
         {globalError ? <div className="global-banner in-app-banner">{globalError}</div> : null}
-        <ConversationPlaceholder selected={selected} />
+        <ConversationView token={token} session={session} selected={selected} onApiFailure={handleApiFailure} />
       </main>
     </div>
   );
