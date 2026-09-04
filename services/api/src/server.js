@@ -1,3 +1,4 @@
+
 'use strict';
 
 const http = require('node:http');
@@ -10,6 +11,10 @@ const { createCollaborationService } = require('./collaboration/collaborationSer
 const { createMessagingRepository } = require('./messaging/messagingRepository');
 const { createMessagingService } = require('./messaging/messagingService');
 const { createMessageCryptoFromEnv } = require('./messaging/messageCrypto');
+const { createAttachmentCryptoFromEnv } = require('./attachments/attachmentCrypto');
+const { createAttachmentRepository } = require('./attachments/attachmentRepository');
+const { createAttachmentService } = require('./attachments/attachmentService');
+const { createLocalAttachmentStorage } = require('./attachments/attachmentStorage');
 const { createRealtimeEventBus } = require('./realtime/realtimeEventBus');
 const { attachRealtimeGateway } = require('./realtime/realtimeGateway');
 
@@ -25,6 +30,7 @@ async function start() {
   let collaborationService = null;
   let messagingRepository = null;
   let messagingService = null;
+  let attachmentService = null;
   let realtimeGateway = null;
   const realtimeEventBus = createRealtimeEventBus();
 
@@ -48,12 +54,26 @@ async function start() {
     messagingService = createMessagingService(messagingRepository, {
       eventPublisher: realtimeEventBus,
     });
+
+    const attachmentCrypto = createAttachmentCryptoFromEnv(process.env);
+    const attachmentRepository = createAttachmentRepository(pool, { messageCrypto });
+    const attachmentStorage = createLocalAttachmentStorage({
+      baseDir: process.env.AKSHACONNECT_ATTACHMENT_LOCAL_DIR,
+    });
+    attachmentService = createAttachmentService({
+      messagingRepository,
+      attachmentRepository,
+      attachmentCrypto,
+      storage: attachmentStorage,
+      eventPublisher: realtimeEventBus,
+    });
   }
 
   const server = http.createServer(createRequestHandler({
     localIdentityService,
     collaborationService,
     messagingService,
+    attachmentService,
   }));
 
   if (localIdentityService && messagingRepository) {

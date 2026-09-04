@@ -13,6 +13,8 @@ import {
   logout,
   sendMessage,
   startDirectMessage,
+  uploadAttachment,
+  downloadAttachment,
 } from './api.js';
 import {
   clearStoredSession,
@@ -131,10 +133,13 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-function SectionHeader({ title, actionLabel, onAction }) {
+function SectionHeader({ title, actionLabel, onAction, unreadCount = 0 }) {
   return (
     <div className="section-header">
-      <span>{title}</span>
+      <span className="section-header-title">
+        {title}
+        {unreadCount > 0 ? <span className="section-unread-total">{Math.min(99, unreadCount)}</span> : null}
+      </span>
       <button className="icon-button" type="button" onClick={onAction} aria-label={actionLabel} title={actionLabel}>
         +
       </button>
@@ -296,12 +301,85 @@ function makeClientMessageId() {
 function formatMessageTime(value) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return '';
-  return parsed.toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
+  return parsed.toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function messageDateKey(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return `${parsed.getFullYear()}-${parsed.getMonth()}-${parsed.getDate()}`;
+}
+
+function formatMessageDate(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const key = messageDateKey(value);
+  if (key === messageDateKey(today)) return 'Today';
+  if (key === messageDateKey(yesterday)) return 'Yesterday';
+  return parsed.toLocaleDateString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: parsed.getFullYear() === today.getFullYear() ? undefined : 'numeric',
+  });
+}
+
+function sameMessageGroup(previous, current) {
+  if (!previous || !current) return false;
+  if (previous.sender_type !== current.sender_type) return false;
+  if (previous.sender_member_id !== current.sender_member_id) return false;
+  if (previous.system_sender_id !== current.system_sender_id) return false;
+  if (messageDateKey(previous.created_at) !== messageDateKey(current.created_at)) return false;
+  const previousTime = Date.parse(previous.created_at);
+  const currentTime = Date.parse(current.created_at);
+  return Number.isFinite(previousTime)
+    && Number.isFinite(currentTime)
+    && currentTime >= previousTime
+    && currentTime - previousTime <= 5 * 60 * 1000;
+}
+
+function connectionLabel(status) {
+  if (status === 'connected') return 'Connected';
+  if (status === 'connecting') return 'Connecting…';
+  if (status === 'reconnecting') return 'Reconnecting…';
+  return 'Offline';
+}
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_PENDING_ATTACHMENTS = 4;
+const ACCEPTED_ATTACHMENT_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+  'text/plain',
+  'text/csv',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
+
+function formatFileSize(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function attachmentIcon(contentType = '') {
+  if (contentType.startsWith('image/')) return 'IMG';
+  if (contentType === 'application/pdf') return 'PDF';
+  if (contentType.includes('wordprocessingml')) return 'DOC';
+  if (contentType.includes('spreadsheetml')) return 'XLS';
+  if (contentType.includes('presentationml')) return 'PPT';
+  return 'FILE';
 }
 
 function ConversationView({
@@ -311,7 +389,10 @@ function ConversationView({
   onApiFailure,
   realtimeMessage,
   reconnectEpoch,
+  realtimeStatus,
   onReadConversation,
+  onViewportState,
+  onOpenSidebar,
 }) {
   const [messages, setMessages] = useState([]);
   const [page, setPage] = useState({ has_more: false, next_before_message_id: null });
@@ -321,8 +402,56 @@ function ConversationView({
   const [sending, setSending] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState('');
+  const [unreadDividerMessageId, setUnreadDividerMessageId] = useState(null);
+  const fileInputRef = useRef(null);
+  const [showNewMessageJump, setShowNewMessageJump] = useState(false);
+  const historyRef = useRef(null);
+  const bottomRef = useRef(null);
+  const nearBottomRef = useRef(true);
+  const lastMarkedReadMessageIdRef = useRef(null);
 
-  const load = useCallback(async ({ before = '', appendOlder = false, manual = false } = {}) => {
+  const reportViewportState = useCallback((atBottom) => {
+    if (selected?.id) onViewportState?.(selected.id, Boolean(atBottom));
+  }, [selected?.id, onViewportState]);
+
+  const markMessageRead = useCallback((messageId) => {
+    if (!messageId || !selected?.id || !token) return;
+    if (lastMarkedReadMessageIdRef.current === messageId) return;
+    lastMarkedReadMessageIdRef.current = messageId;
+    markRead(token, selected.id, messageId)
+      .then(() => onReadConversation?.(selected.id))
+      .catch((requestError) => {
+        if (lastMarkedReadMessageIdRef.current === messageId) {
+          lastMarkedReadMessageIdRef.current = null;
+        }
+        onApiFailure(requestError);
+      });
+  }, [token, selected?.id, onApiFailure, onReadConversation]);
+
+  const scrollToBottom = useCallback((behavior = 'smooth') => {
+    bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
+    nearBottomRef.current = true;
+    reportViewportState(true);
+    setShowNewMessageJump(false);
+  }, [reportViewportState]);
+
+  const findUnreadDivider = useCallback((rows, unreadCount) => {
+    let remaining = Number(unreadCount || 0);
+    if (remaining <= 0) return null;
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      const item = rows[index];
+      const own = item.sender_type === 'HUMAN'
+        && item.sender_member_id === session.workspace_member_id;
+      if (own) continue;
+      remaining -= 1;
+      if (remaining <= 0) return item.message_id;
+    }
+    return rows[0]?.message_id || null;
+  }, [session.workspace_member_id]);
+
+  const load = useCallback(async ({ before = '', appendOlder = false, manual = false, initialUnreadCount = null } = {}) => {
     if (!selected?.id || !token) return;
     if (appendOlder) setLoadingOlder(true);
     else if (manual) setRefreshing(true);
@@ -335,13 +464,28 @@ function ConversationView({
       setMessages((current) => appendOlder ? [...nextMessages, ...current] : nextMessages);
       setPage(result.page || { has_more: false, next_before_message_id: null });
 
+      if (!appendOlder) {
+        const dividerId = initialUnreadCount === null
+          ? null
+          : findUnreadDivider(nextMessages, initialUnreadCount);
+        if (initialUnreadCount !== null) setUnreadDividerMessageId(dividerId);
+        window.requestAnimationFrame(() => {
+          if (dividerId && historyRef.current) {
+            const target = historyRef.current.querySelector(`[data-message-id="${dividerId}"]`);
+            if (target) {
+              target.scrollIntoView({ block: 'center' });
+              nearBottomRef.current = false;
+              reportViewportState(false);
+              return;
+            }
+          }
+          scrollToBottom('auto');
+        });
+      }
+
       const latest = nextMessages[nextMessages.length - 1];
       if (!appendOlder && latest?.message_id) {
-        markRead(token, selected.id, latest.message_id)
-          .then(() => onReadConversation?.(selected.id))
-          .catch((requestError) => {
-            onApiFailure(requestError);
-          });
+        markMessageRead(latest.message_id);
       }
     } catch (requestError) {
       if (!onApiFailure(requestError)) {
@@ -352,14 +496,22 @@ function ConversationView({
       setLoadingOlder(false);
       setRefreshing(false);
     }
-  }, [selected?.id, token, onApiFailure, onReadConversation]);
+  }, [selected?.id, token, findUnreadDivider, markMessageRead, onApiFailure, reportViewportState, scrollToBottom]);
 
   useEffect(() => {
     setMessages([]);
     setPage({ has_more: false, next_before_message_id: null });
     setDraft('');
-    if (selected?.id) load();
-  }, [selected?.id, load]);
+    setPendingFiles([]);
+    setUnreadDividerMessageId(null);
+    setShowNewMessageJump(false);
+    lastMarkedReadMessageIdRef.current = null;
+    nearBottomRef.current = true;
+    reportViewportState(true);
+    if (selected?.id) {
+      load({ initialUnreadCount: Number(selected?.unread_at_open || 0) });
+    }
+  }, [selected?.id, selected?.unread_at_open, load, reportViewportState]);
 
   useEffect(() => {
     if (!selected?.id || reconnectEpoch <= 0) return;
@@ -370,45 +522,168 @@ function ConversationView({
     const event = realtimeMessage;
     if (!event?.message || event.conversation_id !== selected?.id) return;
 
+    const ownRealtimeMessage = event.message.sender_type === 'HUMAN'
+      && event.message.sender_member_id === session.workspace_member_id;
+    if (!ownRealtimeMessage) {
+      setUnreadDividerMessageId((current) => current || event.message.message_id);
+    }
+
+    const shouldFollow = nearBottomRef.current;
     setMessages((current) => current.some((item) => item.message_id === event.message.message_id)
       ? current
       : [...current, event.message]);
 
-    const pageVisible = document.visibilityState === 'visible' && document.hasFocus();
-    if (pageVisible && event.message.message_id) {
-      markRead(token, selected.id, event.message.message_id)
-        .then(() => onReadConversation?.(selected.id))
-        .catch((requestError) => onApiFailure(requestError));
+    window.requestAnimationFrame(() => {
+      if (shouldFollow) scrollToBottom('smooth');
+      else setShowNewMessageJump(true);
+    });
+
+    const readableNow = document.visibilityState === 'visible' && nearBottomRef.current;
+    if (readableNow && event.message.message_id) {
+      markMessageRead(event.message.message_id);
     }
-  }, [realtimeMessage, selected?.id, token, onApiFailure, onReadConversation]);
+  }, [realtimeMessage, selected?.id, session.workspace_member_id, markMessageRead, scrollToBottom]);
+
+  useEffect(() => {
+    function reconcileVisibleRead() {
+      if (document.visibilityState !== 'visible' || !nearBottomRef.current) return;
+      const latest = messages[messages.length - 1];
+      if (latest?.message_id) markMessageRead(latest.message_id);
+    }
+
+    document.addEventListener('visibilitychange', reconcileVisibleRead);
+    window.addEventListener('focus', reconcileVisibleRead);
+    return () => {
+      document.removeEventListener('visibilitychange', reconcileVisibleRead);
+      window.removeEventListener('focus', reconcileVisibleRead);
+    };
+  }, [messages, markMessageRead]);
+
+  function handleHistoryScroll(event) {
+    const element = event.currentTarget;
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+    const wasNearBottom = nearBottomRef.current;
+    const nowNearBottom = distance < 90;
+    nearBottomRef.current = nowNearBottom;
+    reportViewportState(nowNearBottom);
+    if (nowNearBottom) {
+      setShowNewMessageJump(false);
+      if (!wasNearBottom) {
+        const latest = messages[messages.length - 1];
+        if (latest?.message_id) markMessageRead(latest.message_id);
+      }
+    }
+  }
+
+  function chooseAttachments(event) {
+    const selectedFiles = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!selectedFiles.length) return;
+
+    const next = [];
+    for (const file of selectedFiles) {
+      if (pendingFiles.length + next.length >= MAX_PENDING_ATTACHMENTS) break;
+      if (!ACCEPTED_ATTACHMENT_TYPES.has(file.type)) {
+        setError(`File type not allowed: ${file.name}`);
+        continue;
+      }
+      if (!file.size || file.size > MAX_ATTACHMENT_BYTES) {
+        setError(`File must be between 1 byte and 10 MB: ${file.name}`);
+        continue;
+      }
+      next.push({
+        file,
+        clientMessageId: makeClientMessageId(),
+      });
+    }
+
+    if (next.length) {
+      setPendingFiles((current) => [...current, ...next]);
+    }
+  }
+
+  function removePendingAttachment(clientMessageId) {
+    if (sending) return;
+    setPendingFiles((current) =>
+      current.filter((item) => item.clientMessageId !== clientMessageId)
+    );
+  }
+
+  async function handleDownloadAttachment(attachment) {
+    if (!attachment?.attachment_id || !selected?.id || downloadingAttachmentId) return;
+    setDownloadingAttachmentId(attachment.attachment_id);
+    setError('');
+
+    try {
+      const blob = await downloadAttachment(
+        token,
+        selected.id,
+        attachment.attachment_id
+      );
+      const href = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = href;
+      anchor.download = attachment.file_name || 'attachment';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(href), 1000);
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(requestError.message || 'Could not download attachment');
+      }
+    } finally {
+      setDownloadingAttachmentId('');
+    }
+  }
 
   async function submit(event) {
     event.preventDefault();
     const bodyText = draft.trim();
-    if (!bodyText || sending || !selected?.id) return;
+    if ((!bodyText && pendingFiles.length === 0) || sending || !selected?.id) return;
     setSending(true);
     setError('');
 
     try {
-      const result = await sendMessage(token, selected.id, {
-        bodyText,
-        clientMessageId: makeClientMessageId(),
-      });
-      const message = result.message;
-      setMessages((current) => current.some((item) => item.message_id === message.message_id)
-        ? current
-        : [...current, message]);
-      setDraft('');
-      if (message?.message_id) {
-        markRead(token, selected.id, message.message_id)
-          .then(() => onReadConversation?.(selected.id))
-          .catch((requestError) => {
-            onApiFailure(requestError);
-          });
+      const createdMessages = [];
+
+      if (bodyText) {
+        const result = await sendMessage(token, selected.id, {
+          bodyText,
+          clientMessageId: makeClientMessageId(),
+        });
+        if (result.message) createdMessages.push(result.message);
       }
+
+      for (const pending of pendingFiles) {
+        const result = await uploadAttachment(token, selected.id, pending);
+        if (result.message) createdMessages.push(result.message);
+      }
+
+      setMessages((current) => {
+        const next = [...current];
+        for (const message of createdMessages) {
+          if (!next.some((item) => item.message_id === message.message_id)) {
+            next.push(message);
+          }
+        }
+        next.sort((left, right) => {
+          const byTime = Date.parse(left.created_at) - Date.parse(right.created_at);
+          return byTime || String(left.message_id).localeCompare(String(right.message_id));
+        });
+        return next;
+      });
+
+      setDraft('');
+      setPendingFiles([]);
+      setUnreadDividerMessageId(null);
+      window.requestAnimationFrame(() => scrollToBottom('smooth'));
+
+      const latest = createdMessages[createdMessages.length - 1];
+      if (latest?.message_id) markMessageRead(latest.message_id);
     } catch (requestError) {
       if (!onApiFailure(requestError)) {
-        setError(requestError.message || 'Could not send message');
+        setError(requestError.message || 'Could not send message or attachment');
       }
     } finally {
       setSending(false);
@@ -418,6 +693,7 @@ function ConversationView({
   if (!selected) {
     return (
       <div className="conversation-empty">
+        <button type="button" className="mobile-menu-button empty-menu-button" onClick={onOpenSidebar} aria-label="Open conversations">☰</button>
         <div className="empty-illustration" aria-hidden="true">AC</div>
         <h2>Choose a conversation</h2>
         <p>Select a channel or direct message from the sidebar.</p>
@@ -428,27 +704,48 @@ function ConversationView({
   return (
     <>
       <header className="conversation-header">
-        <div>
-          <div className="conversation-title">
-            {selected.kind === 'channel' ? <span className="channel-symbol">#</span> : null}
-            <h2>{selected.title}</h2>
+        <div className="conversation-heading-row">
+          <button type="button" className="mobile-menu-button" onClick={onOpenSidebar} aria-label="Open conversations">☰</button>
+          <div>
+            <div className="conversation-title">
+              {selected.kind === 'channel' ? <span className="channel-symbol">#</span> : null}
+              <h2>{selected.title}</h2>
+            </div>
+            <p>{selected.subtitle}</p>
           </div>
-          <p>{selected.subtitle}</p>
         </div>
         <div className="conversation-header-actions">
+          <span className={`connection-pill connection-${realtimeStatus}`} role="status" aria-live="polite">
+            <span className="connection-pill-dot" aria-hidden="true" />
+            {connectionLabel(realtimeStatus)}
+          </span>
           <button
             type="button"
-            className="message-refresh-button"
+            className="message-refresh-button compact-refresh-button"
             disabled={refreshing}
             onClick={() => load({ manual: true })}
+            aria-label="Reload conversation"
+            title="Reload conversation"
           >
-            {refreshing ? 'Refreshing…' : 'Refresh'}
+            {refreshing ? '…' : '↻'}
           </button>
-          <span className="phase-badge">P1-V6</span>
         </div>
       </header>
 
-      <div className="conversation-body message-history" aria-live="polite">
+      {realtimeStatus !== 'connected' ? (
+        <div className={`connection-banner connection-banner-${realtimeStatus}`} role="status">
+          {realtimeStatus === 'reconnecting' || realtimeStatus === 'connecting'
+            ? 'Realtime connection interrupted. Reconnecting automatically…'
+            : 'Realtime connection is offline. Durable history will reconcile when the connection returns.'}
+        </div>
+      ) : null}
+
+      <div
+        className="conversation-body message-history"
+        aria-live="polite"
+        ref={historyRef}
+        onScroll={handleHistoryScroll}
+      >
         {page.has_more ? (
           <button
             type="button"
@@ -474,49 +771,176 @@ function ConversationView({
         ) : null}
 
         <div className="message-list">
-          {messages.map((message) => {
+          {messages.map((message, index) => {
+            const previous = messages[index - 1];
+            const grouped = sameMessageGroup(previous, message);
+            const showDate = !previous || messageDateKey(previous.created_at) !== messageDateKey(message.created_at);
             const own = message.sender_type === 'HUMAN' && message.sender_member_id === session.workspace_member_id;
             return (
-              <article className={`message-row ${own ? 'own-message' : ''}`} key={message.message_id}>
-                <span className={`avatar message-avatar ${message.sender_type === 'SYSTEM' ? 'system-avatar' : ''}`}>
-                  {message.sender_type === 'SYSTEM' ? 'S' : initials(message.sender_display_name)}
-                </span>
-                <div className="message-copy">
-                  <div className="message-meta">
-                    <strong>{message.sender_display_name || (message.sender_type === 'SYSTEM' ? 'System' : 'Unknown member')}</strong>
-                    <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
-                    {message.sender_type === 'SYSTEM' ? <span className="system-message-badge">SYSTEM</span> : null}
+              <React.Fragment key={message.message_id}>
+                {showDate ? (
+                  <div className="message-date-separator" role="separator">
+                    <span>{formatMessageDate(message.created_at)}</span>
                   </div>
-                  <div className="message-text">{message.body_text || ''}</div>
-                </div>
-              </article>
+                ) : null}
+                {message.message_id === unreadDividerMessageId ? (
+                  <div className="new-messages-divider" role="separator">
+                    <span>New messages</span>
+                  </div>
+                ) : null}
+                <article
+                  className={`message-row ${own ? 'own-message' : ''} ${grouped ? 'grouped-message' : ''}`}
+                  data-message-id={message.message_id}
+                >
+                  {grouped ? (
+                    <span className="message-avatar-spacer" aria-hidden="true">
+                      <time>{formatMessageTime(message.created_at)}</time>
+                    </span>
+                  ) : (
+                    <span className={`avatar message-avatar ${message.sender_type === 'SYSTEM' ? 'system-avatar' : ''}`}>
+                      {message.sender_type === 'SYSTEM' ? 'S' : initials(message.sender_display_name)}
+                    </span>
+                  )}
+                  <div className="message-copy">
+                    {!grouped ? (
+                      <div className="message-meta">
+                        <strong>{message.sender_display_name || (message.sender_type === 'SYSTEM' ? 'System' : 'Unknown member')}</strong>
+                        <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                        {message.sender_type === 'SYSTEM' ? <span className="system-message-badge">SYSTEM</span> : null}
+                      </div>
+                    ) : null}
+                    {message.message_type !== 'ATTACHMENT' ? (
+                      <div className="message-text">{message.body_text || ''}</div>
+                    ) : null}
+                    {Array.isArray(message.attachments) && message.attachments.length ? (
+                      <div className="message-attachments">
+                        {message.attachments.map((attachment) => (
+                          <button
+                            type="button"
+                            className="attachment-card"
+                            key={attachment.attachment_id}
+                            onClick={() => handleDownloadAttachment(attachment)}
+                            disabled={downloadingAttachmentId === attachment.attachment_id}
+                            title={`Download ${attachment.file_name}`}
+                          >
+                            <span className="attachment-type-icon">
+                              {attachmentIcon(attachment.content_type)}
+                            </span>
+                            <span className="attachment-card-copy">
+                              <strong>{attachment.file_name}</strong>
+                              <small>
+                                {formatFileSize(attachment.size_bytes)}
+                                {' · '}
+                                {attachment.content_type}
+                              </small>
+                            </span>
+                            <span className="attachment-download-action">
+                              {downloadingAttachmentId === attachment.attachment_id
+                                ? '…'
+                                : '↓'}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </article>
+              </React.Fragment>
             );
           })}
+          <div ref={bottomRef} className="message-bottom-anchor" aria-hidden="true" />
         </div>
+
+        {showNewMessageJump ? (
+          <button type="button" className="new-message-jump" onClick={() => scrollToBottom('smooth')}>
+            New messages ↓
+          </button>
+        ) : null}
       </div>
 
       <footer className="composer-shell">
         {error ? <div className="composer-error" role="alert">{error}</div> : null}
         <form className="composer-box active-composer" onSubmit={submit}>
+          {pendingFiles.length ? (
+            <div className="pending-attachments" aria-label="Attachments ready to send">
+              {pendingFiles.map((pending) => (
+                <div className="pending-attachment" key={pending.clientMessageId}>
+                  <span className="attachment-type-icon">
+                    {attachmentIcon(pending.file.type)}
+                  </span>
+                  <span className="pending-attachment-copy">
+                    <strong>{pending.file.name}</strong>
+                    <small>{formatFileSize(pending.file.size)}</small>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removePendingAttachment(pending.clientMessageId)}
+                    disabled={sending}
+                    aria-label={`Remove ${pending.file.name}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <textarea
             rows={2}
             aria-label="Message composer"
             value={draft}
             maxLength={8000}
             onChange={(event) => setDraft(event.target.value)}
+            onInput={(event) => {
+              event.currentTarget.style.height = 'auto';
+              event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 180)}px`;
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
-                if (!sending && draft.trim()) {
+                if (!sending && (draft.trim() || pendingFiles.length)) {
                   event.currentTarget.form?.requestSubmit();
                 }
               }
             }}
             placeholder={`Message ${selected.kind === 'channel' ? `#${selected.title}` : selected.title}`}
           />
+
+          <input
+            ref={fileInputRef}
+            className="attachment-file-input"
+            type="file"
+            multiple
+            accept=".jpg,.jpeg,.png,.webp,.pdf,.txt,.csv,.docx,.xlsx,.pptx"
+            onChange={chooseAttachments}
+            tabIndex={-1}
+            aria-hidden="true"
+          />
+
           <div className="composer-actions">
-            <span>Enter to send · Shift+Enter for new line · durable history</span>
-            <button type="submit" disabled={sending || !draft.trim()}>
+            <div className="composer-left-actions">
+              <button
+                type="button"
+                className="attach-button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sending || pendingFiles.length >= MAX_PENDING_ATTACHMENTS}
+                aria-label="Attach files"
+                title="Attach files (up to 4 files, 10 MB each)"
+              >
+                ＋ File
+              </button>
+              <span>
+                {draft.length >= 7000
+                  ? `${draft.length.toLocaleString()} / 8,000 characters`
+                  : pendingFiles.length
+                    ? `${pendingFiles.length} attachment${pendingFiles.length === 1 ? '' : 's'} ready`
+                    : 'Enter to send · Shift+Enter for new line'}
+              </span>
+            </div>
+            <button
+              type="submit"
+              disabled={sending || (!draft.trim() && pendingFiles.length === 0)}
+            >
               {sending ? 'Sending…' : 'Send'}
             </button>
           </div>
@@ -542,13 +966,44 @@ export default function App() {
   const [realtimeMessage, setRealtimeMessage] = useState(null);
   const [reconnectEpoch, setReconnectEpoch] = useState(0);
   const [notificationToast, setNotificationToast] = useState(null);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const selectedRef = useRef(selected);
   const sessionRef = useRef(session);
   const navigationRef = useRef({ channels, directMessages });
+  const conversationReadStateRef = useRef({ conversationId: null, atBottom: true });
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { navigationRef.current = { channels, directMessages }; }, [channels, directMessages]);
+
+  const totalUnread = useMemo(
+    () => Object.values(unreadCounts).reduce((sum, value) => sum + Number(value || 0), 0),
+    [unreadCounts]
+  );
+  const channelUnread = useMemo(
+    () => channels.reduce((sum, channel) => sum + Number(unreadCounts[channel.conversation_id] || 0), 0),
+    [channels, unreadCounts]
+  );
+  const dmUnread = useMemo(
+    () => directMessages.reduce((sum, dm) => sum + Number(unreadCounts[dm.conversation_id] || 0), 0),
+    [directMessages, unreadCounts]
+  );
+
+  useEffect(() => {
+    document.title = totalUnread > 0 ? `(${Math.min(99, totalUnread)}) AkshaConnect` : 'AkshaConnect';
+    return () => { document.title = 'AkshaConnect'; };
+  }, [totalUnread]);
+
+  useEffect(() => {
+    function closeOnEscape(event) {
+      if (event.key !== 'Escape') return;
+      setMobileSidebarOpen(false);
+      setShowChannelCreate(false);
+      setShowDmPicker(false);
+    }
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, []);
 
   const clearSession = useCallback(() => {
     clearStoredSession();
@@ -561,6 +1016,7 @@ export default function App() {
     setRealtimeMessage(null);
     setRealtimeStatus('disconnected');
     setNotificationToast(null);
+    setMobileSidebarOpen(false);
     setLoadingWorkspace(false);
   }, []);
 
@@ -697,11 +1153,13 @@ export default function App() {
         if (ownMessage) return;
 
         const currentSelection = selectedRef.current;
-        const activeAndVisible = currentSelection?.id === event.conversation_id
+        const readState = conversationReadStateRef.current;
+        const activeAndReadable = currentSelection?.id === event.conversation_id
           && document.visibilityState === 'visible'
-          && document.hasFocus();
+          && readState.conversationId === event.conversation_id
+          && readState.atBottom;
 
-        if (!activeAndVisible) {
+        if (!activeAndReadable) {
           setUnreadCounts((current) => ({
             ...current,
             [event.conversation_id]: Number(current[event.conversation_id] || 0) + 1,
@@ -717,6 +1175,17 @@ export default function App() {
           sender: event.message.sender_display_name || 'New message',
           conversation: channel?.channel_name ? `#${channel.channel_name}` : dm?.other_display_name || 'Conversation',
           preview: event.message.body_text || '',
+          selection: channel ? {
+            kind: 'channel',
+            id: channel.conversation_id,
+            title: channel.channel_name,
+            subtitle: channel.visibility === 'PRIVATE' ? 'Private channel' : 'Public channel',
+          } : dm ? {
+            kind: 'dm',
+            id: dm.conversation_id,
+            title: dm.other_display_name,
+            subtitle: dm.other_primary_email || 'Direct message',
+          } : null,
         });
       },
     });
@@ -735,10 +1204,14 @@ export default function App() {
   }, [notificationToast]);
 
   const selectConversation = useCallback((next) => {
-    setSelected(next);
-    if (next?.id) {
-      setUnreadCounts((current) => ({ ...current, [next.id]: 0 }));
-    }
+    const unreadAtOpen = next?.id ? Number(unreadCounts[next.id] || 0) : 0;
+    conversationReadStateRef.current = { conversationId: next?.id || null, atBottom: unreadAtOpen <= 0 };
+    setSelected(next ? { ...next, unread_at_open: unreadAtOpen } : null);
+    setMobileSidebarOpen(false);
+  }, [unreadCounts]);
+
+  const handleConversationViewportState = useCallback((conversationId, atBottom) => {
+    conversationReadStateRef.current = { conversationId, atBottom: Boolean(atBottom) };
   }, []);
 
   const handleReadConversation = useCallback((conversationId) => {
@@ -817,7 +1290,7 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${mobileSidebarOpen ? 'mobile-sidebar-open' : ''}`}>
       <aside className="workspace-sidebar">
         <div className="workspace-top">
           <div className="brand-lockup sidebar-brand">
@@ -830,7 +1303,10 @@ export default function App() {
               <strong>{session.workspace_name}</strong>
               <span>{session.workspace_code}</span>
             </div>
-            <span className={`workspace-status-dot realtime-${realtimeStatus}`} title={`Realtime: ${realtimeStatus}`} />
+            <span className="workspace-connection-state" title={`Realtime: ${realtimeStatus}`}>
+              <span className={`workspace-status-dot realtime-${realtimeStatus}`} />
+              <span>{connectionLabel(realtimeStatus)}</span>
+            </span>
           </div>
         </div>
 
@@ -838,6 +1314,7 @@ export default function App() {
           <div className="nav-section">
             <SectionHeader
               title="Channels"
+              unreadCount={channelUnread}
               actionLabel="Create channel"
               onAction={() => {
                 setShowChannelCreate((value) => !value);
@@ -882,6 +1359,7 @@ export default function App() {
           <div className="nav-section dm-section">
             <SectionHeader
               title="Direct messages"
+              unreadCount={dmUnread}
               actionLabel="New direct message"
               onAction={() => {
                 setShowDmPicker((value) => !value);
@@ -936,6 +1414,15 @@ export default function App() {
         </div>
       </aside>
 
+      {mobileSidebarOpen ? (
+        <button
+          type="button"
+          className="mobile-sidebar-overlay"
+          aria-label="Close conversations"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      ) : null}
+
       <main className="conversation-panel">
         {globalError ? <div className="global-banner in-app-banner">{globalError}</div> : null}
         <ConversationView
@@ -945,7 +1432,10 @@ export default function App() {
           onApiFailure={handleApiFailure}
           realtimeMessage={realtimeMessage}
           reconnectEpoch={reconnectEpoch}
+          realtimeStatus={realtimeStatus}
           onReadConversation={handleReadConversation}
+          onViewportState={handleConversationViewportState}
+          onOpenSidebar={() => setMobileSidebarOpen(true)}
         />
       </main>
 
@@ -953,8 +1443,11 @@ export default function App() {
         <button
           type="button"
           className="message-toast"
-          onClick={() => setNotificationToast(null)}
-          aria-label="Dismiss message notification"
+          onClick={() => {
+            if (notificationToast.selection) selectConversation(notificationToast.selection);
+            setNotificationToast(null);
+          }}
+          aria-label={`Open ${notificationToast.conversation}`}
         >
           <strong>{notificationToast.sender}</strong>
           <span>{notificationToast.conversation}</span>

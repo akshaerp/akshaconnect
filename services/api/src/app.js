@@ -1,10 +1,12 @@
+
 'use strict';
 
 const { BoundaryError, boundaryError } = require('./core/boundaryError');
 
-const VERSION = '0.12.0-phase1';
+const VERSION = '0.13.0-phase1';
 const SERVICE_NAME = process.env.AKSHACONNECT_SERVICE_NAME || 'akshaconnect-api';
 const MAX_JSON_BYTES = 32 * 1024;
+const DEFAULT_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 function writeJson(res, statusCode, body) {
   const payload = JSON.stringify(body);
@@ -12,6 +14,24 @@ function writeJson(res, statusCode, body) {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(payload),
     'cache-control': 'no-store',
+  });
+  res.end(payload);
+}
+
+function safeDownloadName(value) {
+  const raw = String(value || 'attachment').replace(/[\r\n]/g, '').trim();
+  return raw || 'attachment';
+}
+
+function writeBinary(res, statusCode, { data, contentType, fileName }) {
+  const payload = Buffer.from(data || []);
+  const name = safeDownloadName(fileName);
+  res.writeHead(statusCode, {
+    'content-type': contentType || 'application/octet-stream',
+    'content-length': payload.length,
+    'content-disposition': `attachment; filename="attachment"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'cache-control': 'private, no-store',
+    'x-content-type-options': 'nosniff',
   });
   res.end(payload);
 }
@@ -48,6 +68,39 @@ async function readJson(req) {
   }
 }
 
+async function readBinary(req, maxBytes) {
+  let total = 0;
+  const chunks = [];
+
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > maxBytes) {
+      throw boundaryError(
+        'ATTACHMENT_SIZE_INVALID',
+        `Attachment must not exceed ${maxBytes} bytes`,
+        413
+      );
+    }
+    chunks.push(chunk);
+  }
+
+  return Buffer.concat(chunks);
+}
+
+function decodeFileNameHeader(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw boundaryError(
+      'ATTACHMENT_FILE_NAME_INVALID',
+      'Attachment file name header is invalid',
+      400
+    );
+  }
+}
+
 function requestMetadata(req) {
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
   return {
@@ -60,6 +113,7 @@ function createRequestHandler({
   localIdentityService = null,
   collaborationService = null,
   messagingService = null,
+  attachmentService = null,
 } = {}) {
   return async function requestHandler(req, res) {
     try {
@@ -70,7 +124,7 @@ function createRequestHandler({
           status: 'ok',
           service: SERVICE_NAME,
           phase: '1',
-          checkpoint: 'P1-V6',
+          checkpoint: 'P1-V7',
           version: VERSION,
           timestamp: new Date().toISOString(),
         });
@@ -205,8 +259,66 @@ function createRequestHandler({
         }
       }
 
-      const messageRoute = /^\/api\/v1\/conversations\/([^/]+)\/messages$/.exec(url.pathname);
-      const readCursorRoute = /^\/api\/v1\/conversations\/([^/]+)\/read-cursor$/.exec(url.pathname);
+      const attachmentUploadRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/attachments$/.exec(url.pathname);
+      const attachmentContentRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/attachments\/([^/]+)\/content$/.exec(url.pathname);
+
+      if (attachmentUploadRoute || attachmentContentRoute) {
+        if (!localIdentityService) {
+          throw boundaryError(
+            'LOCAL_IDENTITY_NOT_CONFIGURED',
+            'LOCAL identity service is not configured',
+            503
+          );
+        }
+        if (!attachmentService) {
+          throw boundaryError(
+            'ATTACHMENTS_NOT_CONFIGURED',
+            'Attachment service is not configured',
+            503
+          );
+        }
+
+        const claims = await localIdentityService.verifyAccessToken(bearerToken(req));
+        const encodedConversationId =
+          attachmentUploadRoute?.[1] || attachmentContentRoute?.[1] || '';
+        const conversationId = decodeURIComponent(encodedConversationId);
+
+        if (attachmentUploadRoute && req.method === 'POST') {
+          const maxBytes =
+            Number(attachmentService.maxAttachmentBytes) || DEFAULT_MAX_ATTACHMENT_BYTES;
+          const data = await readBinary(req, maxBytes);
+          const result = await attachmentService.uploadHumanAttachment(
+            claims,
+            conversationId,
+            {
+              fileName: decodeFileNameHeader(req.headers['x-akshaconnect-file-name']),
+              contentType: req.headers['content-type'],
+              clientMessageId: req.headers['x-client-message-id'],
+              data,
+            }
+          );
+          writeJson(res, result.created ? 201 : 200, result);
+          return;
+        }
+
+        if (attachmentContentRoute && req.method === 'GET') {
+          const attachmentId = decodeURIComponent(attachmentContentRoute[2]);
+          const result = await attachmentService.downloadAttachment(
+            claims,
+            conversationId,
+            attachmentId
+          );
+          writeBinary(res, 200, result);
+          return;
+        }
+      }
+
+      const messageRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/messages$/.exec(url.pathname);
+      const readCursorRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/read-cursor$/.exec(url.pathname);
 
       if (messageRoute || readCursorRoute) {
         if (!localIdentityService) {
@@ -229,17 +341,33 @@ function createRequestHandler({
         const conversationId = decodeURIComponent(encodedConversationId);
 
         if (messageRoute && req.method === 'GET') {
-          const result = await messagingService.listMessages(claims, conversationId, {
+          let result = await messagingService.listMessages(claims, conversationId, {
             limit: url.searchParams.get('limit') || undefined,
             before_message_id: url.searchParams.get('before') || undefined,
           });
+
+          if (attachmentService) {
+            result = {
+              ...result,
+              messages: await attachmentService.decorateMessages(
+                claims,
+                conversationId,
+                result.messages
+              ),
+            };
+          }
+
           writeJson(res, 200, result);
           return;
         }
 
         if (messageRoute && req.method === 'POST') {
           const body = await readJson(req);
-          const result = await messagingService.sendHumanMessage(claims, conversationId, body);
+          const result = await messagingService.sendHumanMessage(
+            claims,
+            conversationId,
+            body
+          );
           writeJson(res, result.created ? 201 : 200, result);
           return;
         }
@@ -252,7 +380,11 @@ function createRequestHandler({
 
         if (readCursorRoute && req.method === 'PUT') {
           const body = await readJson(req);
-          const result = await messagingService.advanceReadCursor(claims, conversationId, body);
+          const result = await messagingService.advanceReadCursor(
+            claims,
+            conversationId,
+            body
+          );
           writeJson(res, 200, result);
           return;
         }
@@ -287,5 +419,6 @@ module.exports = {
   VERSION,
   SERVICE_NAME,
   MAX_JSON_BYTES,
+  DEFAULT_MAX_ATTACHMENT_BYTES,
   createRequestHandler,
 };
