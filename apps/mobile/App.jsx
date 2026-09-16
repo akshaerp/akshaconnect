@@ -8,6 +8,7 @@ import {
   loginLocal,
   logout,
 } from './src/api/client';
+import ConversationScreen from './src/screens/ConversationScreen.jsx';
 import HomeScreen from './src/screens/HomeScreen.jsx';
 import LoginScreen from './src/screens/LoginScreen.jsx';
 
@@ -16,6 +17,7 @@ export default function App() {
   const [serverUrl, setServerUrl] = useState('');
   const [channels, setChannels] = useState([]);
   const [directMessages, setDirectMessages] = useState([]);
+  const [selectedConversation, setSelectedConversation] = useState(null);
   const [loadingWorkspace, setLoadingWorkspace] = useState(false);
 
   const handleLogin = useCallback(
@@ -43,6 +45,7 @@ export default function App() {
         setSession(loginResult);
         setChannels(channelPayload.channels || []);
         setDirectMessages(dmPayload.direct_messages || []);
+        setSelectedConversation(null);
       } catch (error) {
         try {
           await logout(requestedServerUrl, loginResult.access_token);
@@ -82,6 +85,7 @@ export default function App() {
     setSession(null);
     setChannels([]);
     setDirectMessages([]);
+    setSelectedConversation(null);
 
     if (token && activeServer) {
       try {
@@ -96,15 +100,25 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar barStyle="light-content" backgroundColor="#101828" />
       {session ? (
-        <HomeScreen
-          session={session}
-          serverUrl={serverUrl}
-          channels={channels}
-          directMessages={directMessages}
-          refreshing={loadingWorkspace}
-          onRefresh={refreshWorkspace}
-          onLogout={handleLogout}
-        />
+        selectedConversation ? (
+          <ConversationScreen
+            session={session}
+            serverUrl={serverUrl}
+            conversation={selectedConversation}
+            onBack={() => setSelectedConversation(null)}
+          />
+        ) : (
+          <HomeScreen
+            session={session}
+            serverUrl={serverUrl}
+            channels={channels}
+            directMessages={directMessages}
+            refreshing={loadingWorkspace}
+            onRefresh={refreshWorkspace}
+            onLogout={handleLogout}
+            onOpenConversation={setSelectedConversation}
+          />
+        )
       ) : (
         <LoginScreen busy={loadingWorkspace} onLogin={handleLogin} />
       )}
