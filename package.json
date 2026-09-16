@@ -1,4 +1,3 @@
-
 {
   "name": "@akshaerp/akshaconnect",
   "version": "0.13.0-phase1",
@@ -16,6 +15,8 @@
     "start:api": "node services/api/src/server.js",
     "start:web": "npm --workspace @akshaerp/akshaconnect-web run dev",
     "build:web": "npm --workspace @akshaerp/akshaconnect-web run build",
+    "start:mobile": "npm --workspace @akshaerp/akshaconnect-mobile run start",
+    "android:mobile": "npm --workspace @akshaerp/akshaconnect-mobile run android",
     "lint": "node scripts/check-js.js",
     "test": "node --test",
     "verify": "npm run lint && npm test && npm run build:web",

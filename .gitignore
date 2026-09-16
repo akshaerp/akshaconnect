@@ -5,6 +5,17 @@ node_modules/
 coverage/
 dist/
 build/
+.gradle/
+.cxx/
+.bundle/
+.idea/
+Pods/
+DerivedData/
+**/android/local.properties
+*.iml
+*.jks
+*.keystore
+!apps/mobile/android/app/debug.keystore
 .DS_Store
 *.log
 npm-debug.log*
