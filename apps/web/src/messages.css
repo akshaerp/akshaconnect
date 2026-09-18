@@ -805,3 +805,157 @@
     width: 100%;
   }
 }
+
+/* V4A4 - message and attachment brand overrides */
+.message-refresh-button,
+.load-older-button {
+  border-color: var(--ac-border);
+  color: var(--ac-text-secondary);
+}
+
+.message-refresh-button:hover:not(:disabled),
+.load-older-button:hover:not(:disabled) {
+  border-color: #9dc9f4;
+  color: var(--ac-blue);
+  background: #f0f7ff;
+}
+
+.message-row:hover {
+  background: #f7fbff;
+}
+
+.message-row.own-message {
+  background: #f4f9ff;
+}
+
+.message-meta strong {
+  color: var(--ac-navy);
+}
+
+.message-meta time,
+.message-loading {
+  color: var(--ac-text-muted);
+}
+
+.message-text {
+  color: #33465f;
+}
+
+.active-composer .composer-actions button {
+  background: linear-gradient(135deg, var(--ac-blue), var(--ac-royal));
+}
+
+.active-composer .composer-actions button:hover:not(:disabled) {
+  box-shadow: 0 5px 14px rgba(8, 121, 231, 0.22);
+}
+
+.unread-badge {
+  background: var(--ac-orange);
+}
+
+.nav-item:has(.unread-badge) .nav-label {
+  color: var(--ac-navy);
+  font-weight: 900;
+}
+
+.section-unread-total {
+  color: #fff;
+  background: var(--ac-orange);
+}
+
+.message-toast {
+  border-color: var(--ac-border);
+  box-shadow: 0 16px 42px rgba(14, 36, 85, 0.16);
+}
+
+.message-toast strong {
+  color: var(--ac-navy);
+}
+
+.message-toast span {
+  color: var(--ac-blue);
+}
+
+.message-toast small {
+  color: var(--ac-text-secondary);
+}
+
+.new-messages-divider {
+  color: #c44e12;
+}
+
+.new-messages-divider::before,
+.new-messages-divider::after {
+  background: #f4c3aa;
+}
+
+.new-message-jump {
+  border-color: #bcd9f6;
+  color: var(--ac-blue);
+  box-shadow: 0 6px 18px rgba(8, 121, 231, 0.12);
+}
+
+.new-message-jump:hover {
+  background: #f0f7ff;
+}
+
+.attachment-card {
+  border-color: var(--ac-border);
+  color: var(--ac-text);
+  background: #fbfdff;
+}
+
+.attachment-card:hover:not(:disabled) {
+  border-color: #a9cdef;
+  background: #f1f8ff;
+}
+
+.attachment-type-icon {
+  color: var(--ac-blue);
+  background: #eaf3ff;
+}
+
+.attachment-card-copy strong,
+.pending-attachment-copy strong {
+  color: var(--ac-navy);
+}
+
+.attachment-card-copy small,
+.pending-attachment-copy small {
+  color: var(--ac-text-muted);
+}
+
+.attachment-download-action {
+  color: var(--ac-blue);
+}
+
+.pending-attachments {
+  border-bottom-color: var(--ac-border);
+  background: #f7fbff;
+}
+
+.pending-attachment {
+  border-color: var(--ac-border);
+}
+
+.active-composer .composer-actions .attach-button {
+  border-color: #c7daf0;
+  color: var(--ac-blue);
+  background: #f1f7ff;
+}
+
+.active-composer .composer-actions .attach-button:hover:not(:disabled) {
+  border-color: #9dc9f4;
+  background: #eaf3ff;
+}
+
+.workspace-status-dot.realtime-connected,
+.connection-connected .connection-pill-dot {
+  background: var(--ac-green);
+}
+
+.connection-pill.connection-connected {
+  color: #117a45;
+  background: #edf9f2;
+  border-color: #cdebd8;
+}

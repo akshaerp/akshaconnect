@@ -76,11 +76,18 @@ function LoginScreen({ onLogin }) {
     <main className="login-page">
       <section className="login-card" aria-labelledby="login-title">
         <div className="brand-lockup brand-lockup-login">
-          <div className="brand-mark" aria-hidden="true">A</div>
-          <div>
-            <div className="brand-name">AkshaConnect</div>
-            <div className="brand-tagline">Work together. Stay connected.</div>
-          </div>
+          <img
+            className="web-brand-mark web-brand-mark-login"
+            src="/brand/akshaconnect-mark.png"
+            alt=""
+            aria-hidden="true"
+          />
+          <img
+            className="web-brand-wordmark web-brand-wordmark-login"
+            src="/brand/akshaconnect-wordmark.png"
+            alt="AkshaConnect"
+          />
+          <div className="brand-tagline">PEOPLE • IDEAS • TOGETHER</div>
         </div>
 
         <div className="login-heading">
@@ -128,7 +135,7 @@ function LoginScreen({ onLogin }) {
           </button>
         </form>
 
-        <p className="login-footnote">P1-V6 realtime messaging web client</p>
+        <p className="login-footnote">A BRIGHTER WORKPLACE TOGETHER</p>
       </section>
     </main>
   );
@@ -1427,8 +1434,20 @@ export default function App() {
   if (loadingWorkspace || !session) {
     return (
       <main className="loading-page">
-        <div className="brand-mark loading-mark">A</div>
-        <strong>Opening AkshaConnect…</strong>
+        <div className="loading-brand">
+          <img
+            className="web-brand-mark loading-mark"
+            src="/brand/akshaconnect-mark.png"
+            alt=""
+            aria-hidden="true"
+          />
+          <img
+            className="web-brand-wordmark loading-wordmark"
+            src="/brand/akshaconnect-wordmark.png"
+            alt="AkshaConnect"
+          />
+        </div>
+        <strong>Opening AkshaConnect...</strong>
       </main>
     );
   }
@@ -1438,8 +1457,17 @@ export default function App() {
       <aside className="workspace-sidebar">
         <div className="workspace-top">
           <div className="brand-lockup sidebar-brand">
-            <div className="brand-mark brand-mark-small">A</div>
-            <span>AkshaConnect</span>
+            <img
+              className="web-brand-mark web-brand-mark-small"
+              src="/brand/akshaconnect-mark.png"
+              alt=""
+              aria-hidden="true"
+            />
+            <img
+              className="web-brand-wordmark web-brand-wordmark-sidebar"
+              src="/brand/akshaconnect-wordmark.png"
+              alt="AkshaConnect"
+            />
           </div>
 
           <div className="workspace-card">

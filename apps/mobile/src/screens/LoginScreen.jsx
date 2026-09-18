@@ -5,7 +5,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -16,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 
 const brandMark = require('../assets/brand/akshaconnect-mark.png');
+const brandWordmark = require('../assets/brand/akshaconnect-wordmark.png');
 
 const DEV_DEFAULTS = __DEV__
   ? {
@@ -66,25 +66,18 @@ export default function LoginScreen({ busy = false, onLogin }) {
         }
         keyboardVerticalOffset={0}
       >
-        <ScrollView
-          contentContainerStyle={styles.page}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode={
-            Platform.OS === 'ios'
-              ? 'interactive'
-              : 'on-drag'
-          }
-        >
+        <View style={styles.page}>
           <View style={styles.brandArea}>
             <Image source={brandMark} style={styles.brandLogo} resizeMode="contain" />
 
-            <Text style={styles.brandName}>
-              <Text style={styles.brandAksha}>Aksha</Text>
-              <Text style={styles.brandConnect}>Connect</Text>
-            </Text>
+            <Image
+              source={brandWordmark}
+              style={styles.brandWordmark}
+              resizeMode="contain"
+            />
 
             <Text style={styles.brandTagline}>
-              PEOPLE  â€¢  TEAMS  â€¢  TOGETHER
+              PEOPLE  •  IDEAS  •  TOGETHER
             </Text>
           </View>
 
@@ -165,9 +158,9 @@ export default function LoginScreen({ busy = false, onLogin }) {
           </View>
 
           <Text style={styles.footer}>
-            Simple  â€¢  Secure  â€¢  Connected
+            A BRIGHTER WORKPLACE TOGETHER
           </Text>
-        </ScrollView>
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -196,30 +189,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.shell,
   },
   page: {
-    flexGrow: 1,
+    flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 28,
+    paddingVertical: 12,
   },
   brandArea: {
     alignItems: 'center',
-    marginBottom: 22,
+    marginBottom: 10,
   },
   brandLogo: {
-    width: 112,
-    height: 112,
+    width: 92,
+    height: 92,
   },
-  brandName: {
-    marginTop: 4,
-    fontSize: 31,
-    fontWeight: '900',
-    letterSpacing: -1,
-  },
-  brandAksha: {
-    color: colors.navy,
-  },
-  brandConnect: {
-    color: colors.teal,
+  brandWordmark: {
+    width: 244,
+    height: 56,
+    marginTop: 2,
   },
   brandTagline: {
     marginTop: 5,
@@ -235,20 +221,20 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,
-    paddingBottom: 22,
+    paddingBottom: 16,
     elevation: 5,
-    shadowColor: '#0B2D5B',
+    shadowColor: colors.primaryDark,
     shadowOpacity: 0.08,
     shadowRadius: 20,
   },
   cardAccent: {
     height: 5,
     marginHorizontal: -20,
-    marginBottom: 20,
-    backgroundColor: colors.teal,
+    marginBottom: 14,
+    backgroundColor: colors.primary,
   },
   eyebrow: {
-    color: colors.orange,
+    color: colors.brandOrange,
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1.2,
@@ -268,7 +254,7 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   field: {
-    marginTop: 13,
+    marginTop: 9,
   },
   label: {
     marginBottom: 6,
@@ -277,7 +263,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   input: {
-    height: 49,
+    height: 45,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 13,
@@ -300,10 +286,10 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   button: {
-    height: 52,
-    marginTop: 19,
+    height: 48,
+    marginTop: 14,
     borderRadius: 14,
-    backgroundColor: colors.teal,
+    backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -326,7 +312,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   footer: {
-    marginTop: 22,
+    marginTop: 10,
     textAlign: 'center',
     color: '#66809A',
     fontSize: 10,

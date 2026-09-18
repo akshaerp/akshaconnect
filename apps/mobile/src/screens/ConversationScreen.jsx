@@ -937,13 +937,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.navy,
     borderBottomWidth: 3,
-    borderBottomColor: colors.teal,
+    borderBottomColor: colors.primary,
   },
   backButton: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: '#163D6A',
+    backgroundColor: '#173A72',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -981,7 +981,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   realtimePillConnected: {
-    backgroundColor: '#0E4C4A',
+    backgroundColor: '#0D5B47',
   },
   realtimePillOffline: {
     backgroundColor: '#4A3823',
@@ -993,7 +993,7 @@ const styles = StyleSheet.create({
     marginRight: 4,
   },
   realtimeDotConnected: {
-    backgroundColor: '#50E3C2',
+    backgroundColor: colors.brandGreen,
   },
   realtimeDotOffline: {
     backgroundColor: colors.orange,
@@ -1014,7 +1014,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#163D6A',
+    backgroundColor: '#173A72',
   },
   refreshText: {
     color: '#FFFFFF',
@@ -1033,12 +1033,12 @@ const styles = StyleSheet.create({
   newMessagesLine: {
     flex: 1,
     height: 1,
-    backgroundColor: '#FF8A00',
+    backgroundColor: colors.brandOrange,
     opacity: 0.55,
   },
   newMessagesText: {
     marginHorizontal: 10,
-    color: '#D96E00',
+    color: '#C44E12',
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.2,
@@ -1133,8 +1133,8 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 5,
   },
   ownBubble: {
-    backgroundColor: colors.teal,
-    borderColor: colors.teal,
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
     borderBottomRightRadius: 5,
   },
   sender: {
@@ -1243,7 +1243,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.teal,
+    backgroundColor: colors.primary,
   },
   sendButtonDisabled: {
     opacity: 0.35,

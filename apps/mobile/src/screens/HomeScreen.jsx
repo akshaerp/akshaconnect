@@ -118,6 +118,7 @@ export default function HomeScreen({
       {activeTab === 'profile' ? (
         <ScrollView
           contentContainerStyle={styles.profilePage}
+          showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
               refreshing={Boolean(refreshing)}
@@ -158,6 +159,7 @@ export default function HomeScreen({
       ) : (
         <ScrollView
           contentContainerStyle={styles.page}
+          showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
               refreshing={Boolean(refreshing)}
@@ -241,7 +243,7 @@ export default function HomeScreen({
 
           <View style={styles.brandFooter}>
             <Text style={styles.brandFooterText}>
-              Simple  •  Secure  •  Connected
+              PEOPLE  •  IDEAS  •  TOGETHER
             </Text>
           </View>
         </ScrollView>
@@ -353,7 +355,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: colors.navy,
+    backgroundColor: colors.surface,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
   brandRow: {
     flex: 1,
@@ -374,14 +378,14 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
   },
   brandAksha: {
-    color: '#FFFFFF',
+    color: colors.brandNavy,
   },
   brandConnect: {
-    color: colors.teal,
+    color: colors.brandBlue,
   },
   workspaceName: {
     marginTop: 1,
-    color: '#BCD0E2',
+    color: colors.textSecondary,
     fontSize: 10,
     fontWeight: '600',
   },
@@ -394,10 +398,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   livePillOn: {
-    backgroundColor: '#0E4C4A',
+    backgroundColor: '#E7F8EE',
   },
   livePillOff: {
-    backgroundColor: '#4A3823',
+    backgroundColor: '#FFF2E8',
   },
   liveDot: {
     width: 6,
@@ -406,25 +410,27 @@ const styles = StyleSheet.create({
     borderRadius: 99,
   },
   liveDotOn: {
-    backgroundColor: '#50E3C2',
+    backgroundColor: colors.brandGreen,
   },
   liveDotOff: {
-    backgroundColor: colors.orange,
+    backgroundColor: colors.brandOrange,
   },
   liveText: {
     fontSize: 9,
     fontWeight: '800',
   },
   liveTextOn: {
-    color: '#CBFFF3',
+    color: '#117A45',
   },
   liveTextOff: {
-    color: '#FFE2BC',
+    color: '#A95A16',
   },
   tabs: {
     height: 54,
     flexDirection: 'row',
-    backgroundColor: colors.navy,
+    backgroundColor: colors.surface,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
   tab: {
     flex: 1,
@@ -438,13 +444,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   tabText: {
-    color: '#B9C9D9',
+    color: colors.textSecondary,
     fontSize: 14,
     fontWeight: '600',
   },
   tabTextActive: {
-    color: '#FFFFFF',
-    fontWeight: '800',
+    color: colors.brandNavy,
+    fontWeight: '900',
   },
   sectionUnreadPill: {
     minWidth: 20,
@@ -454,7 +460,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.orange,
+    backgroundColor: colors.brandOrange,
   },
   sectionUnreadText: {
     color: '#FFFFFF',
@@ -466,7 +472,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   tabIndicatorActive: {
-    backgroundColor: colors.teal,
+    backgroundColor: colors.primary,
   },
   page: {
     paddingBottom: 32,
@@ -477,7 +483,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
@@ -507,7 +513,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 0,
   },
   rowPressed: {
-    backgroundColor: '#F0F7F8',
+    backgroundColor: '#EDF5FF',
   },
   rowAvatar: {
     width: 42,
@@ -515,7 +521,7 @@ const styles = StyleSheet.create({
     borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#E6F7F4',
+    backgroundColor: '#EAF3FF',
   },
   rowAvatarText: {
     color: colors.navy,
@@ -528,7 +534,7 @@ const styles = StyleSheet.create({
     borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.teal,
+    backgroundColor: colors.primary,
   },
   rowIconText: {
     color: '#FFFFFF',
@@ -556,7 +562,7 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.orange,
+    backgroundColor: colors.brandOrange,
   },
   rowUnreadText: {
     color: '#FFFFFF',
@@ -612,7 +618,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   infoLabel: {
-    color: colors.teal,
+    color: colors.primary,
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1,
@@ -629,7 +635,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.orange,
+    backgroundColor: colors.brandOrange,
   },
   signOutText: {
     color: '#FFFFFF',

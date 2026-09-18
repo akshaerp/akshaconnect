@@ -52,6 +52,7 @@ import LoginScreen from './src/screens/LoginScreen.jsx';
 import SessionRestoreScreen from './src/screens/SessionRestoreScreen.jsx';
 
 const brandMark = require('./src/assets/brand/akshaconnect-mark.png');
+const brandWordmark = require('./src/assets/brand/akshaconnect-wordmark.png');
 
 function normalizeUnreadCounts(payload) {
   const next = {};
@@ -1076,7 +1077,7 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar
         barStyle="light-content"
-        backgroundColor="#0B2D5B"
+        backgroundColor="#0E2455"
       />
 
       {showSplash || restoringSession ? (
@@ -1177,12 +1178,13 @@ function BrandSplash() {
           style={styles.splashLogo}
           resizeMode="contain"
         />
-        <Text style={styles.splashName}>
-          <Text style={styles.splashAksha}>Aksha</Text>
-          <Text style={styles.splashConnect}>Connect</Text>
-        </Text>
+        <Image
+          source={brandWordmark}
+          style={styles.splashWordmark}
+          resizeMode="contain"
+        />
         <Text style={styles.splashTagline}>
-          PEOPLE  •  TEAMS  •  TOGETHER
+          PEOPLE  •  IDEAS  •  TOGETHER
         </Text>
       </View>
 
@@ -1193,7 +1195,7 @@ function BrandSplash() {
       </View>
 
       <Text style={styles.splashPromise}>
-        Connect. Collaborate. Achieve.
+        A BRIGHTER WORKPLACE TOGETHER
       </Text>
     </View>
   );
@@ -1215,21 +1217,14 @@ const styles = StyleSheet.create({
     width: 185,
     height: 185,
   },
-  splashName: {
-    marginTop: 5,
-    fontSize: 39,
-    fontWeight: '900',
-    letterSpacing: -1.2,
-  },
-  splashAksha: {
-    color: '#0B2D5B',
-  },
-  splashConnect: {
-    color: '#00BFA5',
+  splashWordmark: {
+    width: 292,
+    height: 76,
+    marginTop: 4,
   },
   splashTagline: {
     marginTop: 7,
-    color: '#0B2D5B',
+    color: '#0E2455',
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 2.4,
@@ -1248,7 +1243,7 @@ const styles = StyleSheet.create({
     bottom: 55,
     height: 54,
     borderRadius: 80,
-    backgroundColor: '#FF8A00',
+    backgroundColor: '#EF5E1B',
     transform: [{ rotate: '-8deg' }],
   },
   splashTeal: {
@@ -1258,7 +1253,7 @@ const styles = StyleSheet.create({
     bottom: 37,
     height: 64,
     borderRadius: 80,
-    backgroundColor: '#00BFA5',
+    backgroundColor: '#0FA16C',
     transform: [{ rotate: '7deg' }],
   },
   splashNavy: {
@@ -1268,7 +1263,7 @@ const styles = StyleSheet.create({
     bottom: -15,
     height: 85,
     borderRadius: 80,
-    backgroundColor: '#0B2D5B',
+    backgroundColor: '#0E2455',
     transform: [{ rotate: '1deg' }],
   },
   splashPromise: {
@@ -1301,7 +1296,7 @@ const styles = StyleSheet.create({
   },
   notificationAccent: {
     width: 4,
-    backgroundColor: '#FF8A00',
+    backgroundColor: '#EF5E1B',
   },
   notificationCopy: {
     flex: 1,
@@ -1309,13 +1304,13 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   notificationSender: {
-    color: '#0B2D5B',
+    color: '#0E2455',
     fontSize: 13,
     fontWeight: '800',
   },
   notificationConversation: {
     marginTop: 2,
-    color: '#00A993',
+    color: '#0879E7',
     fontSize: 11,
     fontWeight: '700',
   },

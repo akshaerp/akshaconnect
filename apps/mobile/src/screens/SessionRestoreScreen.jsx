@@ -2,6 +2,7 @@ import React from 'react';
 
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   StyleSheet,
   Text,
@@ -16,6 +17,12 @@ import {
   colors,
 } from '../theme/colors';
 
+const brandMark =
+  require('../assets/brand/akshaconnect-mark.png');
+
+const brandWordmark =
+  require('../assets/brand/akshaconnect-wordmark.png');
+
 
 export default function SessionRestoreScreen({
   message,
@@ -28,19 +35,27 @@ export default function SessionRestoreScreen({
       edges={['top', 'bottom']}
     >
       <View style={styles.page}>
-        <View style={styles.mark}>
-          <Text style={styles.markText}>
-            A
+        <View style={styles.brandArea}>
+          <Image
+            source={brandMark}
+            style={styles.brandMark}
+            resizeMode="contain"
+          />
+
+          <Image
+            source={brandWordmark}
+            style={styles.brandWordmark}
+            resizeMode="contain"
+          />
+
+          <Text style={styles.tagline}>
+            PEOPLE • IDEAS • TOGETHER
           </Text>
         </View>
 
-        <Text style={styles.brand}>
-          AkshaConnect
-        </Text>
-
         <ActivityIndicator
           size="small"
-          color="#00BFA5"
+          color={colors.primary}
           style={styles.spinner}
         />
 
@@ -82,6 +97,10 @@ export default function SessionRestoreScreen({
             Sign in with another account
           </Text>
         </Pressable>
+
+        <Text style={styles.promise}>
+          A BRIGHTER WORKPLACE TOGETHER
+        </Text>
       </View>
     </SafeAreaView>
   );
@@ -101,45 +120,48 @@ const styles =
       alignItems: 'center',
       justifyContent: 'center',
       paddingHorizontal: 28,
+      backgroundColor:
+        colors.shell,
     },
 
-    mark: {
-      width: 68,
-      height: 68,
-      borderRadius: 20,
+    brandArea: {
       alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: '#00BFA5',
     },
 
-    markText: {
-      color: '#FFFFFF',
-      fontSize: 34,
-      fontWeight: '900',
+    brandMark: {
+      width: 122,
+      height: 122,
     },
 
-    brand: {
-      marginTop: 14,
-      color: '#FFFFFF',
-      fontSize: 25,
-      fontWeight: '900',
+    brandWordmark: {
+      width: 250,
+      height: 66,
+      marginTop: 6,
+    },
+
+    tagline: {
+      marginTop: 4,
+      color: colors.textPrimary,
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 2.1,
     },
 
     spinner: {
-      marginTop: 28,
+      marginTop: 32,
     },
 
     title: {
       marginTop: 16,
-      color: '#FFFFFF',
+      color: colors.textPrimary,
       fontSize: 20,
-      fontWeight: '800',
+      fontWeight: '900',
     },
 
     message: {
       maxWidth: 360,
       marginTop: 8,
-      color: '#A8B3C7',
+      color: colors.textSecondary,
       fontSize: 13,
       lineHeight: 19,
       textAlign: 'center',
@@ -153,11 +175,12 @@ const styles =
       borderRadius: 13,
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: '#00BFA5',
+      backgroundColor:
+        colors.primary,
     },
 
     primaryText: {
-      color: '#FFFFFF',
+      color: colors.white,
       fontSize: 14,
       fontWeight: '900',
     },
@@ -169,15 +192,25 @@ const styles =
       marginTop: 10,
       borderRadius: 13,
       borderWidth: 1,
-      borderColor: '#41546A',
+      borderColor: colors.border,
       alignItems: 'center',
       justifyContent: 'center',
+      backgroundColor:
+        colors.surface,
     },
 
     secondaryText: {
-      color: '#FFFFFF',
+      color: colors.textPrimary,
       fontSize: 13,
       fontWeight: '800',
+    },
+
+    promise: {
+      marginTop: 28,
+      color: colors.textMuted,
+      fontSize: 9,
+      fontWeight: '700',
+      letterSpacing: 1.3,
     },
 
     pressed: {
