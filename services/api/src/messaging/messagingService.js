@@ -86,7 +86,10 @@ function sameNullable(left, right) {
   return (left || null) === (right || null);
 }
 
-function createMessagingService(repository, { eventPublisher = null } = {}) {
+function createMessagingService(repository, {
+  eventPublisher = null,
+  pushPublisher = null,
+} = {}) {
   if (!repository) throw new TypeError('Messaging repository is required');
 
   function publishRealtime(event) {
@@ -94,6 +97,20 @@ function createMessagingService(repository, { eventPublisher = null } = {}) {
       eventPublisher?.publish?.(Object.freeze(event));
     } catch {
       // Durable persistence is authoritative; realtime fan-out is best effort.
+    }
+  }
+
+  function publishPush(event) {
+    try {
+      const result =
+        pushPublisher?.publishMessage?.(
+          Object.freeze(event)
+        );
+
+      Promise.resolve(result)
+        .catch(() => {});
+    } catch {
+      // Durable persistence remains authoritative.
     }
   }
 
@@ -203,6 +220,13 @@ function createMessagingService(repository, { eventPublisher = null } = {}) {
         workspace_id: actor.workspaceId,
         conversation_id: allowed.conversationId,
         message: created,
+      });
+      publishPush({
+        workspaceId: actor.workspaceId,
+        conversationId: allowed.conversationId,
+        message: created,
+        excludeWorkspaceMemberId:
+          actor.workspaceMemberId,
       });
       return { created: true, message: created };
     } catch (error) {
@@ -351,6 +375,12 @@ function createMessagingService(repository, { eventPublisher = null } = {}) {
         workspace_id: workspaceId,
         conversation_id: cleanConversationId,
         message: created,
+      });
+      publishPush({
+        workspaceId,
+        conversationId: cleanConversationId,
+        message: created,
+        excludeWorkspaceMemberId: null,
       });
       return { created: true, message: created };
     } catch (error) {

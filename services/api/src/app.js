@@ -114,6 +114,7 @@ function createRequestHandler({
   collaborationService = null,
   messagingService = null,
   attachmentService = null,
+  pushRegistrationService = null,
 } = {}) {
   return async function requestHandler(req, res) {
     try {
@@ -133,7 +134,11 @@ function createRequestHandler({
 
       const isLocalAuthRoute = (
         url.pathname === '/api/v1/auth/local/login' ||
+        url.pathname === '/api/v1/auth/mobile/login' ||
+        url.pathname === '/api/v1/auth/mobile/refresh' ||
+        url.pathname === '/api/v1/auth/mobile/logout' ||
         url.pathname === '/api/v1/auth/session' ||
+        url.pathname === '/api/v1/auth/local/password' ||
         url.pathname === '/api/v1/auth/logout'
       );
 
@@ -153,12 +158,73 @@ function createRequestHandler({
           return;
         }
 
+        if (
+          req.method === 'POST' &&
+          url.pathname ===
+            '/api/v1/auth/mobile/login'
+        ) {
+          const body = await readJson(req);
+
+          const result =
+            await localIdentityService.loginMobile(
+              body,
+              requestMetadata(req)
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          req.method === 'POST' &&
+          url.pathname ===
+            '/api/v1/auth/mobile/refresh'
+        ) {
+          const body = await readJson(req);
+
+          const result =
+            await localIdentityService.refreshMobile(
+              body,
+              requestMetadata(req)
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          req.method === 'POST' &&
+          url.pathname ===
+            '/api/v1/auth/mobile/logout'
+        ) {
+          const body = await readJson(req);
+
+          const result =
+            await localIdentityService.logoutMobile(
+              body
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+
         if (req.method === 'GET' && url.pathname === '/api/v1/auth/session') {
           const claims = await localIdentityService.verifyAccessToken(bearerToken(req));
           writeJson(res, 200, {
             authenticated: true,
             claims,
           });
+          return;
+        }
+
+        if (req.method === 'PUT' && url.pathname === '/api/v1/auth/local/password') {
+          const body = await readJson(req);
+          const result = await localIdentityService.changePassword(
+            bearerToken(req),
+            body
+          );
+          writeJson(res, 200, result);
           return;
         }
 
@@ -231,6 +297,61 @@ function createRequestHandler({
           writeJson(res, directMessage.created ? 201 : 200, {
             direct_message: directMessage,
           });
+          return;
+        }
+      }
+
+      const pushRegistrationRoute =
+        url.pathname === '/api/v1/mobile/push/register' ||
+        url.pathname === '/api/v1/mobile/push/unregister';
+
+      if (pushRegistrationRoute) {
+        if (!localIdentityService) {
+          throw boundaryError(
+            'LOCAL_IDENTITY_NOT_CONFIGURED',
+            'LOCAL identity service is not configured',
+            503
+          );
+        }
+
+        if (!pushRegistrationService) {
+          throw boundaryError(
+            'PUSH_REGISTRATION_NOT_CONFIGURED',
+            'Push registration service is not configured',
+            503
+          );
+        }
+
+        const claims =
+          await localIdentityService.verifyAccessToken(
+            bearerToken(req)
+          );
+
+        if (
+          req.method === 'POST' &&
+          url.pathname === '/api/v1/mobile/push/register'
+        ) {
+          const body = await readJson(req);
+          const result =
+            await pushRegistrationService.register(
+              claims,
+              body
+            );
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          req.method === 'POST' &&
+          url.pathname === '/api/v1/mobile/push/unregister'
+        ) {
+          const body = await readJson(req);
+          const result =
+            await pushRegistrationService.unregister(
+              claims,
+              body
+            );
+          writeJson(res, 200, result);
           return;
         }
       }

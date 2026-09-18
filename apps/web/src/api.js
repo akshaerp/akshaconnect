@@ -68,6 +68,17 @@ export function inspectSession(token) {
   return request('/api/v1/auth/session', { token });
 }
 
+export function changePassword(token, { currentPassword, newPassword }) {
+  return request('/api/v1/auth/local/password', {
+    token,
+    method: 'PUT',
+    body: {
+      current_password: currentPassword,
+      new_password: newPassword,
+    },
+  });
+}
+
 export function logout(token) {
   return request('/api/v1/auth/logout', { token, method: 'POST' });
 }

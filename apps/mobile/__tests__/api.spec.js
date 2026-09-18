@@ -1,5 +1,7 @@
 import {
   listMessages,
+  listUnreadCounts,
+  markRead,
   normalizeBaseUrl,
   sendMessage,
 } from '../src/api/client.js';
@@ -92,4 +94,65 @@ describe('AkshaConnect mobile durable messaging API', () => {
     expect(body.sender_member_id).toBeUndefined();
     expect(body.workspace_id).toBeUndefined();
   });
+
+  test('loads durable unread counts for the authenticated member', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          unread_counts: [
+            {
+              conversation_id: 'conversation-1',
+              unread_count: 2,
+            },
+          ],
+        }),
+    });
+
+    await listUnreadCounts(
+      'https://connect.example.com',
+      'token-1'
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://connect.example.com/api/v1/unread-counts'
+    );
+    expect(fetchMock.mock.calls[0][1].headers.authorization).toBe(
+      'Bearer token-1'
+    );
+  });
+
+  test('advances the read cursor without sending member authority', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          conversation_id: 'conversation-1',
+          last_read_message_id: 'message-2',
+        }),
+    });
+
+    await markRead(
+      'https://connect.example.com',
+      'token-1',
+      'conversation-1',
+      'message-2'
+    );
+
+    const [url, options] = fetchMock.mock.calls[0];
+    const body = JSON.parse(options.body);
+
+    expect(url).toBe(
+      'https://connect.example.com/api/v1/conversations/' +
+        'conversation-1/read-cursor'
+    );
+    expect(options.method).toBe('PUT');
+    expect(body.last_read_message_id).toBe('message-2');
+    expect(body.workspace_member_id).toBeUndefined();
+    expect(body.workspace_id).toBeUndefined();
+  });
+
 });

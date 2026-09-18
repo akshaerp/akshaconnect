@@ -15,6 +15,10 @@ const { createAttachmentCryptoFromEnv } = require('./attachments/attachmentCrypt
 const { createAttachmentRepository } = require('./attachments/attachmentRepository');
 const { createAttachmentService } = require('./attachments/attachmentService');
 const { createLocalAttachmentStorage } = require('./attachments/attachmentStorage');
+const { createPushRegistrationRepository } = require('./push/pushRegistrationRepository');
+const { createPushRegistrationService } = require('./push/pushRegistrationService');
+const { createFirebasePushSender } = require('./push/firebasePushSender');
+const { createPushDeliveryService } = require('./push/pushDeliveryService');
 const { createRealtimeEventBus } = require('./realtime/realtimeEventBus');
 const { attachRealtimeGateway } = require('./realtime/realtimeGateway');
 
@@ -31,6 +35,7 @@ async function start() {
   let messagingRepository = null;
   let messagingService = null;
   let attachmentService = null;
+  let pushRegistrationService = null;
   let realtimeGateway = null;
   const realtimeEventBus = createRealtimeEventBus();
 
@@ -43,17 +48,49 @@ async function start() {
 
     const identityRepository = createLocalIdentityRepository(pool);
     localIdentityService = createLocalIdentityService(identityRepository, {
-      sessionTtlSeconds: process.env.AKSHACONNECT_LOCAL_SESSION_TTL_SECONDS,
+      sessionTtlSeconds:
+        process.env.AKSHACONNECT_LOCAL_SESSION_TTL_SECONDS,
+
+      deviceSessionTtlSeconds:
+        process.env.AKSHACONNECT_MOBILE_DEVICE_TTL_SECONDS,
     });
 
     const collaborationRepository = createCollaborationRepository(pool);
     collaborationService = createCollaborationService(collaborationRepository);
 
+    const pushRegistrationRepository =
+      createPushRegistrationRepository(pool);
+    pushRegistrationService =
+      createPushRegistrationService({
+        identityRepository,
+        pushRegistrationRepository,
+      });
+
     const messageCrypto = createMessageCryptoFromEnv(process.env);
     messagingRepository = createMessagingRepository(pool, { messageCrypto });
-    messagingService = createMessagingService(messagingRepository, {
-      eventPublisher: realtimeEventBus,
-    });
+
+    const firebasePushSender =
+      createFirebasePushSender({
+        enabled:
+          process.env.AKSHACONNECT_FCM_ENABLED,
+        projectId:
+          process.env.AKSHACONNECT_FIREBASE_PROJECT_ID,
+      });
+
+    const pushDeliveryService =
+      createPushDeliveryService({
+        messagingRepository,
+        pushRegistrationRepository,
+        pushSender: firebasePushSender,
+      });
+
+    messagingService = createMessagingService(
+      messagingRepository,
+      {
+        eventPublisher: realtimeEventBus,
+        pushPublisher: pushDeliveryService,
+      }
+    );
 
     const attachmentCrypto = createAttachmentCryptoFromEnv(process.env);
     const attachmentRepository = createAttachmentRepository(pool, { messageCrypto });
@@ -74,6 +111,7 @@ async function start() {
     collaborationService,
     messagingService,
     attachmentService,
+    pushRegistrationService,
   }));
 
   if (localIdentityService && messagingRepository) {

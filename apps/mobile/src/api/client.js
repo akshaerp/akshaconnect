@@ -98,6 +98,64 @@ export function loginLocal(
   });
 }
 
+export function loginMobile(
+  baseUrl,
+  {
+    workspaceCode,
+    loginName,
+    password,
+    devicePlatform = 'ANDROID',
+    deviceLabel = 'AkshaConnect Android',
+  }
+) {
+  return request(
+    baseUrl,
+    '/api/v1/auth/mobile/login',
+    {
+      method: 'POST',
+      body: {
+        workspace_code: workspaceCode,
+        login_name: loginName,
+        password,
+        device_platform: devicePlatform,
+        device_label: deviceLabel,
+      },
+    }
+  );
+}
+
+export function refreshMobile(
+  baseUrl,
+  deviceToken
+) {
+  return request(
+    baseUrl,
+    '/api/v1/auth/mobile/refresh',
+    {
+      method: 'POST',
+      body: {
+        device_token: deviceToken,
+      },
+    }
+  );
+}
+
+export function logoutMobile(
+  baseUrl,
+  deviceToken
+) {
+  return request(
+    baseUrl,
+    '/api/v1/auth/mobile/logout',
+    {
+      method: 'POST',
+      body: {
+        device_token: deviceToken,
+      },
+    }
+  );
+}
+
 export function logout(baseUrl, token) {
   return request(baseUrl, '/api/v1/auth/logout', {
     token,
@@ -146,6 +204,78 @@ export function sendMessage(
         body_text: bodyText,
         client_message_id: clientMessageId,
         reply_to_message_id: replyToMessageId,
+      },
+    }
+  );
+}
+
+export function listUnreadCounts(baseUrl, token) {
+  return request(baseUrl, '/api/v1/unread-counts', { token });
+}
+
+export function markRead(
+  baseUrl,
+  token,
+  conversationId,
+  lastReadMessageId
+) {
+  return request(
+    baseUrl,
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}/read-cursor`,
+    {
+      token,
+      method: 'PUT',
+      body: {
+        last_read_message_id: lastReadMessageId,
+      },
+    }
+  );
+}
+
+
+export function registerPush(
+  baseUrl,
+  token,
+  {
+    deviceToken,
+    pushToken,
+    platform = 'ANDROID',
+  }
+) {
+  return request(
+    baseUrl,
+    '/api/v1/mobile/push/register',
+    {
+      token,
+      method: 'POST',
+      body: {
+        device_token: deviceToken,
+        provider: 'FCM',
+        platform,
+        push_token: pushToken,
+      },
+    }
+  );
+}
+
+export function unregisterPush(
+  baseUrl,
+  token,
+  {
+    deviceToken,
+    pushToken = '',
+  }
+) {
+  return request(
+    baseUrl,
+    '/api/v1/mobile/push/unregister',
+    {
+      token,
+      method: 'POST',
+      body: {
+        device_token: deviceToken,
+        provider: 'FCM',
+        push_token: pushToken || undefined,
       },
     }
   );

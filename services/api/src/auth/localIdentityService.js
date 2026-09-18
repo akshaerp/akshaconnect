@@ -6,6 +6,14 @@ const { boundaryError } = require('../core/boundaryError');
 const DEFAULT_SESSION_TTL_SECONDS = 8 * 60 * 60;
 const MAX_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
+const DEFAULT_DEVICE_SESSION_TTL_SECONDS =
+  365 * 24 * 60 * 60;
+
+const MAX_DEVICE_SESSION_TTL_SECONDS =
+  730 * 24 * 60 * 60;
+const MIN_PASSWORD_LENGTH = 10;
+const MAX_PASSWORD_LENGTH = 128;
+
 function clean(value) {
   if (value === null || value === undefined) return '';
   return String(value).trim();
@@ -17,8 +25,39 @@ function safeTtl(value) {
   return Math.min(parsed, MAX_SESSION_TTL_SECONDS);
 }
 
+function safeDeviceTtl(value) {
+  const parsed = Number(value);
+
+  if (
+    !Number.isInteger(parsed) ||
+    parsed <= 0
+  ) {
+    return DEFAULT_DEVICE_SESSION_TTL_SECONDS;
+  }
+
+  return Math.min(
+    parsed,
+    MAX_DEVICE_SESSION_TTL_SECONDS
+  );
+}
+
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
+function validateNewPassword(password) {
+  if (
+    password.length < MIN_PASSWORD_LENGTH ||
+    password.length > MAX_PASSWORD_LENGTH ||
+    !/[A-Za-z]/.test(password) ||
+    !/[0-9]/.test(password)
+  ) {
+    throw boundaryError(
+      'LOCAL_PASSWORD_WEAK',
+      'New password must be 10 to 128 characters and include at least one letter and one number',
+      400
+    );
+  }
 }
 
 function invalidLogin() {
@@ -49,7 +88,13 @@ function assertActiveLogin(row) {
 function createLocalIdentityService(repository, options = {}) {
   if (!repository) throw new TypeError('Local identity repository is required');
 
-  const ttlSeconds = safeTtl(options.sessionTtlSeconds);
+  const ttlSeconds =
+    safeTtl(options.sessionTtlSeconds);
+
+  const deviceTtlSeconds =
+    safeDeviceTtl(
+      options.deviceSessionTtlSeconds
+    );
 
   async function login(input = {}, requestMetadata = {}) {
     const workspaceCode = clean(input.workspace_code ?? input.workspaceCode);
@@ -156,6 +201,59 @@ function createLocalIdentityService(repository, options = {}) {
     });
   }
 
+  async function changePassword(accessToken, input = {}) {
+    const claims = await verifyAccessToken(accessToken);
+    const currentPassword = String(
+      input.current_password ?? input.currentPassword ?? ''
+    );
+    const newPassword = String(
+      input.new_password ?? input.newPassword ?? ''
+    );
+
+    if (!currentPassword) {
+      throw boundaryError(
+        'LOCAL_PASSWORD_CURRENT_REQUIRED',
+        'Current password is required',
+        400
+      );
+    }
+
+    validateNewPassword(newPassword);
+
+    if (currentPassword === newPassword) {
+      throw boundaryError(
+        'LOCAL_PASSWORD_UNCHANGED',
+        'New password must be different from the current password',
+        400
+      );
+    }
+
+    const result = await repository.changePassword({
+      identityId: claims.identity_id,
+      currentPassword,
+      newPassword,
+      currentSessionId: claims.session_id,
+    });
+
+    if (!result) {
+      throw boundaryError(
+        'LOCAL_PASSWORD_CURRENT_INVALID',
+        'Current password is incorrect',
+        400
+      );
+    }
+
+    return Object.freeze({
+      success: true,
+      password_changed_at: new Date(
+        result.password_changed_at
+      ).toISOString(),
+      revoked_session_count: Number(
+        result.revoked_session_count || 0
+      ),
+    });
+  }
+
   async function logout(accessToken) {
     const token = clean(accessToken);
     if (!token) {
@@ -165,6 +263,290 @@ function createLocalIdentityService(repository, options = {}) {
     await repository.revokeSession(sha256(token));
     return Object.freeze({ success: true });
   }
+
+
+  async function loginMobile(
+    input = {},
+    requestMetadata = {}
+  ) {
+    const platform = clean(
+      input.device_platform ??
+      input.devicePlatform ??
+      'ANDROID'
+    ).toUpperCase();
+
+    if (
+      platform !== 'ANDROID' &&
+      platform !== 'IOS'
+    ) {
+      throw boundaryError(
+        'MOBILE_DEVICE_PLATFORM_INVALID',
+        'Mobile device platform must be ANDROID or IOS',
+        400
+      );
+    }
+
+    const deviceLabel =
+      clean(
+        input.device_label ??
+        input.deviceLabel
+      ).slice(0, 120) || null;
+
+    const loginResult =
+      await login(input, requestMetadata);
+
+    const deviceToken =
+      crypto.randomBytes(32).toString('base64url');
+
+    const deviceExpiresAt =
+      new Date(
+        Date.now() +
+        deviceTtlSeconds * 1000
+      );
+
+    try {
+      const deviceSession =
+        await repository.createDeviceSession({
+          workspaceId:
+            loginResult.workspace.workspace_id,
+
+          workspaceMemberId:
+            loginResult.membership
+              .workspace_member_id,
+
+          identityId:
+            loginResult.identity.identity_id,
+
+          tokenHash:
+            sha256(deviceToken),
+
+          expiresAt:
+            deviceExpiresAt,
+
+          devicePlatform:
+            platform,
+
+          deviceLabel,
+
+          userAgentHash:
+            requestMetadata.userAgent
+              ? sha256(
+                  requestMetadata.userAgent
+                )
+              : null,
+
+          clientIpHash:
+            requestMetadata.clientIp
+              ? sha256(
+                  requestMetadata.clientIp
+                )
+              : null,
+        });
+
+      return Object.freeze({
+        ...loginResult,
+
+        device_token:
+          deviceToken,
+
+        device_expires_at:
+          new Date(
+            deviceSession.expires_at
+          ).toISOString(),
+      });
+    } catch (error) {
+      try {
+        await repository.revokeSession(
+          sha256(loginResult.access_token)
+        );
+      } catch {
+        // Best-effort cleanup if device-session
+        // creation fails after access login.
+      }
+
+      throw error;
+    }
+  }
+
+
+  async function refreshMobile(
+    input = {},
+    requestMetadata = {}
+  ) {
+    const deviceToken = clean(
+      input.device_token ??
+      input.deviceToken
+    );
+
+    if (!deviceToken) {
+      throw boundaryError(
+        'MOBILE_DEVICE_TOKEN_REQUIRED',
+        'Mobile device token is required',
+        401
+      );
+    }
+
+    const row =
+      await repository.findActiveDeviceSession(
+        sha256(deviceToken)
+      );
+
+    if (
+      !row ||
+      row.identity_status !== 'ACTIVE' ||
+      row.workspace_status !== 'ACTIVE' ||
+      row.member_status !== 'ACTIVE' ||
+      row.credential_status !== 'ACTIVE'
+    ) {
+      throw boundaryError(
+        'MOBILE_DEVICE_SESSION_INVALID',
+        'Mobile device session is invalid or expired',
+        401
+      );
+    }
+
+    const nextDeviceExpiry =
+      new Date(
+        Date.now() +
+        deviceTtlSeconds * 1000
+      );
+
+    const touched =
+      await repository.touchDeviceSession({
+        deviceSessionId:
+          row.device_session_id,
+
+        expiresAt:
+          nextDeviceExpiry,
+      });
+
+    if (!touched) {
+      throw boundaryError(
+        'MOBILE_DEVICE_SESSION_INVALID',
+        'Mobile device session is invalid or expired',
+        401
+      );
+    }
+
+    const accessToken =
+      crypto.randomBytes(32).toString('base64url');
+
+    const accessExpiresAt =
+      new Date(
+        Date.now() +
+        ttlSeconds * 1000
+      );
+
+    const session =
+      await repository.createSession({
+        workspaceId:
+          row.workspace_id,
+
+        workspaceMemberId:
+          row.workspace_member_id,
+
+        identityId:
+          row.identity_id,
+
+        tokenHash:
+          sha256(accessToken),
+
+        expiresAt:
+          accessExpiresAt,
+
+        userAgentHash:
+          requestMetadata.userAgent
+            ? sha256(
+                requestMetadata.userAgent
+              )
+            : null,
+
+        clientIpHash:
+          requestMetadata.clientIp
+            ? sha256(
+                requestMetadata.clientIp
+              )
+            : null,
+      });
+
+    return Object.freeze({
+      access_token:
+        accessToken,
+
+      token_type:
+        'Bearer',
+
+      expires_at:
+        new Date(
+          session.expires_at
+        ).toISOString(),
+
+      session_id:
+        session.session_id,
+
+      device_expires_at:
+        new Date(
+          touched.expires_at
+        ).toISOString(),
+
+      identity: Object.freeze({
+        identity_id:
+          row.identity_id,
+
+        display_name:
+          row.display_name,
+
+        primary_email:
+          row.primary_email || null,
+      }),
+
+      workspace: Object.freeze({
+        workspace_id:
+          row.workspace_id,
+
+        workspace_code:
+          row.workspace_code,
+
+        workspace_name:
+          row.workspace_name,
+      }),
+
+      membership: Object.freeze({
+        workspace_member_id:
+          row.workspace_member_id,
+
+        member_role:
+          row.member_role,
+      }),
+    });
+  }
+
+
+  async function logoutMobile(
+    input = {}
+  ) {
+    const deviceToken = clean(
+      input.device_token ??
+      input.deviceToken
+    );
+
+    if (!deviceToken) {
+      throw boundaryError(
+        'MOBILE_DEVICE_TOKEN_REQUIRED',
+        'Mobile device token is required',
+        401
+      );
+    }
+
+    await repository.revokeDeviceSession(
+      sha256(deviceToken)
+    );
+
+    return Object.freeze({
+      success: true,
+    });
+  }
+
 
   async function searchUsers(input = {}) {
     const workspaceId = clean(input.workspace_id);
@@ -195,7 +577,11 @@ function createLocalIdentityService(repository, options = {}) {
 
   return Object.freeze({
     login,
+    loginMobile,
+    refreshMobile,
+    logoutMobile,
     verifyAccessToken,
+    changePassword,
     logout,
     searchUsers,
   });
@@ -204,6 +590,8 @@ function createLocalIdentityService(repository, options = {}) {
 module.exports = {
   DEFAULT_SESSION_TTL_SECONDS,
   MAX_SESSION_TTL_SECONDS,
+  DEFAULT_DEVICE_SESSION_TTL_SECONDS,
+  MAX_DEVICE_SESSION_TTL_SECONDS,
   sha256,
   createLocalIdentityService,
 };

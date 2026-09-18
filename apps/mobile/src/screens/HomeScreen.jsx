@@ -1,6 +1,7 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -11,6 +12,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors } from '../theme/colors';
+
+const brandMark = require('../assets/brand/akshaconnect-mark.png');
 
 function initials(name = '') {
   return (
@@ -23,12 +26,21 @@ function initials(name = '') {
   );
 }
 
+function realtimeLabel(status) {
+  if (status === 'connected') return 'Live';
+  if (status === 'connecting') return 'Connecting';
+  if (status === 'reconnecting') return 'Reconnecting';
+  return 'Offline';
+}
+
 export default function HomeScreen({
   session,
   serverUrl,
   channels,
   directMessages,
+  unreadCounts,
   refreshing,
+  realtimeStatus,
   onRefresh,
   onLogout,
   onOpenConversation,
@@ -36,196 +48,242 @@ export default function HomeScreen({
   const identity = session?.identity || {};
   const workspace = session?.workspace || {};
   const membership = session?.membership || {};
+  const [activeTab, setActiveTab] = useState('chats');
 
-  const summary = useMemo(
-    () => ({
-      channels: channels.length,
-      directMessages: directMessages.length,
-    }),
-    [channels.length, directMessages.length]
-  );
+  const unreadSummary = useMemo(() => {
+    const channelUnread = channels.reduce(
+      (total, channel) =>
+        total + Number(unreadCounts?.[channel.conversation_id] || 0),
+      0
+    );
+
+    const directMessageUnread = directMessages.reduce(
+      (total, dm) =>
+        total + Number(unreadCounts?.[dm.conversation_id] || 0),
+      0
+    );
+
+    return {
+      channels: channelUnread,
+      directMessages: directMessageUnread,
+    };
+  }, [channels, directMessages, unreadCounts]);
+
+  const live = realtimeStatus === 'connected';
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <View style={styles.header}>
-        <View style={styles.headerBrand}>
-          <View style={styles.brandMark}>
-            <Text style={styles.brandMarkText}>A</Text>
-          </View>
-          <View style={styles.headerCopy}>
-            <Text style={styles.productName}>AkshaConnect</Text>
+      <View style={styles.topBar}>
+        <View style={styles.brandRow}>
+          <Image source={brandMark} style={styles.brandLogo} resizeMode="contain" />
+          <View style={styles.brandTextWrap}>
+            <Text style={styles.brandText}>
+              <Text style={styles.brandAksha}>Aksha</Text>
+              <Text style={styles.brandConnect}>Connect</Text>
+            </Text>
             <Text style={styles.workspaceName} numberOfLines={1}>
-              {workspace.workspace_name ||
-                workspace.workspace_code ||
-                'Workspace'}
+              {workspace.workspace_name || workspace.workspace_code || 'Workspace'}
             </Text>
           </View>
         </View>
 
-        <Pressable
-          accessibilityRole="button"
-          onPress={onLogout}
-          style={({ pressed }) => [
-            styles.logoutButton,
-            pressed ? styles.pressed : null,
-          ]}
-        >
-          <Text style={styles.logoutText}>Sign out</Text>
-        </Pressable>
+        <View style={[styles.livePill, live ? styles.livePillOn : styles.livePillOff]}>
+          <View style={[styles.liveDot, live ? styles.liveDotOn : styles.liveDotOff]} />
+          <Text style={[styles.liveText, live ? styles.liveTextOn : styles.liveTextOff]}>
+            {realtimeLabel(realtimeStatus)}
+          </Text>
+        </View>
       </View>
 
-      <ScrollView
-        contentContainerStyle={styles.page}
-        refreshControl={
-          <RefreshControl
-            refreshing={Boolean(refreshing)}
-            onRefresh={onRefresh}
-            tintColor={colors.accent}
-          />
-        }
-      >
-        <View style={styles.profileCard}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {initials(identity.display_name)}
-            </Text>
-          </View>
-          <View style={styles.profileCopy}>
+      <View style={styles.tabs}>
+        <TopTab
+          label="Chats"
+          active={activeTab === 'chats'}
+          unread={unreadSummary.directMessages}
+          onPress={() => setActiveTab('chats')}
+        />
+        <TopTab
+          label="Channels"
+          active={activeTab === 'channels'}
+          unread={unreadSummary.channels}
+          onPress={() => setActiveTab('channels')}
+        />
+        <TopTab
+          label="Profile"
+          active={activeTab === 'profile'}
+          onPress={() => setActiveTab('profile')}
+        />
+      </View>
+
+      {activeTab === 'profile' ? (
+        <ScrollView
+          contentContainerStyle={styles.profilePage}
+          refreshControl={
+            <RefreshControl
+              refreshing={Boolean(refreshing)}
+              onRefresh={onRefresh}
+              tintColor={colors.teal}
+            />
+          }
+        >
+          <View style={styles.profileHero}>
+            <View style={styles.profileAvatar}>
+              <Text style={styles.profileAvatarText}>
+                {initials(identity.display_name)}
+              </Text>
+            </View>
             <Text style={styles.profileName}>
               {identity.display_name || 'AkshaConnect member'}
             </Text>
-            <Text style={styles.profileMeta}>
+            <Text style={styles.profileEmail}>
               {identity.primary_email || membership.member_role || 'Member'}
             </Text>
           </View>
-          <View style={styles.connectedPill}>
-            <View style={styles.connectedDot} />
-            <Text style={styles.connectedText}>Signed in</Text>
+
+          <InfoCard label="WORKSPACE" value={workspace.workspace_name || workspace.workspace_code || 'Workspace'} />
+          <InfoCard label="SERVER" value={serverUrl} />
+          <InfoCard label="CONNECTION" value={realtimeLabel(realtimeStatus)} />
+
+          <Pressable
+            accessibilityRole="button"
+            onPress={onLogout}
+            style={({ pressed }) => [
+              styles.signOutButton,
+              pressed ? styles.pressed : null,
+            ]}
+          >
+            <Text style={styles.signOutText}>Sign out</Text>
+          </Pressable>
+        </ScrollView>
+      ) : (
+        <ScrollView
+          contentContainerStyle={styles.page}
+          refreshControl={
+            <RefreshControl
+              refreshing={Boolean(refreshing)}
+              onRefresh={onRefresh}
+              tintColor={colors.teal}
+            />
+          }
+        >
+          <View style={styles.sectionIntro}>
+            <View>
+              <Text style={styles.sectionTitle}>
+                {activeTab === 'chats' ? 'Direct messages' : 'Channels'}
+              </Text>
+              <Text style={styles.sectionSubtitle}>
+                {activeTab === 'chats'
+                  ? 'Your conversations'
+                  : 'Team spaces'}
+              </Text>
+            </View>
+
+            {refreshing ? (
+              <ActivityIndicator color={colors.teal} />
+            ) : null}
           </View>
-        </View>
 
-        <View style={styles.serverCard}>
-          <Text style={styles.serverLabel}>SERVER</Text>
-          <Text style={styles.serverValue} numberOfLines={2}>
-            {serverUrl}
-          </Text>
-        </View>
+          <View style={styles.listCard}>
+            {activeTab === 'chats' ? (
+              directMessages.length === 0 ? (
+                <EmptyState text="No direct messages yet." />
+              ) : (
+                directMessages.map((dm, index) => (
+                  <ConversationRow
+                    key={dm.conversation_id}
+                    first={index === 0}
+                    avatar
+                    icon={initials(dm.other_display_name)}
+                    title={dm.other_display_name || 'Member'}
+                    subtitle={dm.other_primary_email || 'Direct message'}
+                    unreadCount={unreadCounts?.[dm.conversation_id] || 0}
+                    onPress={() =>
+                      onOpenConversation({
+                        kind: 'dm',
+                        conversationId: dm.conversation_id,
+                        title: dm.other_display_name || 'Member',
+                        subtitle: dm.other_primary_email || 'Direct message',
+                      })
+                    }
+                  />
+                ))
+              )
+            ) : channels.length === 0 ? (
+              <EmptyState text="No channels available yet." />
+            ) : (
+              channels.map((channel, index) => (
+                <ConversationRow
+                  key={channel.channel_id || channel.conversation_id}
+                  first={index === 0}
+                  icon="#"
+                  title={channel.channel_name || 'Channel'}
+                  subtitle={
+                    channel.visibility === 'PRIVATE'
+                      ? 'Private channel'
+                      : 'Public channel'
+                  }
+                  unreadCount={unreadCounts?.[channel.conversation_id] || 0}
+                  onPress={() =>
+                    onOpenConversation({
+                      kind: 'channel',
+                      conversationId: channel.conversation_id,
+                      title: channel.channel_name || 'Channel',
+                      subtitle:
+                        channel.visibility === 'PRIVATE'
+                          ? 'Private channel'
+                          : 'Public channel',
+                    })
+                  }
+                />
+              ))
+            )}
+          </View>
 
-        <View style={styles.statsRow}>
-          <StatCard value={summary.channels} label="Channels" />
-          <StatCard
-            value={summary.directMessages}
-            label="Direct messages"
-          />
-        </View>
-
-        <SectionHeader title="Channels" count={channels.length} />
-
-        <View style={styles.listCard}>
-          {channels.length === 0 ? (
-            <EmptyState text="No channels available yet." />
-          ) : (
-            channels.map((channel, index) => (
-              <Row
-                key={channel.channel_id || channel.conversation_id}
-                first={index === 0}
-                icon="#"
-                title={channel.channel_name || 'Channel'}
-                subtitle={
-                  channel.visibility === 'PRIVATE'
-                    ? 'Private channel'
-                    : 'Public channel'
-                }
-                onPress={() =>
-                  onOpenConversation({
-                    kind: 'channel',
-                    conversationId: channel.conversation_id,
-                    title: channel.channel_name || 'Channel',
-                    subtitle:
-                      channel.visibility === 'PRIVATE'
-                        ? 'Private channel'
-                        : 'Public channel',
-                  })
-                }
-              />
-            ))
-          )}
-        </View>
-
-        <SectionHeader
-          title="Direct messages"
-          count={directMessages.length}
-        />
-
-        <View style={styles.listCard}>
-          {directMessages.length === 0 ? (
-            <EmptyState text="No direct messages yet." />
-          ) : (
-            directMessages.map((dm, index) => (
-              <Row
-                key={dm.conversation_id}
-                first={index === 0}
-                icon={initials(dm.other_display_name)}
-                title={dm.other_display_name || 'Member'}
-                subtitle={dm.other_primary_email || 'Direct message'}
-                avatar
-                onPress={() =>
-                  onOpenConversation({
-                    kind: 'dm',
-                    conversationId: dm.conversation_id,
-                    title: dm.other_display_name || 'Member',
-                    subtitle:
-                      dm.other_primary_email || 'Direct message',
-                  })
-                }
-              />
-            ))
-          )}
-        </View>
-
-        {refreshing ? (
-          <View style={styles.refreshing}>
-            <ActivityIndicator color={colors.accent} />
-            <Text style={styles.refreshingText}>
-              Refreshing workspace…
+          <View style={styles.brandFooter}>
+            <Text style={styles.brandFooterText}>
+              Simple  •  Secure  •  Connected
             </Text>
           </View>
-        ) : null}
-
-        <Text style={styles.phaseNote}>
-          Tap a channel or direct message to open durable message history.
-        </Text>
-      </ScrollView>
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
 
-function StatCard({ value, label }) {
+function TopTab({ label, active, unread = 0, onPress }) {
   return (
-    <View style={styles.statCard}>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function SectionHeader({ title, count }) {
-  return (
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      <View style={styles.countPill}>
-        <Text style={styles.countText}>{count}</Text>
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.tab,
+        pressed ? styles.pressed : null,
+      ]}
+    >
+      <View style={styles.tabLabelRow}>
+        <Text style={[styles.tabText, active ? styles.tabTextActive : null]}>
+          {label}
+        </Text>
+        {unread > 0 ? (
+          <View style={styles.sectionUnreadPill}>
+            <Text style={styles.sectionUnreadText}>
+              {Math.min(99, Number(unread || 0))}
+            </Text>
+          </View>
+        ) : null}
       </View>
-    </View>
+      <View style={[styles.tabIndicator, active ? styles.tabIndicatorActive : null]} />
+    </Pressable>
   );
 }
 
-function Row({
+function ConversationRow({
   first,
   icon,
   title,
   subtitle,
   avatar = false,
+  unreadCount = 0,
   onPress,
 }) {
   return (
@@ -243,6 +301,7 @@ function Row({
           {icon}
         </Text>
       </View>
+
       <View style={styles.rowCopy}>
         <Text style={styles.rowTitle} numberOfLines={1}>
           {title}
@@ -251,6 +310,15 @@ function Row({
           {subtitle}
         </Text>
       </View>
+
+      {unreadCount > 0 ? (
+        <View style={styles.rowUnreadPill}>
+          <Text style={styles.rowUnreadText}>
+            {Math.min(99, Number(unreadCount || 0))}
+          </Text>
+        </View>
+      ) : null}
+
       <Text style={styles.chevron}>›</Text>
     </Pressable>
   );
@@ -259,7 +327,17 @@ function Row({
 function EmptyState({ text }) {
   return (
     <View style={styles.emptyState}>
+      <Image source={brandMark} style={styles.emptyLogo} resizeMode="contain" />
       <Text style={styles.emptyText}>{text}</Text>
+    </View>
+  );
+}
+
+function InfoCard({ label, value }) {
+  return (
+    <View style={styles.infoCard}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      <Text style={styles.infoValue}>{value || '—'}</Text>
     </View>
   );
 }
@@ -269,276 +347,322 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.shell,
   },
-  header: {
+  topBar: {
     minHeight: 72,
     paddingHorizontal: 18,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#263247',
+    backgroundColor: colors.navy,
   },
-  headerBrand: {
+  brandRow: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  brandMark: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.accent,
-    marginRight: 11,
+  brandLogo: {
+    width: 44,
+    height: 44,
+    marginRight: 10,
   },
-  brandMarkText: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  headerCopy: {
+  brandTextWrap: {
     flex: 1,
   },
-  productName: {
+  brandText: {
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: -0.4,
+  },
+  brandAksha: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '800',
+  },
+  brandConnect: {
+    color: colors.teal,
   },
   workspaceName: {
     marginTop: 1,
-    color: '#A8B3C7',
-    fontSize: 12,
+    color: '#BCD0E2',
+    fontSize: 10,
+    fontWeight: '600',
   },
-  logoutButton: {
-    marginLeft: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 11,
+  livePill: {
+    marginLeft: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  livePillOn: {
+    backgroundColor: '#0E4C4A',
+  },
+  livePillOff: {
+    backgroundColor: '#4A3823',
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    marginRight: 5,
+    borderRadius: 99,
+  },
+  liveDotOn: {
+    backgroundColor: '#50E3C2',
+  },
+  liveDotOff: {
+    backgroundColor: colors.orange,
+  },
+  liveText: {
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  liveTextOn: {
+    color: '#CBFFF3',
+  },
+  liveTextOff: {
+    color: '#FFE2BC',
+  },
+  tabs: {
+    height: 54,
+    flexDirection: 'row',
+    backgroundColor: colors.navy,
+  },
+  tab: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  tabLabelRow: {
+    flex: 1,
+    paddingTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabText: {
+    color: '#B9C9D9',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  tabTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+  sectionUnreadPill: {
+    minWidth: 20,
+    height: 20,
+    marginLeft: 6,
+    paddingHorizontal: 5,
     borderRadius: 10,
-    backgroundColor: '#1C2739',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.orange,
   },
-  logoutText: {
-    color: '#DCE5F3',
-    fontSize: 12,
-    fontWeight: '700',
+  sectionUnreadText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '900',
   },
-  pressed: {
-    opacity: 0.8,
+  tabIndicator: {
+    height: 3,
+    backgroundColor: 'transparent',
+  },
+  tabIndicatorActive: {
+    backgroundColor: colors.teal,
   },
   page: {
-    padding: 16,
-    paddingBottom: 36,
+    paddingBottom: 32,
   },
-  profileCard: {
-    padding: 16,
-    borderRadius: 20,
-    backgroundColor: colors.surface,
+  sectionIntro: {
+    minHeight: 72,
+    paddingHorizontal: 18,
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: '#263C68',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: {
-    color: '#D8E6FF',
-    fontSize: 17,
-    fontWeight: '800',
-  },
-  profileCopy: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  profileName: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  profileMeta: {
-    marginTop: 3,
-    color: colors.textSecondary,
-    fontSize: 12,
-  },
-  connectedPill: {
-    marginLeft: 10,
-    paddingVertical: 6,
-    paddingHorizontal: 9,
-    borderRadius: 999,
-    backgroundColor: '#173628',
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  connectedDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 999,
-    marginRight: 6,
-    backgroundColor: colors.success,
-  },
-  connectedText: {
-    color: '#A7F3C7',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  serverCard: {
-    marginTop: 12,
-    padding: 14,
-    borderRadius: 16,
-    backgroundColor: '#131E2E',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  serverLabel: {
-    color: colors.textMuted,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  serverValue: {
-    marginTop: 5,
-    color: '#D8E3F2',
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  statsRow: {
-    marginTop: 12,
-    flexDirection: 'row',
-    gap: 12,
-  },
-  statCard: {
-    flex: 1,
-    padding: 16,
-    borderRadius: 18,
-    backgroundColor: colors.surface,
-  },
-  statValue: {
-    color: '#FFFFFF',
-    fontSize: 25,
-    fontWeight: '800',
-  },
-  statLabel: {
-    marginTop: 3,
-    color: colors.textSecondary,
-    fontSize: 12,
-  },
-  sectionHeader: {
-    marginTop: 24,
-    marginBottom: 9,
-    flexDirection: 'row',
-    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
   sectionTitle: {
-    color: '#FFFFFF',
-    fontSize: 17,
-    fontWeight: '800',
+    color: colors.navy,
+    fontSize: 18,
+    fontWeight: '900',
   },
-  countPill: {
-    marginLeft: 8,
-    minWidth: 24,
-    height: 24,
-    borderRadius: 12,
-    paddingHorizontal: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#263247',
-  },
-  countText: {
-    color: '#C9D4E5',
+  sectionSubtitle: {
+    marginTop: 2,
+    color: colors.textMuted,
     fontSize: 11,
-    fontWeight: '800',
   },
   listCard: {
-    overflow: 'hidden',
-    borderRadius: 18,
-    backgroundColor: colors.surface,
+    backgroundColor: '#FFFFFF',
   },
   row: {
-    minHeight: 67,
-    paddingHorizontal: 14,
+    minHeight: 74,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
+    backgroundColor: '#FFFFFF',
   },
   firstRow: {
     borderTopWidth: 0,
   },
   rowPressed: {
-    backgroundColor: '#202D43',
-  },
-  rowIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 11,
-    backgroundColor: '#1A2840',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rowIconText: {
-    color: '#91A9D1',
-    fontSize: 18,
-    fontWeight: '800',
+    backgroundColor: '#F0F7F8',
   },
   rowAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: '#263C68',
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#E6F7F4',
   },
   rowAvatarText: {
-    color: '#D8E6FF',
-    fontSize: 11,
-    fontWeight: '800',
+    color: colors.navy,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  rowIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.teal,
+  },
+  rowIconText: {
+    color: '#FFFFFF',
+    fontSize: 19,
+    fontWeight: '900',
   },
   rowCopy: {
     flex: 1,
-    marginLeft: 12,
+    marginLeft: 13,
   },
   rowTitle: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '700',
+    color: colors.navy,
+    fontSize: 15,
+    fontWeight: '800',
   },
   rowSubtitle: {
     marginTop: 3,
-    color: colors.textMuted,
-    fontSize: 11,
-  },
-  chevron: {
-    marginLeft: 8,
-    color: '#6F829D',
-    fontSize: 24,
-  },
-  emptyState: {
-    paddingVertical: 22,
-    paddingHorizontal: 15,
-  },
-  emptyText: {
-    color: colors.textMuted,
-    fontSize: 13,
-  },
-  refreshing: {
-    marginTop: 18,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  refreshingText: {
-    marginLeft: 8,
     color: colors.textSecondary,
     fontSize: 12,
   },
-  phaseNote: {
-    marginTop: 24,
-    color: '#64758E',
+  rowUnreadPill: {
+    minWidth: 25,
+    height: 25,
+    paddingHorizontal: 7,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.orange,
+  },
+  rowUnreadText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  chevron: {
+    marginLeft: 9,
+    color: '#9AAFC2',
+    fontSize: 24,
+  },
+  profilePage: {
+    padding: 18,
+    paddingBottom: 36,
+  },
+  profileHero: {
+    alignItems: 'center',
+    paddingVertical: 24,
+    marginBottom: 12,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+  },
+  profileAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.navy,
+  },
+  profileAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '900',
+  },
+  profileName: {
+    marginTop: 12,
+    color: colors.navy,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  profileEmail: {
+    marginTop: 4,
+    color: colors.textSecondary,
+    fontSize: 12,
+  },
+  infoCard: {
+    marginTop: 10,
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#FFFFFF',
+  },
+  infoLabel: {
+    color: colors.teal,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  infoValue: {
+    marginTop: 5,
+    color: colors.navy,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  signOutButton: {
+    height: 50,
+    marginTop: 18,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.orange,
+  },
+  signOutText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  emptyState: {
+    minHeight: 230,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  emptyLogo: {
+    width: 72,
+    height: 72,
+    opacity: 0.22,
+  },
+  emptyText: {
+    marginTop: 8,
+    color: colors.textMuted,
+    fontSize: 13,
+  },
+  brandFooter: {
+    alignItems: 'center',
+    paddingVertical: 28,
+  },
+  brandFooterText: {
+    color: '#66809A',
     fontSize: 11,
-    lineHeight: 16,
-    textAlign: 'center',
+    fontWeight: '600',
+    letterSpacing: 1.1,
+  },
+  pressed: {
+    opacity: 0.78,
   },
 });

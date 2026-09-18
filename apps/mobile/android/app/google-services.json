@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "152352825846",
+    "project_id": "akshaerp-akshaconnect",
+    "storage_bucket": "akshaerp-akshaconnect.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:152352825846:android:6bda8cd70b97587778e7d7",
+        "android_client_info": {
+          "package_name": "com.akshaerp.akshaconnect"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDInNYCsp0yll1BA5m2y3Pxlm2eaLYUT94"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -58,7 +58,7 @@ test('P1-V8A V2 sends idempotent text without fabricating delivery receipts', ()
   assert.match(screen, /sendMessage/);
   assert.match(screen, /makeClientMessageId/);
   assert.match(screen, /MAX_MESSAGE_CHARS = 8000/);
-  assert.match(screen, />Send</);
+  assert.match(screen, />\s*Send\s*</);
 
   const forbiddenReceiptPresentation = [
     />\s*Delivered\s*</i,
@@ -75,7 +75,7 @@ test('P1-V8A V2 sends idempotent text without fabricating delivery receipts', ()
   }
 });
 
-test('P1-V8A V2 remains intentionally pre-realtime and pre-attachment interaction', () => {
+test('P1-V8A durable messaging remains pre-attachment and avoids plaintext session persistence', () => {
   const app = read('apps/mobile/App.jsx');
   const conversation = read(
     'apps/mobile/src/screens/ConversationScreen.jsx'
@@ -83,7 +83,6 @@ test('P1-V8A V2 remains intentionally pre-realtime and pre-attachment interactio
 
   const combined = `${app}\n${conversation}`;
 
-  assert.doesNotMatch(combined, /new WebSocket|createRealtimeClient/);
   assert.doesNotMatch(
     combined,
     /DocumentPicker|ImagePicker|launchImageLibrary|uploadAttachment/

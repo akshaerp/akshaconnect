@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -14,6 +15,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors } from '../theme/colors';
 
+const brandMark = require('../assets/brand/akshaconnect-mark.png');
+
 const DEV_DEFAULTS = __DEV__
   ? {
       serverUrl: 'http://127.0.0.1:4100',
@@ -22,25 +25,17 @@ const DEV_DEFAULTS = __DEV__
       password: 'AkshaConnect-Dev-Only-2026!',
     }
   : {
-      serverUrl: '',
+      serverUrl: 'https://connect.akshaerp.com',
       workspaceCode: '',
       loginName: '',
       password: '',
     };
 
 export default function LoginScreen({ busy = false, onLogin }) {
-  const [serverUrl, setServerUrl] = useState(
-    DEV_DEFAULTS.serverUrl
-  );
-  const [workspaceCode, setWorkspaceCode] = useState(
-    DEV_DEFAULTS.workspaceCode
-  );
-  const [loginName, setLoginName] = useState(
-    DEV_DEFAULTS.loginName
-  );
-  const [password, setPassword] = useState(
-    DEV_DEFAULTS.password
-  );
+  const [serverUrl, setServerUrl] = useState(DEV_DEFAULTS.serverUrl);
+  const [workspaceCode, setWorkspaceCode] = useState(DEV_DEFAULTS.workspaceCode);
+  const [loginName, setLoginName] = useState(DEV_DEFAULTS.loginName);
+  const [password, setPassword] = useState(DEV_DEFAULTS.password);
   const [error, setError] = useState('');
 
   async function submit() {
@@ -56,59 +51,49 @@ export default function LoginScreen({ busy = false, onLogin }) {
         password,
       });
     } catch (requestError) {
-      setError(
-        requestError?.message || 'Sign in failed'
-      );
+      setError(requestError?.message || 'Sign in failed');
     }
   }
 
   return (
-    <SafeAreaView
-      style={styles.safeArea}
-      edges={['top', 'bottom']}
-    >
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={
           Platform.OS === 'ios'
             ? 'padding'
-            : undefined
+            : 'height'
         }
+        keyboardVerticalOffset={0}
       >
         <ScrollView
           contentContainerStyle={styles.page}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={
+            Platform.OS === 'ios'
+              ? 'interactive'
+              : 'on-drag'
+          }
         >
-          <View style={styles.hero}>
-            <View style={styles.brandMark}>
-              <Text style={styles.brandMarkText}>
-                A
-              </Text>
-            </View>
+          <View style={styles.brandArea}>
+            <Image source={brandMark} style={styles.brandLogo} resizeMode="contain" />
 
-            <View style={styles.brandCopy}>
-              <Text style={styles.brandName}>
-                AkshaConnect
-              </Text>
+            <Text style={styles.brandName}>
+              <Text style={styles.brandAksha}>Aksha</Text>
+              <Text style={styles.brandConnect}>Connect</Text>
+            </Text>
 
-              <Text style={styles.brandTagline}>
-                Work together. Stay connected.
-              </Text>
-            </View>
+            <Text style={styles.brandTagline}>
+              PEOPLE  â€¢  TEAMS  â€¢  TOGETHER
+            </Text>
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.eyebrow}>
-              STANDALONE WORKSPACE
-            </Text>
-
-            <Text style={styles.title}>
-              Sign in to your team
-            </Text>
-
+            <View style={styles.cardAccent} />
+            <Text style={styles.eyebrow}>STANDALONE WORKSPACE</Text>
+            <Text style={styles.title}>Sign in to your team</Text>
             <Text style={styles.subtitle}>
-              Connect to your AkshaConnect server and
-              use your workspace account.
+              Connect to your AkshaConnect server and use your workspace account.
             </Text>
 
             <Field
@@ -152,9 +137,7 @@ export default function LoginScreen({ busy = false, onLogin }) {
 
             {error ? (
               <View style={styles.errorBox}>
-                <Text style={styles.errorText}>
-                  {error}
-                </Text>
+                <Text style={styles.errorText}>{error}</Text>
               </View>
             ) : null}
 
@@ -163,20 +146,14 @@ export default function LoginScreen({ busy = false, onLogin }) {
               onPress={submit}
               style={({ pressed }) => [
                 styles.button,
-                pressed && !busy
-                  ? styles.buttonPressed
-                  : null,
-                busy
-                  ? styles.buttonDisabled
-                  : null,
+                pressed && !busy ? styles.buttonPressed : null,
+                busy ? styles.buttonDisabled : null,
               ]}
             >
               {busy ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Text style={styles.buttonText}>
-                  Sign in
-                </Text>
+                <Text style={styles.buttonText}>Sign in</Text>
               )}
             </Pressable>
 
@@ -185,38 +162,26 @@ export default function LoginScreen({ busy = false, onLogin }) {
                 Development credentials prefilled
               </Text>
             ) : null}
-
-            <Text style={styles.footnote}>
-              P1-V8A native mobile foundation
-            </Text>
           </View>
+
+          <Text style={styles.footer}>
+            Simple  â€¢  Secure  â€¢  Connected
+          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-function Field({
-  label,
-  ...inputProps
-}) {
+function Field({ label, ...inputProps }) {
   return (
     <View style={styles.field}>
-      <Text style={styles.label}>
-        {label}
-      </Text>
-
+      <Text style={styles.label}>{label}</Text>
       <TextInput
         {...inputProps}
         style={styles.input}
-        placeholderTextColor={
-          colors.textMuted
-        }
-        returnKeyType={
-          label === 'Password'
-            ? 'done'
-            : 'next'
-        }
+        placeholderTextColor={colors.textMuted}
+        returnKeyType={label === 'Password' ? 'done' : 'next'}
       />
     </View>
   );
@@ -226,165 +191,146 @@ const styles = StyleSheet.create({
   flex: {
     flex: 1,
   },
-
   safeArea: {
     flex: 1,
     backgroundColor: colors.shell,
   },
-
   page: {
     flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: 22,
+    paddingHorizontal: 20,
     paddingVertical: 28,
   },
-
-  hero: {
-    flexDirection: 'row',
+  brandArea: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 22,
   },
-
-  brandMark: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.accent,
-    marginRight: 14,
+  brandLogo: {
+    width: 112,
+    height: 112,
   },
-
-  brandMarkText: {
-    color: '#FFFFFF',
-    fontSize: 27,
-    fontWeight: '800',
-  },
-
-  brandCopy: {
-    flex: 1,
-  },
-
   brandName: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '800',
-    letterSpacing: -0.4,
+    marginTop: 4,
+    fontSize: 31,
+    fontWeight: '900',
+    letterSpacing: -1,
   },
-
+  brandAksha: {
+    color: colors.navy,
+  },
+  brandConnect: {
+    color: colors.teal,
+  },
   brandTagline: {
-    marginTop: 2,
-    color: '#A8B3C7',
-    fontSize: 13,
+    marginTop: 5,
+    color: colors.navy,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 2.2,
   },
-
   card: {
-    borderRadius: 24,
-    backgroundColor: colors.surface,
+    overflow: 'hidden',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,
-    paddingVertical: 24,
-    shadowColor: '#000000',
-    shadowOpacity: 0.24,
-    shadowRadius: 24,
-    elevation: 10,
+    paddingBottom: 22,
+    elevation: 5,
+    shadowColor: '#0B2D5B',
+    shadowOpacity: 0.08,
+    shadowRadius: 20,
   },
-
+  cardAccent: {
+    height: 5,
+    marginHorizontal: -20,
+    marginBottom: 20,
+    backgroundColor: colors.teal,
+  },
   eyebrow: {
-    color: colors.accent,
-    fontSize: 11,
-    fontWeight: '800',
+    color: colors.orange,
+    fontSize: 10,
+    fontWeight: '900',
     letterSpacing: 1.2,
   },
-
   title: {
-    marginTop: 8,
-    color: colors.text,
-    fontSize: 28,
-    lineHeight: 34,
-    fontWeight: '800',
-    letterSpacing: -0.5,
+    marginTop: 7,
+    color: colors.navy,
+    fontSize: 25,
+    fontWeight: '900',
+    letterSpacing: -0.4,
   },
-
   subtitle: {
-    marginTop: 8,
-    marginBottom: 20,
-    color: colors.textSecondary,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-
-  field: {
-    marginTop: 14,
-  },
-
-  label: {
-    marginBottom: 7,
+    marginTop: 7,
+    marginBottom: 8,
     color: colors.textSecondary,
     fontSize: 13,
-    fontWeight: '700',
+    lineHeight: 19,
   },
-
+  field: {
+    marginTop: 13,
+  },
+  label: {
+    marginBottom: 6,
+    color: colors.navy,
+    fontSize: 12,
+    fontWeight: '800',
+  },
   input: {
-    height: 50,
+    height: 49,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 13,
     backgroundColor: colors.input,
     paddingHorizontal: 14,
-    color: colors.text,
-    fontSize: 15,
+    color: colors.navy,
+    fontSize: 14,
   },
-
   errorBox: {
-    marginTop: 16,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: '#3A1E24',
+    marginTop: 14,
+    padding: 11,
+    borderRadius: 11,
+    backgroundColor: '#FFF0F1',
     borderWidth: 1,
-    borderColor: '#6C2937',
+    borderColor: '#F3BBC0',
   },
-
   errorText: {
-    color: '#FFB4C2',
-    fontSize: 13,
-    lineHeight: 18,
+    color: '#A23B43',
+    fontSize: 12,
+    lineHeight: 17,
   },
-
   button: {
     height: 52,
-    marginTop: 20,
+    marginTop: 19,
     borderRadius: 14,
-    backgroundColor: colors.accent,
+    backgroundColor: colors.teal,
     alignItems: 'center',
     justifyContent: 'center',
   },
-
   buttonPressed: {
-    opacity: 0.88,
+    opacity: 0.86,
   },
-
   buttonDisabled: {
-    opacity: 0.65,
+    opacity: 0.55,
   },
-
   buttonText: {
     color: '#FFFFFF',
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '900',
   },
-
   devNote: {
-    marginTop: 12,
-    textAlign: 'center',
-    color: '#8AA4C8',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-
-  footnote: {
     marginTop: 10,
     textAlign: 'center',
     color: colors.textMuted,
-    fontSize: 11,
+    fontSize: 9,
+    fontWeight: '600',
+  },
+  footer: {
+    marginTop: 22,
+    textAlign: 'center',
+    color: '#66809A',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.6,
   },
 });

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ApiError,
+  changePassword,
   createChannel,
   inspectSession,
   listChannels,
@@ -130,6 +131,146 @@ function LoginScreen({ onLogin }) {
         <p className="login-footnote">P1-V6 realtime messaging web client</p>
       </section>
     </main>
+  );
+}
+
+function AccountSettingsPanel({ token, session, onClose, onApiFailure }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    setSuccess('');
+
+    if (newPassword !== confirmPassword) {
+      setError('New password and confirmation do not match');
+      return;
+    }
+
+    if (
+      newPassword.length < 10 ||
+      newPassword.length > 128 ||
+      !/[A-Za-z]/.test(newPassword) ||
+      !/[0-9]/.test(newPassword)
+    ) {
+      setError(
+        'Use 10 to 128 characters with at least one letter and one number'
+      );
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const result = await changePassword(token, {
+        currentPassword,
+        newPassword,
+      });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      const ended = Number(result.revoked_session_count || 0);
+      setSuccess(
+        ended > 0
+          ? `Password changed. ${ended} other session${ended === 1 ? '' : 's'} signed out.`
+          : 'Password changed successfully.'
+      );
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(requestError.message || 'Could not change password');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings-overlay" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div className="settings-header">
+          <div>
+            <p className="eyebrow">Account</p>
+            <h2 id="settings-title">Settings</h2>
+          </div>
+          <button type="button" className="settings-close" onClick={onClose} aria-label="Close settings">×</button>
+        </div>
+
+        <div className="settings-account-summary">
+          <span className="avatar">{initials(session.display_name)}</span>
+          <div>
+            <strong>{session.display_name}</strong>
+            <span>{session.workspace_name} · {session.member_role}</span>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-section-heading">
+            <strong>Change password</strong>
+            <span>Your current browser session will stay signed in.</span>
+          </div>
+
+          <form className="settings-form" onSubmit={submit}>
+            <label>
+              <span>Current password</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                required
+              />
+            </label>
+
+            <label>
+              <span>New password</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                minLength={10}
+                maxLength={128}
+                required
+              />
+            </label>
+
+            <label>
+              <span>Confirm new password</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                minLength={10}
+                maxLength={128}
+                required
+              />
+            </label>
+
+            <p className="settings-password-help">
+              10–128 characters with at least one letter and one number.
+            </p>
+
+            {error ? <div className="form-error" role="alert">{error}</div> : null}
+            {success ? <div className="form-success" role="status">{success}</div> : null}
+
+            <div className="settings-actions">
+              <button type="button" className="secondary-button" onClick={onClose}>Close</button>
+              <button type="submit" className="primary-button" disabled={busy}>
+                {busy ? 'Changing…' : 'Change password'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -961,6 +1102,7 @@ export default function App() {
   const [globalError, setGlobalError] = useState('');
   const [showChannelCreate, setShowChannelCreate] = useState(false);
   const [showDmPicker, setShowDmPicker] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [unreadCounts, setUnreadCounts] = useState({});
   const [realtimeStatus, setRealtimeStatus] = useState('disconnected');
   const [realtimeMessage, setRealtimeMessage] = useState(null);
@@ -1000,6 +1142,7 @@ export default function App() {
       setMobileSidebarOpen(false);
       setShowChannelCreate(false);
       setShowDmPicker(false);
+      setShowSettings(false);
     }
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
@@ -1017,6 +1160,7 @@ export default function App() {
     setRealtimeStatus('disconnected');
     setNotificationToast(null);
     setMobileSidebarOpen(false);
+    setShowSettings(false);
     setLoadingWorkspace(false);
   }, []);
 
@@ -1410,7 +1554,16 @@ export default function App() {
             <strong>{session.display_name}</strong>
             <small>{session.member_role}</small>
           </span>
-          <button type="button" className="logout-button" onClick={handleLogout}>Sign out</button>
+          <span className="profile-actions">
+            <button
+              type="button"
+              className="settings-button"
+              onClick={() => setShowSettings(true)}
+            >
+              Settings
+            </button>
+            <button type="button" className="logout-button" onClick={handleLogout}>Sign out</button>
+          </span>
         </div>
       </aside>
 
@@ -1438,6 +1591,15 @@ export default function App() {
           onOpenSidebar={() => setMobileSidebarOpen(true)}
         />
       </main>
+
+      {showSettings ? (
+        <AccountSettingsPanel
+          token={token}
+          session={session}
+          onClose={() => setShowSettings(false)}
+          onApiFailure={handleApiFailure}
+        />
+      ) : null}
 
       {notificationToast ? (
         <button
