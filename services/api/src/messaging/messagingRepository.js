@@ -260,6 +260,379 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     }
   }
 
+  async function updateHumanTextMessage({
+    workspaceId,
+    conversationId,
+    messageId,
+    editorMemberId,
+    bodyText,
+  }) {
+    const client = await db.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const locked = await client.query(`
+        SELECT
+          m.workspace_id,
+          m.message_id,
+          m.conversation_id,
+          m.sender_type,
+          m.sender_member_id,
+          m.system_sender_id,
+          m.message_type,
+          m.body_ciphertext,
+          m.body_nonce,
+          m.body_auth_tag,
+          m.body_key_id,
+          m.body_encryption_version,
+          m.client_message_id,
+          m.source_event_id,
+          m.reply_to_message_id,
+          m.created_at,
+          m.edited_at,
+          m.deleted_at,
+          CASE
+            WHEN m.sender_type = 'HUMAN'
+              THEN COALESCE(
+                wm.display_name_override,
+                i.display_name
+              )
+            ELSE ss.display_name
+          END AS sender_display_name,
+          CASE
+            WHEN m.sender_type = 'HUMAN'
+              THEN i.primary_email
+            ELSE NULL
+          END AS sender_primary_email
+        FROM ac_message m
+        LEFT JOIN ac_workspace_member wm
+          ON wm.workspace_id = m.workspace_id
+         AND wm.workspace_member_id =
+               m.sender_member_id
+        LEFT JOIN ac_identity i
+          ON i.identity_id = wm.identity_id
+        LEFT JOIN ac_system_sender ss
+          ON ss.workspace_id = m.workspace_id
+         AND ss.system_sender_id =
+               m.system_sender_id
+        WHERE m.workspace_id = $1
+          AND m.conversation_id = $2
+          AND m.message_id = $3
+        FOR UPDATE OF m
+      `, [
+        workspaceId,
+        conversationId,
+        messageId,
+      ]);
+
+      const row = locked.rows?.[0] || null;
+
+      if (!row) {
+        await client.query('COMMIT');
+        return {
+          status: 'NOT_FOUND',
+          message: null,
+        };
+      }
+
+      const current = materializeMessage(row);
+
+      if (
+        current.sender_type !== 'HUMAN' ||
+        current.sender_member_id !== editorMemberId
+      ) {
+        await client.query('COMMIT');
+        return {
+          status: 'NOT_OWNER',
+          message: null,
+        };
+      }
+
+      if (current.message_type !== 'TEXT') {
+        await client.query('COMMIT');
+        return {
+          status: 'NOT_TEXT',
+          message: current,
+        };
+      }
+
+      if (current.deleted_at) {
+        await client.query('COMMIT');
+        return {
+          status: 'DELETED',
+          message: current,
+        };
+      }
+
+      if (current.body_text === bodyText) {
+        await client.query('COMMIT');
+        return {
+          status: 'UNCHANGED',
+          message: current,
+        };
+      }
+
+      const revisionResult =
+        await client.query(`
+          SELECT
+            COALESCE(MAX(revision_no), 0) + 1
+              AS next_revision_no
+          FROM ac_message_revision
+          WHERE workspace_id = $1
+            AND message_id = $2
+        `, [
+          workspaceId,
+          messageId,
+        ]);
+
+      const revisionNo =
+        Number(
+          revisionResult.rows?.[0]
+            ?.next_revision_no || 1
+        );
+
+      const revisionId = randomUUID();
+
+      const previousEncrypted =
+        messageCrypto.encryptText(
+          current.body_text || '',
+          {
+            recordType: 'REVISION',
+            workspaceId,
+            conversationId,
+            recordId: revisionId,
+          }
+        );
+
+      const nextEncrypted =
+        messageCrypto.encryptText(
+          bodyText,
+          {
+            recordType: 'MESSAGE',
+            workspaceId,
+            conversationId,
+            recordId: messageId,
+          }
+        );
+
+      await client.query(`
+        INSERT INTO ac_message_revision (
+          message_revision_id,
+          workspace_id,
+          message_id,
+          revision_no,
+          body_ciphertext,
+          body_nonce,
+          body_auth_tag,
+          body_key_id,
+          body_encryption_version,
+          edited_by_member_id
+        )
+        VALUES (
+          $1, $2, $3, $4,
+          $5, $6, $7, $8, $9, $10
+        )
+      `, [
+        revisionId,
+        workspaceId,
+        messageId,
+        revisionNo,
+        previousEncrypted.bodyCiphertext,
+        previousEncrypted.bodyNonce,
+        previousEncrypted.bodyAuthTag,
+        previousEncrypted.bodyKeyId,
+        previousEncrypted.bodyEncryptionVersion,
+        editorMemberId,
+      ]);
+
+      await client.query(`
+        UPDATE ac_message
+        SET
+          body_ciphertext = $1,
+          body_nonce = $2,
+          body_auth_tag = $3,
+          body_key_id = $4,
+          body_encryption_version = $5,
+          edited_at = NOW()
+        WHERE workspace_id = $6
+          AND conversation_id = $7
+          AND message_id = $8
+      `, [
+        nextEncrypted.bodyCiphertext,
+        nextEncrypted.bodyNonce,
+        nextEncrypted.bodyAuthTag,
+        nextEncrypted.bodyKeyId,
+        nextEncrypted.bodyEncryptionVersion,
+        workspaceId,
+        conversationId,
+        messageId,
+      ]);
+
+      await client.query(`
+        UPDATE ac_conversation
+        SET updated_at = NOW()
+        WHERE workspace_id = $1
+          AND conversation_id = $2
+      `, [
+        workspaceId,
+        conversationId,
+      ]);
+
+      await client.query('COMMIT');
+
+      return {
+        status: 'UPDATED',
+        message: await messageDetails({
+          workspaceId,
+          conversationId,
+          messageId,
+        }),
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async function softDeleteHumanMessage({
+    workspaceId,
+    conversationId,
+    messageId,
+    senderMemberId,
+  }) {
+    const client = await db.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const locked = await client.query(`
+        SELECT
+          m.workspace_id,
+          m.message_id,
+          m.conversation_id,
+          m.sender_type,
+          m.sender_member_id,
+          m.system_sender_id,
+          m.message_type,
+          m.body_ciphertext,
+          m.body_nonce,
+          m.body_auth_tag,
+          m.body_key_id,
+          m.body_encryption_version,
+          m.client_message_id,
+          m.source_event_id,
+          m.reply_to_message_id,
+          m.created_at,
+          m.edited_at,
+          m.deleted_at,
+          CASE
+            WHEN m.sender_type = 'HUMAN'
+              THEN COALESCE(
+                wm.display_name_override,
+                i.display_name
+              )
+            ELSE ss.display_name
+          END AS sender_display_name,
+          CASE
+            WHEN m.sender_type = 'HUMAN'
+              THEN i.primary_email
+            ELSE NULL
+          END AS sender_primary_email
+        FROM ac_message m
+        LEFT JOIN ac_workspace_member wm
+          ON wm.workspace_id = m.workspace_id
+         AND wm.workspace_member_id =
+               m.sender_member_id
+        LEFT JOIN ac_identity i
+          ON i.identity_id = wm.identity_id
+        LEFT JOIN ac_system_sender ss
+          ON ss.workspace_id = m.workspace_id
+         AND ss.system_sender_id =
+               m.system_sender_id
+        WHERE m.workspace_id = $1
+          AND m.conversation_id = $2
+          AND m.message_id = $3
+        FOR UPDATE OF m
+      `, [
+        workspaceId,
+        conversationId,
+        messageId,
+      ]);
+
+      const row = locked.rows?.[0] || null;
+
+      if (!row) {
+        await client.query('COMMIT');
+        return {
+          status: 'NOT_FOUND',
+          message: null,
+        };
+      }
+
+      const current = materializeMessage(row);
+
+      if (
+        current.sender_type !== 'HUMAN' ||
+        current.sender_member_id !== senderMemberId
+      ) {
+        await client.query('COMMIT');
+        return {
+          status: 'NOT_OWNER',
+          message: null,
+        };
+      }
+
+      if (current.deleted_at) {
+        await client.query('COMMIT');
+        return {
+          status: 'ALREADY_DELETED',
+          message: current,
+        };
+      }
+
+      await client.query(`
+        UPDATE ac_message
+        SET deleted_at = NOW()
+        WHERE workspace_id = $1
+          AND conversation_id = $2
+          AND message_id = $3
+      `, [
+        workspaceId,
+        conversationId,
+        messageId,
+      ]);
+
+      await client.query(`
+        UPDATE ac_conversation
+        SET updated_at = NOW()
+        WHERE workspace_id = $1
+          AND conversation_id = $2
+      `, [
+        workspaceId,
+        conversationId,
+      ]);
+
+      await client.query('COMMIT');
+
+      return {
+        status: 'DELETED',
+        message: await messageDetails({
+          workspaceId,
+          conversationId,
+          messageId,
+        }),
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async function listMessages({ workspaceId, conversationId, limit, beforeMessageId }) {
     let cursor = null;
     if (beforeMessageId) {
@@ -639,6 +1012,8 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     getMessageInConversation,
     findHumanMessageByClientId,
     createHumanMessage,
+    updateHumanTextMessage,
+    softDeleteHumanMessage,
     listMessages,
     getReadCursor,
     advanceReadCursor,

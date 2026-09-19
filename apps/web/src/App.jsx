@@ -16,6 +16,8 @@ import {
   startDirectMessage,
   uploadAttachment,
   downloadAttachment,
+  editMessage,
+  deleteMessage,
 } from './api.js';
 import {
   clearStoredSession,
@@ -527,7 +529,18 @@ function attachmentIcon(contentType = '') {
   if (contentType.includes('wordprocessingml')) return 'DOC';
   if (contentType.includes('spreadsheetml')) return 'XLS';
   if (contentType.includes('presentationml')) return 'PPT';
+  if (contentType === 'text/csv') return 'CSV';
+  if (contentType === 'text/plain') return 'TXT';
   return 'FILE';
+}
+
+function attachmentPreviewKind(contentType = '') {
+  if (contentType.startsWith('image/')) return 'image';
+  if (contentType === 'application/pdf') return 'pdf';
+  if (contentType === 'text/plain' || contentType === 'text/csv') {
+    return 'text';
+  }
+  return 'unsupported';
 }
 
 function ConversationView({
@@ -552,6 +565,11 @@ function ConversationView({
   const [error, setError] = useState('');
   const [pendingFiles, setPendingFiles] = useState([]);
   const [downloadingAttachmentId, setDownloadingAttachmentId] = useState('');
+  const [previewingAttachmentId, setPreviewingAttachmentId] = useState('');
+  const [attachmentPreview, setAttachmentPreview] = useState(null);
+  const [editingMessageId, setEditingMessageId] = useState('');
+  const [editDraft, setEditDraft] = useState('');
+  const [mutatingMessageId, setMutatingMessageId] = useState('');
   const [unreadDividerMessageId, setUnreadDividerMessageId] = useState(null);
   const fileInputRef = useRef(null);
   const [showNewMessageJump, setShowNewMessageJump] = useState(false);
@@ -651,6 +669,9 @@ function ConversationView({
     setPage({ has_more: false, next_before_message_id: null });
     setDraft('');
     setPendingFiles([]);
+    setEditingMessageId('');
+    setEditDraft('');
+    setMutatingMessageId('');
     setUnreadDividerMessageId(null);
     setShowNewMessageJump(false);
     lastMarkedReadMessageIdRef.current = null;
@@ -669,6 +690,49 @@ function ConversationView({
   useEffect(() => {
     const event = realtimeMessage;
     if (!event?.message || event.conversation_id !== selected?.id) return;
+
+    if (
+      event.type === 'message.updated' ||
+      event.type === 'message.deleted'
+    ) {
+      applyMessageMutation(
+        event.message
+      );
+
+      if (
+        event.type ===
+          'message.deleted'
+      ) {
+        setAttachmentPreview(
+          (current) => {
+            if (
+              current?.attachment
+                ?.message_id !==
+              event.message.message_id
+            ) {
+              return current;
+            }
+
+            if (current.objectUrl) {
+              URL.revokeObjectURL(
+                current.objectUrl
+              );
+            }
+
+            return null;
+          }
+        );
+      }
+
+      return;
+    }
+
+    if (
+      event.type !==
+      'message.created'
+    ) {
+      return;
+    }
 
     const ownRealtimeMessage = event.message.sender_type === 'HUMAN'
       && event.message.sender_member_id === session.workspace_member_id;
@@ -755,6 +819,237 @@ function ConversationView({
     setPendingFiles((current) =>
       current.filter((item) => item.clientMessageId !== clientMessageId)
     );
+  }
+
+  function applyMessageMutation(
+    nextMessage
+  ) {
+    if (!nextMessage?.message_id) {
+      return;
+    }
+
+    setMessages((current) =>
+      current.map((item) =>
+        item.message_id ===
+        nextMessage.message_id
+          ? nextMessage
+          : item
+      )
+    );
+  }
+
+  function beginEditingMessage(
+    message
+  ) {
+    if (
+      !message ||
+      message.message_type !== 'TEXT' ||
+      message.deleted_at
+    ) {
+      return;
+    }
+
+    setEditingMessageId(
+      message.message_id
+    );
+    setEditDraft(
+      String(message.body_text || '')
+    );
+    setError('');
+  }
+
+  function cancelEditingMessage() {
+    setEditingMessageId('');
+    setEditDraft('');
+  }
+
+  async function handleSaveEditedMessage(
+    message
+  ) {
+    const bodyText =
+      editDraft.trim();
+
+    if (
+      !message?.message_id ||
+      !bodyText ||
+      bodyText.length > 8000 ||
+      mutatingMessageId
+    ) {
+      return;
+    }
+
+    setMutatingMessageId(
+      message.message_id
+    );
+    setError('');
+
+    try {
+      const result =
+        await editMessage(
+          token,
+          selected.id,
+          message.message_id,
+          bodyText
+        );
+
+      if (result?.message) {
+        applyMessageMutation(
+          result.message
+        );
+      }
+
+      setEditingMessageId('');
+      setEditDraft('');
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(
+          requestError.message ||
+            'Could not edit message'
+        );
+      }
+    } finally {
+      setMutatingMessageId('');
+    }
+  }
+
+  async function handleDeleteOwnedMessage(
+    message
+  ) {
+    if (
+      !message?.message_id ||
+      mutatingMessageId
+    ) {
+      return;
+    }
+
+    const description =
+      message.message_type ===
+        'ATTACHMENT'
+        ? 'Delete this file from the conversation?'
+        : 'Delete this message?';
+
+    if (!window.confirm(description)) {
+      return;
+    }
+
+    setMutatingMessageId(
+      message.message_id
+    );
+    setError('');
+
+    try {
+      const result =
+        await deleteMessage(
+          token,
+          selected.id,
+          message.message_id
+        );
+
+      if (result?.message) {
+        applyMessageMutation(
+          result.message
+        );
+      }
+
+      if (
+        editingMessageId ===
+        message.message_id
+      ) {
+        setEditingMessageId('');
+        setEditDraft('');
+      }
+
+      if (
+        attachmentPreview?.attachment
+          ?.message_id ===
+        message.message_id
+      ) {
+        closeAttachmentPreview();
+      }
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(
+          requestError.message ||
+            'Could not delete message'
+        );
+      }
+    } finally {
+      setMutatingMessageId('');
+    }
+  }
+
+  function closeAttachmentPreview() {
+    if (attachmentPreview?.objectUrl) {
+      URL.revokeObjectURL(
+        attachmentPreview.objectUrl
+      );
+    }
+
+    setAttachmentPreview(null);
+  }
+
+  async function handlePreviewAttachment(attachment) {
+    if (
+      !attachment?.attachment_id ||
+      !selected?.id ||
+      previewingAttachmentId
+    ) {
+      return;
+    }
+
+    setPreviewingAttachmentId(
+      attachment.attachment_id
+    );
+    setError('');
+
+    const kind = attachmentPreviewKind(
+      attachment.content_type
+    );
+
+    try {
+      if (kind === 'unsupported') {
+        setAttachmentPreview({
+          attachment,
+          kind,
+          objectUrl: '',
+          text: '',
+        });
+        return;
+      }
+
+      const blob = await downloadAttachment(
+        token,
+        selected.id,
+        attachment.attachment_id
+      );
+
+      if (kind === 'text') {
+        setAttachmentPreview({
+          attachment,
+          kind,
+          objectUrl: '',
+          text: await blob.text(),
+        });
+        return;
+      }
+
+      setAttachmentPreview({
+        attachment,
+        kind,
+        objectUrl:
+          URL.createObjectURL(blob),
+        text: '',
+      });
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(
+          requestError.message ||
+            'Could not preview attachment'
+        );
+      }
+    } finally {
+      setPreviewingAttachmentId('');
+    }
   }
 
   async function handleDownloadAttachment(attachment) {
@@ -924,6 +1219,29 @@ function ConversationView({
             const grouped = sameMessageGroup(previous, message);
             const showDate = !previous || messageDateKey(previous.created_at) !== messageDateKey(message.created_at);
             const own = message.sender_type === 'HUMAN' && message.sender_member_id === session.workspace_member_id;
+            const deleted = Boolean(
+              message.deleted_at
+            );
+            const editing =
+              editingMessageId ===
+              message.message_id;
+            const mutating =
+              mutatingMessageId ===
+              message.message_id;
+            const canEdit =
+              own &&
+              !deleted &&
+              message.message_type ===
+                'TEXT';
+            const canDelete =
+              own &&
+              !deleted &&
+              (
+                message.message_type ===
+                  'TEXT' ||
+                message.message_type ===
+                  'ATTACHMENT'
+              );
             return (
               <React.Fragment key={message.message_id}>
                 {showDate ? (
@@ -957,19 +1275,90 @@ function ConversationView({
                         {message.sender_type === 'SYSTEM' ? <span className="system-message-badge">SYSTEM</span> : null}
                       </div>
                     ) : null}
-                    {message.message_type !== 'ATTACHMENT' ? (
-                      <div className="message-text">{message.body_text || ''}</div>
-                    ) : null}
-                    {Array.isArray(message.attachments) && message.attachments.length ? (
-                      <div className="message-attachments">
-                        {message.attachments.map((attachment) => (
+                    {deleted ? (
+                      <div className="message-text deleted-message-text">
+                        Message deleted
+                      </div>
+                    ) : editing ? (
+                      <form
+                        className="message-inline-edit"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          handleSaveEditedMessage(
+                            message
+                          );
+                        }}
+                      >
+                        <textarea
+                          autoFocus
+                          value={editDraft}
+                          maxLength={8000}
+                          aria-label="Edit message"
+                          onChange={(event) =>
+                            setEditDraft(
+                              event.target.value
+                            )
+                          }
+                          onKeyDown={(event) => {
+                            if (
+                              event.key ===
+                                'Escape'
+                            ) {
+                              event.preventDefault();
+                              cancelEditingMessage();
+                            }
+
+                            if (
+                              event.key ===
+                                'Enter' &&
+                              !event.shiftKey
+                            ) {
+                              event.preventDefault();
+                              event.currentTarget
+                                .form
+                                ?.requestSubmit();
+                            }
+                          }}
+                        />
+                        <div className="message-inline-edit-actions">
                           <button
                             type="button"
+                            onClick={
+                              cancelEditingMessage
+                            }
+                            disabled={mutating}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={
+                              mutating ||
+                              !editDraft.trim()
+                            }
+                          >
+                            {mutating
+                              ? 'Saving…'
+                              : 'Save'}
+                          </button>
+                        </div>
+                      </form>
+                    ) : message.message_type !== 'ATTACHMENT' ? (
+                      <div className="message-text">
+                        {message.body_text || ''}
+                      </div>
+                    ) : null}
+
+                    {!deleted &&
+                    Array.isArray(
+                      message.attachments
+                    ) &&
+                    message.attachments.length ? (
+                      <div className="message-attachments">
+                        {message.attachments.map((attachment) => (
+                          <div
                             className="attachment-card"
                             key={attachment.attachment_id}
-                            onClick={() => handleDownloadAttachment(attachment)}
-                            disabled={downloadingAttachmentId === attachment.attachment_id}
-                            title={`Download ${attachment.file_name}`}
                           >
                             <span className="attachment-type-icon">
                               {attachmentIcon(attachment.content_type)}
@@ -982,13 +1371,91 @@ function ConversationView({
                                 {attachment.content_type}
                               </small>
                             </span>
-                            <span className="attachment-download-action">
-                              {downloadingAttachmentId === attachment.attachment_id
-                                ? '…'
-                                : '↓'}
+                            <span className="attachment-card-actions">
+                              <button
+                                type="button"
+                                className="attachment-preview-action"
+                                onClick={() => handlePreviewAttachment(attachment)}
+                                disabled={previewingAttachmentId === attachment.attachment_id}
+                                title={`Preview ${attachment.file_name}`}
+                                aria-label={`Preview ${attachment.file_name}`}
+                              >
+                                {previewingAttachmentId === attachment.attachment_id
+                                  ? '…'
+                                  : '👁'}
+                              </button>
+                              <button
+                                type="button"
+                                className="attachment-download-action"
+                                onClick={() => handleDownloadAttachment(attachment)}
+                                disabled={downloadingAttachmentId === attachment.attachment_id}
+                                title={`Download ${attachment.file_name}`}
+                                aria-label={`Download ${attachment.file_name}`}
+                              >
+                                {downloadingAttachmentId === attachment.attachment_id
+                                  ? '…'
+                                  : '⇩'}
+                              </button>
                             </span>
-                          </button>
+                          </div>
                         ))}
+                      </div>
+                    ) : null}
+
+                    {!deleted &&
+                    message.edited_at ? (
+                      <div className="message-edited-marker">
+                        edited
+                      </div>
+                    ) : null}
+
+                    {(canEdit ||
+                      canDelete) ? (
+                      <div className="message-own-actions">
+                        {canEdit ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              beginEditingMessage(
+                                message
+                              )
+                            }
+                            disabled={mutating}
+                            aria-label="Edit message"
+                            title="Edit message"
+                          >
+                            ✎
+                          </button>
+                        ) : null}
+
+                        {canDelete ? (
+                          <button
+                            type="button"
+                            className="message-delete-action"
+                            onClick={() =>
+                              handleDeleteOwnedMessage(
+                                message
+                              )
+                            }
+                            disabled={mutating}
+                            aria-label={
+                              message.message_type ===
+                                'ATTACHMENT'
+                                ? 'Delete file'
+                                : 'Delete message'
+                            }
+                            title={
+                              message.message_type ===
+                                'ATTACHMENT'
+                                ? 'Delete file'
+                                : 'Delete message'
+                            }
+                          >
+                            {mutating
+                              ? '…'
+                              : '⌫'}
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -1005,6 +1472,98 @@ function ConversationView({
           </button>
         ) : null}
       </div>
+
+      {attachmentPreview ? (
+        <div
+          className="attachment-preview-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Preview ${attachmentPreview.attachment.file_name}`}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeAttachmentPreview();
+            }
+          }}
+        >
+          <section className="attachment-preview-panel">
+            <header className="attachment-preview-header">
+              <div>
+                <strong>
+                  {attachmentPreview.attachment.file_name}
+                </strong>
+                <small>
+                  {formatFileSize(
+                    attachmentPreview.attachment.size_bytes
+                  )}
+                  {' · '}
+                  {attachmentPreview.attachment.content_type}
+                </small>
+              </div>
+              <button
+                type="button"
+                className="attachment-preview-close"
+                onClick={closeAttachmentPreview}
+                aria-label="Close attachment preview"
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="attachment-preview-body">
+              {attachmentPreview.kind === 'image' ? (
+                <img
+                  className="attachment-preview-image"
+                  src={attachmentPreview.objectUrl}
+                  alt={attachmentPreview.attachment.file_name}
+                />
+              ) : null}
+
+              {attachmentPreview.kind === 'pdf' ? (
+                <iframe
+                  className="attachment-preview-pdf"
+                  src={attachmentPreview.objectUrl}
+                  title={attachmentPreview.attachment.file_name}
+                />
+              ) : null}
+
+              {attachmentPreview.kind === 'text' ? (
+                <pre className="attachment-preview-text">
+                  {attachmentPreview.text}
+                </pre>
+              ) : null}
+
+              {attachmentPreview.kind === 'unsupported' ? (
+                <div className="attachment-preview-unsupported">
+                  <strong>Preview is not available for this file type.</strong>
+                  <span>
+                    Download the file and open it with the appropriate application.
+                  </span>
+                </div>
+              ) : null}
+            </div>
+
+            <footer className="attachment-preview-footer">
+              <button
+                type="button"
+                onClick={() =>
+                  handleDownloadAttachment(
+                    attachmentPreview.attachment
+                  )
+                }
+                disabled={
+                  downloadingAttachmentId ===
+                  attachmentPreview.attachment.attachment_id
+                }
+              >
+                {downloadingAttachmentId ===
+                attachmentPreview.attachment.attachment_id
+                  ? 'Downloading…'
+                  : 'Download'}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       <footer className="composer-shell">
         {error ? <div className="composer-error" role="alert">{error}</div> : null}
@@ -1295,9 +1854,28 @@ export default function App() {
           return;
         }
 
-        if (event.type !== 'message.created' || !event.message) return;
+        if (
+          ![
+            'message.created',
+            'message.updated',
+            'message.deleted',
+          ].includes(event.type) ||
+          !event.message
+        ) {
+          return;
+        }
 
-        setRealtimeMessage({ ...event, received_at: Date.now() });
+        setRealtimeMessage({
+          ...event,
+          received_at: Date.now(),
+        });
+
+        if (
+          event.type !==
+          'message.created'
+        ) {
+          return;
+        }
         const currentSession = sessionRef.current;
         const ownMessage = event.message.sender_type === 'HUMAN'
           && event.message.sender_member_id === currentSession?.workspace_member_id;

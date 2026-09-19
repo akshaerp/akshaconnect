@@ -297,7 +297,14 @@ export default function App() {
           return;
         }
 
-        if (payload?.type !== 'message.created' || !payload.message) {
+        if (
+          ![
+            'message.created',
+            'message.updated',
+            'message.deleted',
+          ].includes(payload?.type) ||
+          !payload.message
+        ) {
           return;
         }
 
@@ -312,6 +319,13 @@ export default function App() {
           ...current.slice(-99),
           envelope,
         ]);
+
+        if (
+          payload.type !==
+          'message.created'
+        ) {
+          return;
+        }
 
         const currentSession = sessionRef.current;
         const ownMessage =
@@ -1263,7 +1277,7 @@ const styles = StyleSheet.create({
     bottom: -15,
     height: 85,
     borderRadius: 80,
-    backgroundColor: '#0E2455',
+    backgroundColor: '#0879E7',
     transform: [{ rotate: '1deg' }],
   },
   splashPromise: {

@@ -75,7 +75,7 @@ test('P1-V8A V2 sends idempotent text without fabricating delivery receipts', ()
   }
 });
 
-test('P1-V8A durable messaging remains pre-attachment and avoids plaintext session persistence', () => {
+test('P1-V8A durable messaging continues to avoid plaintext session persistence', () => {
   const app = read('apps/mobile/App.jsx');
   const conversation = read(
     'apps/mobile/src/screens/ConversationScreen.jsx'
@@ -83,10 +83,6 @@ test('P1-V8A durable messaging remains pre-attachment and avoids plaintext sessi
 
   const combined = `${app}\n${conversation}`;
 
-  assert.doesNotMatch(
-    combined,
-    /DocumentPicker|ImagePicker|launchImageLibrary|uploadAttachment/
-  );
   assert.doesNotMatch(
     combined,
     /AsyncStorage|sessionStorage|localStorage/

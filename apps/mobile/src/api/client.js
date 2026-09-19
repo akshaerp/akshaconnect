@@ -209,6 +209,300 @@ export function sendMessage(
   );
 }
 
+function getNativeBlobUtil() {
+  const loaded = require('react-native-blob-util');
+  return loaded?.default || loaded;
+}
+
+function parseNativeJsonText(text, status) {
+  let payload = {};
+
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new ApiError(
+        'The server returned an invalid response',
+        status,
+        'RESPONSE_INVALID'
+      );
+    }
+  }
+
+  if (status < 200 || status >= 300) {
+    throw new ApiError(
+      payload?.error?.message || `Request failed (${status})`,
+      status,
+      payload?.error?.code || 'REQUEST_FAILED'
+    );
+  }
+
+  return payload;
+}
+
+export async function uploadAttachment(
+  baseUrl,
+  token,
+  conversationId,
+  {
+    localPath,
+    fileName,
+    contentType,
+    clientMessageId,
+    onProgress,
+  }
+) {
+  const root = normalizeBaseUrl(baseUrl);
+  const blobUtil = getNativeBlobUtil();
+
+  if (!localPath) {
+    throw new ApiError(
+      'Attachment local file is unavailable',
+      0,
+      'ATTACHMENT_LOCAL_FILE_REQUIRED'
+    );
+  }
+
+  try {
+    const task = blobUtil.fetch(
+      'POST',
+      `${root}/api/v1/conversations/${encodeURIComponent(
+        conversationId
+      )}/attachments`,
+      {
+        accept: 'application/json',
+        authorization: `Bearer ${token}`,
+        'content-type': contentType,
+        'x-akshaconnect-file-name':
+          encodeURIComponent(fileName || 'attachment'),
+        'x-client-message-id': clientMessageId,
+      },
+      blobUtil.wrap(localPath)
+    );
+
+    if (
+      typeof onProgress === 'function' &&
+      typeof task?.uploadProgress === 'function'
+    ) {
+      task.uploadProgress(
+        { count: 20 },
+        (written, total) => {
+          const sent = Number(written || 0);
+          const expected = Number(total || 0);
+          onProgress(
+            expected > 0
+              ? Math.max(0, Math.min(1, sent / expected))
+              : 0
+          );
+        }
+      );
+    }
+
+    const response = await task;
+    const status = Number(response?.info?.()?.status || 0);
+    const responseText = await response?.text?.();
+
+    return parseNativeJsonText(
+      String(responseText || ''),
+      status
+    );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+
+    throw new ApiError(
+      error?.message || 'Could not upload attachment',
+      0,
+      'NETWORK_ERROR'
+    );
+  }
+}
+
+function attachmentCacheExtension(
+  fileName,
+  contentType
+) {
+  const match = String(fileName || '')
+    .toLowerCase()
+    .match(/\.([a-z0-9]{1,10})$/);
+
+  if (match?.[1]) {
+    return match[1];
+  }
+
+  const byType = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'application/pdf': 'pdf',
+    'text/plain': 'txt',
+    'text/csv': 'csv',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+      'docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+      'xlsx',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation':
+      'pptx',
+  };
+
+  return byType[
+    String(contentType || '')
+      .split(';')[0]
+      .trim()
+      .toLowerCase()
+  ] || 'bin';
+}
+
+export async function downloadAttachmentToCache(
+  baseUrl,
+  token,
+  conversationId,
+  attachment
+) {
+  const root = normalizeBaseUrl(baseUrl);
+  const blobUtil = getNativeBlobUtil();
+
+  const attachmentId = String(
+    attachment?.attachment_id || ''
+  ).trim();
+
+  if (!attachmentId) {
+    throw new ApiError(
+      'Attachment id is required',
+      0,
+      'ATTACHMENT_ID_REQUIRED'
+    );
+  }
+
+  const contentType = String(
+    attachment?.content_type ||
+      'application/octet-stream'
+  );
+
+  const fileName = String(
+    attachment?.file_name || 'attachment'
+  );
+
+  const extension =
+    attachmentCacheExtension(
+      fileName,
+      contentType
+    );
+
+  try {
+    const response =
+      await blobUtil
+        .config({
+          fileCache: true,
+          appendExt: extension,
+        })
+        .fetch(
+          'GET',
+          `${root}/api/v1/conversations/${encodeURIComponent(
+            conversationId
+          )}/attachments/${encodeURIComponent(
+            attachmentId
+          )}/content`,
+          {
+            accept:
+              'application/octet-stream',
+            authorization:
+              `Bearer ${token}`,
+          }
+        );
+
+    const status = Number(
+      response?.info?.()?.status || 0
+    );
+
+    if (status < 200 || status >= 300) {
+      try {
+        response?.flush?.();
+      } catch {
+        // Best-effort cleanup of an error response body.
+      }
+
+      throw new ApiError(
+        `Could not download attachment (${status})`,
+        status,
+        'ATTACHMENT_DOWNLOAD_FAILED'
+      );
+    }
+
+    const localPath =
+      String(response?.path?.() || '');
+
+    if (!localPath) {
+      throw new ApiError(
+        'Downloaded attachment is unavailable',
+        status,
+        'ATTACHMENT_LOCAL_FILE_MISSING'
+      );
+    }
+
+    return {
+      attachmentId,
+      fileName,
+      contentType,
+      localPath,
+    };
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+
+    throw new ApiError(
+      error?.message ||
+        'Could not download attachment',
+      0,
+      'NETWORK_ERROR'
+    );
+  }
+}
+
+export function editMessage(
+  baseUrl,
+  token,
+  conversationId,
+  messageId,
+  bodyText
+) {
+  return request(
+    baseUrl,
+    `/api/v1/conversations/${encodeURIComponent(
+      conversationId
+    )}/messages/${encodeURIComponent(
+      messageId
+    )}`,
+    {
+      token,
+      method: 'PUT',
+      body: {
+        body_text: bodyText,
+      },
+    }
+  );
+}
+
+export function deleteMessage(
+  baseUrl,
+  token,
+  conversationId,
+  messageId
+) {
+  return request(
+    baseUrl,
+    `/api/v1/conversations/${encodeURIComponent(
+      conversationId
+    )}/messages/${encodeURIComponent(
+      messageId
+    )}`,
+    {
+      token,
+      method: 'DELETE',
+    }
+  );
+}
+
 export function listUnreadCounts(baseUrl, token) {
   return request(baseUrl, '/api/v1/unread-counts', { token });
 }

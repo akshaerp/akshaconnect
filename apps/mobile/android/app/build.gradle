@@ -3,7 +3,26 @@ apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 apply plugin: "com.google.gms.google-services"
 
+def hermesCompilerPackageRoot = file(
+    "${rootProject.projectDir}/../../../node_modules/hermes-compiler/hermesc"
+)
+def hermesOsName = System.getProperty("os.name").toLowerCase()
+def hermesCompilerBinary =
+    hermesOsName.contains("windows")
+        ? "win64-bin/hermesc.exe"
+        : hermesOsName.contains("mac")
+            ? "osx-bin/hermesc"
+            : "linux64-bin/hermesc"
+
 react {
+    // npm workspaces hoist hermes-compiler to the repository root.
+    // React Native 0.87's default lookup still targets the legacy
+    // react-native/sdks/hermesc location, so resolve the compiler
+    // explicitly from the installed package for each host OS.
+    hermesCommand = file(
+        "${hermesCompilerPackageRoot}/${hermesCompilerBinary}"
+    ).absolutePath
+
     autolinkLibrariesWithApp()
 }
 

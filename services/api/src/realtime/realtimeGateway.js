@@ -149,14 +149,18 @@ function attachRealtimeGateway({
   });
 
   const unsubscribe = eventBus.subscribe(async (event) => {
-    if (event.type === 'message.created') {
+    if (
+      event.type === 'message.created' ||
+      event.type === 'message.updated' ||
+      event.type === 'message.deleted'
+    ) {
       const recipientMemberIds = await messagingRepository.listConversationRecipientMemberIds({
         workspaceId: event.workspace_id,
         conversationId: event.conversation_id,
       });
       const allowed = new Set(recipientMemberIds || []);
       const payload = {
-        type: 'message.created',
+        type: event.type,
         conversation_id: event.conversation_id,
         message: event.message,
       };

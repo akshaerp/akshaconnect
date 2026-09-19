@@ -20,6 +20,7 @@
     "lint": "node scripts/check-js.js",
     "test": "node --test",
     "verify": "npm run lint && npm test && npm run build:web",
-    "migrate:p1-v5a:encrypt-messages": "node scripts/p1-v5a-encrypt-existing-messages.js"
+    "migrate:p1-v5a:encrypt-messages": "node scripts/p1-v5a-encrypt-existing-messages.js",
+    "postinstall": "node scripts/ensure-mobile-rn-gradle-plugin.js"
   }
 }

@@ -438,10 +438,16 @@ function createRequestHandler({
 
       const messageRoute =
         /^\/api\/v1\/conversations\/([^/]+)\/messages$/.exec(url.pathname);
+      const messageMutationRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/messages\/([^/]+)$/.exec(url.pathname);
       const readCursorRoute =
         /^\/api\/v1\/conversations\/([^/]+)\/read-cursor$/.exec(url.pathname);
 
-      if (messageRoute || readCursorRoute) {
+      if (
+        messageRoute ||
+        messageMutationRoute ||
+        readCursorRoute
+      ) {
         if (!localIdentityService) {
           throw boundaryError(
             'LOCAL_IDENTITY_NOT_CONFIGURED',
@@ -458,8 +464,70 @@ function createRequestHandler({
         }
 
         const claims = await localIdentityService.verifyAccessToken(bearerToken(req));
-        const encodedConversationId = messageRoute?.[1] || readCursorRoute?.[1] || '';
-        const conversationId = decodeURIComponent(encodedConversationId);
+        const encodedConversationId =
+          messageRoute?.[1] ||
+          messageMutationRoute?.[1] ||
+          readCursorRoute?.[1] ||
+          '';
+
+        const conversationId =
+          decodeURIComponent(
+            encodedConversationId
+          );
+
+        if (
+          messageMutationRoute &&
+          req.method === 'PUT'
+        ) {
+          const messageId =
+            decodeURIComponent(
+              messageMutationRoute[2]
+            );
+
+          const body =
+            await readJson(req);
+
+          const result =
+            await messagingService
+              .editHumanMessage(
+                claims,
+                conversationId,
+                messageId,
+                body
+              );
+
+          writeJson(
+            res,
+            200,
+            result
+          );
+          return;
+        }
+
+        if (
+          messageMutationRoute &&
+          req.method === 'DELETE'
+        ) {
+          const messageId =
+            decodeURIComponent(
+              messageMutationRoute[2]
+            );
+
+          const result =
+            await messagingService
+              .deleteHumanMessage(
+                claims,
+                conversationId,
+                messageId
+              );
+
+          writeJson(
+            res,
+            200,
+            result
+          );
+          return;
+        }
 
         if (messageRoute && req.method === 'GET') {
           let result = await messagingService.listMessages(claims, conversationId, {

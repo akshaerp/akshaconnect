@@ -145,6 +145,46 @@ export function sendMessage(
   });
 }
 
+export function editMessage(
+  token,
+  conversationId,
+  messageId,
+  bodyText
+) {
+  return request(
+    `/api/v1/conversations/${encodeURIComponent(
+      conversationId
+    )}/messages/${encodeURIComponent(
+      messageId
+    )}`,
+    {
+      token,
+      method: 'PUT',
+      body: {
+        body_text: bodyText,
+      },
+    }
+  );
+}
+
+export function deleteMessage(
+  token,
+  conversationId,
+  messageId
+) {
+  return request(
+    `/api/v1/conversations/${encodeURIComponent(
+      conversationId
+    )}/messages/${encodeURIComponent(
+      messageId
+    )}`,
+    {
+      token,
+      method: 'DELETE',
+    }
+  );
+}
+
 export async function uploadAttachment(
   token,
   conversationId,

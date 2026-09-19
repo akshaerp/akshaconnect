@@ -84,14 +84,6 @@ async function start() {
         pushSender: firebasePushSender,
       });
 
-    messagingService = createMessagingService(
-      messagingRepository,
-      {
-        eventPublisher: realtimeEventBus,
-        pushPublisher: pushDeliveryService,
-      }
-    );
-
     const attachmentCrypto = createAttachmentCryptoFromEnv(process.env);
     const attachmentRepository = createAttachmentRepository(pool, { messageCrypto });
     const attachmentStorage = createLocalAttachmentStorage({
@@ -103,7 +95,17 @@ async function start() {
       attachmentCrypto,
       storage: attachmentStorage,
       eventPublisher: realtimeEventBus,
+      pushPublisher: pushDeliveryService,
     });
+
+    messagingService = createMessagingService(
+      messagingRepository,
+      {
+        eventPublisher: realtimeEventBus,
+        pushPublisher: pushDeliveryService,
+        attachmentCleanup: attachmentService,
+      }
+    );
   }
 
   const server = http.createServer(createRequestHandler({

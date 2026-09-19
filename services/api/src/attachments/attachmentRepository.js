@@ -188,6 +188,7 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
       `a.workspace_id = $1
        AND a.conversation_id = $2
        AND a.message_id = $3
+       AND m.deleted_at IS NULL
        LIMIT 1`,
       [workspaceId, conversationId, messageId]
     );
@@ -204,6 +205,7 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
       `a.workspace_id = $1
        AND a.conversation_id = $2
        AND a.message_id = ANY($3::uuid[])
+       AND m.deleted_at IS NULL
        ORDER BY a.created_at, a.attachment_id`,
       [workspaceId, conversationId, messageIds]
     );
@@ -219,6 +221,7 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
       `a.workspace_id = $1
        AND a.conversation_id = $2
        AND a.attachment_id = $3
+       AND m.deleted_at IS NULL
        LIMIT 1`,
       [workspaceId, conversationId, attachmentId]
     );
@@ -234,11 +237,35 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
     });
   }
 
+  async function detachAttachmentByMessageId({
+    workspaceId,
+    conversationId,
+    messageId,
+  }) {
+    const result = await db.query(`
+      DELETE FROM ac_attachment
+      WHERE workspace_id = $1
+        AND conversation_id = $2
+        AND message_id = $3
+      RETURNING
+        attachment_id,
+        storage_provider,
+        storage_key
+    `, [
+      workspaceId,
+      conversationId,
+      messageId,
+    ]);
+
+    return result.rows?.[0] || null;
+  }
+
   return Object.freeze({
     createAttachmentMessage,
     findAttachmentByMessageId,
     listAttachmentsForMessages,
     getAttachmentForDownload,
+    detachAttachmentByMessageId,
   });
 }
 

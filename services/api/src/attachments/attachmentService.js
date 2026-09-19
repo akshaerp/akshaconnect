@@ -137,6 +137,7 @@ function createAttachmentService({
   attachmentCrypto,
   storage = null,
   eventPublisher = null,
+  pushPublisher = null,
 } = {}) {
   if (!messagingRepository) throw new TypeError('Messaging repository is required');
   if (!attachmentRepository) throw new TypeError('Attachment repository is required');
@@ -147,6 +148,20 @@ function createAttachmentService({
       eventPublisher?.publish?.(Object.freeze(event));
     } catch {
       // PostgreSQL + encrypted object storage remain authoritative.
+    }
+  }
+
+  function publishPush(event) {
+    try {
+      const result =
+        pushPublisher?.publishMessage?.(
+          Object.freeze(event)
+        );
+
+      Promise.resolve(result)
+        .catch(() => {});
+    } catch {
+      // Durable persistence remains authoritative.
     }
   }
 
@@ -369,9 +384,56 @@ function createAttachmentService({
       message: decorated,
     });
 
+    publishPush({
+      workspaceId: actor.workspaceId,
+      conversationId: allowedConversationId,
+      message: decorated,
+      excludeWorkspaceMemberId:
+        actor.workspaceMemberId,
+    });
+
     return {
       created: true,
       message: decorated,
+    };
+  }
+
+  async function purgeDeletedMessage({
+    workspaceId,
+    conversationId,
+    messageId,
+  } = {}) {
+    const detached =
+      await attachmentRepository
+        .detachAttachmentByMessageId({
+          workspaceId,
+          conversationId,
+          messageId,
+        });
+
+    if (!detached) {
+      return {
+        purged: false,
+      };
+    }
+
+    if (
+      detached.storage_provider ===
+        storage?.providerCode &&
+      detached.storage_key
+    ) {
+      try {
+        await storage.remove(
+          detached.storage_key
+        );
+      } catch {
+        // The deleted message is already inaccessible.
+        // A storage sweeper can remove an orphaned blob later.
+      }
+    }
+
+    return {
+      purged: true,
     };
   }
 
@@ -455,6 +517,7 @@ function createAttachmentService({
     decorateMessages,
     uploadHumanAttachment,
     downloadAttachment,
+    purgeDeletedMessage,
   });
 }
 

@@ -89,6 +89,7 @@ function sameNullable(left, right) {
 function createMessagingService(repository, {
   eventPublisher = null,
   pushPublisher = null,
+  attachmentCleanup = null,
 } = {}) {
   if (!repository) throw new TypeError('Messaging repository is required');
 
@@ -258,6 +259,215 @@ function createMessagingService(repository, {
     }
   }
 
+  async function editHumanMessage(
+    claims,
+    conversationId,
+    messageId,
+    input = {}
+  ) {
+    const { actor } =
+      await requireActiveActor(claims);
+
+    const allowed =
+      await requireConversationAccess(
+        actor,
+        conversationId
+      );
+
+    const cleanMessageId =
+      clean(messageId);
+
+    if (!cleanMessageId) {
+      throw boundaryError(
+        'MESSAGE_ID_REQUIRED',
+        'Message id is required',
+        400
+      );
+    }
+
+    const bodyText =
+      clean(
+        input.body_text ??
+        input.bodyText
+      );
+
+    if (
+      !bodyText ||
+      bodyText.length > MAX_MESSAGE_CHARS
+    ) {
+      throw boundaryError(
+        'MESSAGE_BODY_INVALID',
+        `Message body must contain 1 to ${MAX_MESSAGE_CHARS} characters`,
+        400
+      );
+    }
+
+    const result =
+      await repository
+        .updateHumanTextMessage({
+          workspaceId:
+            actor.workspaceId,
+          conversationId:
+            allowed.conversationId,
+          messageId:
+            cleanMessageId,
+          editorMemberId:
+            actor.workspaceMemberId,
+          bodyText,
+        });
+
+    if (
+      result?.status === 'NOT_FOUND' ||
+      result?.status === 'NOT_OWNER'
+    ) {
+      throw boundaryError(
+        'MESSAGE_MUTATION_DENIED',
+        'Message is unavailable',
+        404
+      );
+    }
+
+    if (result?.status === 'NOT_TEXT') {
+      throw boundaryError(
+        'MESSAGE_EDIT_NOT_ALLOWED',
+        'Only text messages can be edited',
+        409
+      );
+    }
+
+    if (result?.status === 'DELETED') {
+      throw boundaryError(
+        'MESSAGE_ALREADY_DELETED',
+        'Deleted messages cannot be edited',
+        409
+      );
+    }
+
+    const changed =
+      result?.status === 'UPDATED';
+
+    if (
+      changed &&
+      result?.message
+    ) {
+      publishRealtime({
+        type: 'message.updated',
+        workspace_id:
+          actor.workspaceId,
+        conversation_id:
+          allowed.conversationId,
+        message:
+          result.message,
+      });
+    }
+
+    return {
+      updated: changed,
+      message:
+        result?.message || null,
+    };
+  }
+
+  async function deleteHumanMessage(
+    claims,
+    conversationId,
+    messageId
+  ) {
+    const { actor } =
+      await requireActiveActor(claims);
+
+    const allowed =
+      await requireConversationAccess(
+        actor,
+        conversationId
+      );
+
+    const cleanMessageId =
+      clean(messageId);
+
+    if (!cleanMessageId) {
+      throw boundaryError(
+        'MESSAGE_ID_REQUIRED',
+        'Message id is required',
+        400
+      );
+    }
+
+    const result =
+      await repository
+        .softDeleteHumanMessage({
+          workspaceId:
+            actor.workspaceId,
+          conversationId:
+            allowed.conversationId,
+          messageId:
+            cleanMessageId,
+          senderMemberId:
+            actor.workspaceMemberId,
+        });
+
+    if (
+      result?.status === 'NOT_FOUND' ||
+      result?.status === 'NOT_OWNER'
+    ) {
+      throw boundaryError(
+        'MESSAGE_MUTATION_DENIED',
+        'Message is unavailable',
+        404
+      );
+    }
+
+    const changed =
+      result?.status === 'DELETED';
+
+    let message =
+      result?.message || null;
+
+    if (
+      changed &&
+      message?.message_type ===
+        'ATTACHMENT'
+    ) {
+      try {
+        await attachmentCleanup
+          ?.purgeDeletedMessage?.({
+            workspaceId:
+              actor.workspaceId,
+            conversationId:
+              allowed.conversationId,
+            messageId:
+              cleanMessageId,
+          });
+      } catch {
+        // deleted_at already revokes access. Blob/metadata cleanup is best effort.
+      }
+
+      message = {
+        ...message,
+        attachments: [],
+      };
+    }
+
+    if (
+      changed &&
+      message
+    ) {
+      publishRealtime({
+        type: 'message.deleted',
+        workspace_id:
+          actor.workspaceId,
+        conversation_id:
+          allowed.conversationId,
+        message,
+      });
+    }
+
+    return {
+      deleted: changed,
+      message,
+    };
+  }
+
   async function getReadCursor(claims, conversationId) {
     const { actor } = await requireActiveActor(claims);
     const allowed = await requireConversationAccess(actor, conversationId);
@@ -411,6 +621,8 @@ function createMessagingService(repository, {
   return Object.freeze({
     listMessages,
     sendHumanMessage,
+    editHumanMessage,
+    deleteHumanMessage,
     getReadCursor,
     advanceReadCursor,
     listUnreadCounts,
