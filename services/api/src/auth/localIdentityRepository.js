@@ -24,14 +24,10 @@ function createLocalIdentityRepository(db) {
         c.locked_until,
         (c.password_hash = crypt($3, c.password_hash)) AS password_matches
       FROM ac_identity_provider_link p
-      JOIN ac_identity i
-        ON i.identity_id = p.identity_id
-      JOIN ac_workspace_member wm
-        ON wm.identity_id = i.identity_id
-      JOIN ac_workspace w
-        ON w.workspace_id = wm.workspace_id
-      JOIN ac_local_credential c
-        ON c.identity_id = i.identity_id
+      JOIN ac_identity i ON i.identity_id = p.identity_id
+      JOIN ac_workspace_member wm ON wm.identity_id = i.identity_id
+      JOIN ac_workspace w ON w.workspace_id = wm.workspace_id
+      JOIN ac_local_credential c ON c.identity_id = i.identity_id
       WHERE p.provider_code = 'LOCAL'
         AND LOWER(p.external_subject) = LOWER($2)
         AND UPPER(w.workspace_code) = UPPER($1)
@@ -47,8 +43,7 @@ function createLocalIdentityRepository(db) {
       SET
         failed_attempts = failed_attempts + 1,
         locked_until = CASE
-          WHEN failed_attempts + 1 >= 5
-            THEN NOW() + INTERVAL '15 minutes'
+          WHEN failed_attempts + 1 >= 5 THEN NOW() + INTERVAL '15 minutes'
           ELSE locked_until
         END,
         updated_at = NOW()
@@ -59,20 +54,14 @@ function createLocalIdentityRepository(db) {
   async function resetFailedLogin(identityId) {
     await db.query(`
       UPDATE ac_local_credential
-      SET
-        failed_attempts = 0,
-        locked_until = NULL,
-        updated_at = NOW()
+      SET failed_attempts = 0,
+          locked_until = NULL,
+          updated_at = NOW()
       WHERE identity_id = $1
     `, [identityId]);
   }
 
-  async function changePassword({
-    identityId,
-    currentPassword,
-    newPassword,
-    currentSessionId,
-  }) {
+  async function changePassword({ identityId, currentPassword, newPassword, currentSessionId }) {
     const result = await db.query(`
       WITH verified AS (
         SELECT c.identity_id
@@ -105,16 +94,8 @@ function createLocalIdentityRepository(db) {
       SELECT
         (SELECT identity_id FROM updated) AS identity_id,
         (SELECT password_changed_at FROM updated) AS password_changed_at,
-        COALESCE(
-          (SELECT COUNT(*)::INTEGER FROM revoked),
-          0
-        ) AS revoked_session_count
-    `, [
-      identityId,
-      currentPassword,
-      newPassword,
-      currentSessionId,
-    ]);
+        COALESCE((SELECT COUNT(*)::INTEGER FROM revoked), 0) AS revoked_session_count
+    `, [identityId, currentPassword, newPassword, currentSessionId]);
 
     const row = result.rows?.[0] || null;
     if (!row?.identity_id) return null;
@@ -130,6 +111,7 @@ function createLocalIdentityRepository(db) {
     workspaceId,
     workspaceMemberId,
     identityId,
+    identityProvider = 'LOCAL',
     tokenHash,
     expiresAt,
     userAgentHash,
@@ -140,17 +122,19 @@ function createLocalIdentityRepository(db) {
         workspace_id,
         workspace_member_id,
         identity_id,
+        identity_provider,
         token_hash,
         expires_at,
         user_agent_hash,
         client_ip_hash
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING session_id, created_at, expires_at
     `, [
       workspaceId,
       workspaceMemberId,
       identityId,
+      String(identityProvider || 'LOCAL').trim().toUpperCase(),
       tokenHash,
       expiresAt,
       userAgentHash,
@@ -167,6 +151,7 @@ function createLocalIdentityRepository(db) {
         s.workspace_id,
         s.workspace_member_id,
         s.identity_id,
+        s.identity_provider,
         s.expires_at,
         i.display_name,
         i.primary_email,
@@ -177,10 +162,8 @@ function createLocalIdentityRepository(db) {
         wm.member_role,
         wm.status AS member_status
       FROM ac_session s
-      JOIN ac_identity i
-        ON i.identity_id = s.identity_id
-      JOIN ac_workspace w
-        ON w.workspace_id = s.workspace_id
+      JOIN ac_identity i ON i.identity_id = s.identity_id
+      JOIN ac_workspace w ON w.workspace_id = s.workspace_id
       JOIN ac_workspace_member wm
         ON wm.workspace_id = s.workspace_id
        AND wm.workspace_member_id = s.workspace_member_id
@@ -214,7 +197,6 @@ function createLocalIdentityRepository(db) {
     return Boolean(result.rowCount);
   }
 
-
   async function createDeviceSession({
     workspaceId,
     workspaceMemberId,
@@ -238,14 +220,8 @@ function createLocalIdentityRepository(db) {
         user_agent_hash,
         client_ip_hash
       )
-      VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9
-      )
-      RETURNING
-        device_session_id,
-        created_at,
-        last_seen_at,
-        expires_at
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING device_session_id, created_at, last_seen_at, expires_at
     `, [
       workspaceId,
       workspaceMemberId,
@@ -261,9 +237,7 @@ function createLocalIdentityRepository(db) {
     return result.rows[0];
   }
 
-  async function findActiveDeviceSession(
-    tokenHash
-  ) {
+  async function findActiveDeviceSession(tokenHash) {
     const result = await db.query(`
       SELECT
         d.device_session_id,
@@ -274,80 +248,52 @@ function createLocalIdentityRepository(db) {
         d.device_label,
         d.created_at,
         d.expires_at,
-
         i.display_name,
         i.primary_email,
         i.status AS identity_status,
-
         w.workspace_code,
         w.workspace_name,
         w.status AS workspace_status,
-
         wm.member_role,
         wm.status AS member_status,
-
         c.credential_status,
         c.password_changed_at
-
       FROM ac_device_session d
-
-      JOIN ac_identity i
-        ON i.identity_id = d.identity_id
-
-      JOIN ac_workspace w
-        ON w.workspace_id = d.workspace_id
-
+      JOIN ac_identity i ON i.identity_id = d.identity_id
+      JOIN ac_workspace w ON w.workspace_id = d.workspace_id
       JOIN ac_workspace_member wm
         ON wm.workspace_id = d.workspace_id
-       AND wm.workspace_member_id =
-           d.workspace_member_id
+       AND wm.workspace_member_id = d.workspace_member_id
        AND wm.identity_id = d.identity_id
-
-      JOIN ac_local_credential c
-        ON c.identity_id = d.identity_id
-
+      JOIN ac_local_credential c ON c.identity_id = d.identity_id
       WHERE d.device_token_hash = $1
         AND d.revoked_at IS NULL
         AND d.expires_at > NOW()
         AND c.credential_status = 'ACTIVE'
-        AND (
-          c.password_changed_at IS NULL
-          OR d.created_at > c.password_changed_at
-        )
-
+        AND (c.password_changed_at IS NULL OR d.created_at > c.password_changed_at)
       LIMIT 1
     `, [tokenHash]);
 
     return result.rows?.[0] || null;
   }
 
-  async function touchDeviceSession({
-    deviceSessionId,
-    expiresAt,
-  }) {
+  async function touchDeviceSession({ deviceSessionId, expiresAt }) {
     const result = await db.query(`
       UPDATE ac_device_session
-      SET
-        last_seen_at = NOW(),
-        expires_at = $2
+      SET last_seen_at = NOW(),
+          expires_at = $2
       WHERE device_session_id = $1
         AND revoked_at IS NULL
       RETURNING expires_at
-    `, [
-      deviceSessionId,
-      expiresAt,
-    ]);
+    `, [deviceSessionId, expiresAt]);
 
     return result.rows?.[0] || null;
   }
 
-  async function revokeDeviceSession(
-    tokenHash
-  ) {
+  async function revokeDeviceSession(tokenHash) {
     const result = await db.query(`
       UPDATE ac_device_session
-      SET revoked_at =
-        COALESCE(revoked_at, NOW())
+      SET revoked_at = COALESCE(revoked_at, NOW())
       WHERE device_token_hash = $1
       RETURNING device_session_id
     `, [tokenHash]);
@@ -355,12 +301,7 @@ function createLocalIdentityRepository(db) {
     return Boolean(result.rowCount);
   }
 
-  async function searchWorkspaceMembers({
-    workspaceId,
-    requesterMemberId,
-    searchText = '',
-    limit = 50,
-  }) {
+  async function searchWorkspaceMembers({ workspaceId, requesterMemberId, searchText = '', limit = 50 }) {
     const access = await db.query(`
       SELECT 1
       FROM ac_workspace_member
@@ -380,8 +321,7 @@ function createLocalIdentityRepository(db) {
         i.primary_email,
         wm.member_role
       FROM ac_workspace_member wm
-      JOIN ac_identity i
-        ON i.identity_id = wm.identity_id
+      JOIN ac_identity i ON i.identity_id = wm.identity_id
       WHERE wm.workspace_id = $1
         AND wm.status = 'ACTIVE'
         AND i.status = 'ACTIVE'
@@ -414,6 +354,4 @@ function createLocalIdentityRepository(db) {
   });
 }
 
-module.exports = {
-  createLocalIdentityRepository,
-};
+module.exports = { createLocalIdentityRepository };

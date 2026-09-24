@@ -5,12 +5,8 @@ const { boundaryError } = require('../core/boundaryError');
 
 const DEFAULT_SESSION_TTL_SECONDS = 8 * 60 * 60;
 const MAX_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
-
-const DEFAULT_DEVICE_SESSION_TTL_SECONDS =
-  365 * 24 * 60 * 60;
-
-const MAX_DEVICE_SESSION_TTL_SECONDS =
-  730 * 24 * 60 * 60;
+const DEFAULT_DEVICE_SESSION_TTL_SECONDS = 365 * 24 * 60 * 60;
+const MAX_DEVICE_SESSION_TTL_SECONDS = 730 * 24 * 60 * 60;
 const MIN_PASSWORD_LENGTH = 10;
 const MAX_PASSWORD_LENGTH = 128;
 
@@ -27,18 +23,8 @@ function safeTtl(value) {
 
 function safeDeviceTtl(value) {
   const parsed = Number(value);
-
-  if (
-    !Number.isInteger(parsed) ||
-    parsed <= 0
-  ) {
-    return DEFAULT_DEVICE_SESSION_TTL_SECONDS;
-  }
-
-  return Math.min(
-    parsed,
-    MAX_DEVICE_SESSION_TTL_SECONDS
-  );
+  if (!Number.isInteger(parsed) || parsed <= 0) return DEFAULT_DEVICE_SESSION_TTL_SECONDS;
+  return Math.min(parsed, MAX_DEVICE_SESSION_TTL_SECONDS);
 }
 
 function sha256(value) {
@@ -61,19 +47,13 @@ function validateNewPassword(password) {
 }
 
 function invalidLogin() {
-  return boundaryError(
-    'LOCAL_AUTH_INVALID',
-    'Invalid workspace, login, or password',
-    401
-  );
+  return boundaryError('LOCAL_AUTH_INVALID', 'Invalid workspace, login, or password', 401);
 }
 
 function assertActiveLogin(row) {
   if (!row) throw invalidLogin();
-
   const now = Date.now();
   const lockedUntil = row.locked_until ? Date.parse(row.locked_until) : 0;
-
   if (
     row.identity_status !== 'ACTIVE' ||
     row.workspace_status !== 'ACTIVE' ||
@@ -88,29 +68,16 @@ function assertActiveLogin(row) {
 function createLocalIdentityService(repository, options = {}) {
   if (!repository) throw new TypeError('Local identity repository is required');
 
-  const ttlSeconds =
-    safeTtl(options.sessionTtlSeconds);
-
-  const deviceTtlSeconds =
-    safeDeviceTtl(
-      options.deviceSessionTtlSeconds
-    );
+  const ttlSeconds = safeTtl(options.sessionTtlSeconds);
+  const deviceTtlSeconds = safeDeviceTtl(options.deviceSessionTtlSeconds);
 
   async function login(input = {}, requestMetadata = {}) {
     const workspaceCode = clean(input.workspace_code ?? input.workspaceCode);
     const loginName = clean(input.login_name ?? input.loginName);
     const password = String(input.password ?? '');
+    if (!workspaceCode || !loginName || !password) throw invalidLogin();
 
-    if (!workspaceCode || !loginName || !password) {
-      throw invalidLogin();
-    }
-
-    const row = await repository.findLocalLogin({
-      workspaceCode,
-      loginName,
-      password,
-    });
-
+    const row = await repository.findLocalLogin({ workspaceCode, loginName, password });
     if (!row) throw invalidLogin();
 
     try {
@@ -130,21 +97,16 @@ function createLocalIdentityService(repository, options = {}) {
     await repository.resetFailedLogin(row.identity_id);
 
     const accessToken = crypto.randomBytes(32).toString('base64url');
-    const tokenHash = sha256(accessToken);
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
-
     const session = await repository.createSession({
       workspaceId: row.workspace_id,
       workspaceMemberId: row.workspace_member_id,
       identityId: row.identity_id,
-      tokenHash,
+      identityProvider: 'LOCAL',
+      tokenHash: sha256(accessToken),
       expiresAt,
-      userAgentHash: requestMetadata.userAgent
-        ? sha256(requestMetadata.userAgent)
-        : null,
-      clientIpHash: requestMetadata.clientIp
-        ? sha256(requestMetadata.clientIp)
-        : null,
+      userAgentHash: requestMetadata.userAgent ? sha256(requestMetadata.userAgent) : null,
+      clientIpHash: requestMetadata.clientIp ? sha256(requestMetadata.clientIp) : null,
     });
 
     return Object.freeze({
@@ -156,6 +118,7 @@ function createLocalIdentityService(repository, options = {}) {
         identity_id: row.identity_id,
         display_name: row.display_name,
         primary_email: row.primary_email || null,
+        identity_provider: 'LOCAL',
       }),
       workspace: Object.freeze({
         workspace_id: row.workspace_id,
@@ -171,9 +134,7 @@ function createLocalIdentityService(repository, options = {}) {
 
   async function verifyAccessToken(accessToken) {
     const token = clean(accessToken);
-    if (!token) {
-      throw boundaryError('ACCESS_TOKEN_REQUIRED', 'Access token is required', 401);
-    }
+    if (!token) throw boundaryError('ACCESS_TOKEN_REQUIRED', 'Access token is required', 401);
 
     const row = await repository.findActiveSession(sha256(token));
     if (
@@ -192,7 +153,7 @@ function createLocalIdentityService(repository, options = {}) {
       workspace_id: row.workspace_id,
       workspace_member_id: row.workspace_member_id,
       session_id: row.session_id,
-      identity_provider: 'LOCAL',
+      identity_provider: String(row.identity_provider || 'LOCAL').toUpperCase(),
       display_name: row.display_name,
       primary_email: row.primary_email || null,
       workspace_code: row.workspace_code,
@@ -203,29 +164,23 @@ function createLocalIdentityService(repository, options = {}) {
 
   async function changePassword(accessToken, input = {}) {
     const claims = await verifyAccessToken(accessToken);
-    const currentPassword = String(
-      input.current_password ?? input.currentPassword ?? ''
-    );
-    const newPassword = String(
-      input.new_password ?? input.newPassword ?? ''
-    );
-
-    if (!currentPassword) {
+    if (claims.identity_provider !== 'LOCAL') {
       throw boundaryError(
-        'LOCAL_PASSWORD_CURRENT_REQUIRED',
-        'Current password is required',
-        400
+        'LOCAL_PASSWORD_NOT_AVAILABLE',
+        'Password changes are managed by the configured external identity provider.',
+        403
       );
     }
 
-    validateNewPassword(newPassword);
+    const currentPassword = String(input.current_password ?? input.currentPassword ?? '');
+    const newPassword = String(input.new_password ?? input.newPassword ?? '');
+    if (!currentPassword) {
+      throw boundaryError('LOCAL_PASSWORD_CURRENT_REQUIRED', 'Current password is required', 400);
+    }
 
+    validateNewPassword(newPassword);
     if (currentPassword === newPassword) {
-      throw boundaryError(
-        'LOCAL_PASSWORD_UNCHANGED',
-        'New password must be different from the current password',
-        400
-      );
+      throw boundaryError('LOCAL_PASSWORD_UNCHANGED', 'New password must be different from the current password', 400);
     }
 
     const result = await repository.changePassword({
@@ -236,161 +191,65 @@ function createLocalIdentityService(repository, options = {}) {
     });
 
     if (!result) {
-      throw boundaryError(
-        'LOCAL_PASSWORD_CURRENT_INVALID',
-        'Current password is incorrect',
-        400
-      );
+      throw boundaryError('LOCAL_PASSWORD_CURRENT_INVALID', 'Current password is incorrect', 400);
     }
 
     return Object.freeze({
       success: true,
-      password_changed_at: new Date(
-        result.password_changed_at
-      ).toISOString(),
-      revoked_session_count: Number(
-        result.revoked_session_count || 0
-      ),
+      password_changed_at: new Date(result.password_changed_at).toISOString(),
+      revoked_session_count: Number(result.revoked_session_count || 0),
     });
   }
 
   async function logout(accessToken) {
     const token = clean(accessToken);
-    if (!token) {
-      throw boundaryError('ACCESS_TOKEN_REQUIRED', 'Access token is required', 401);
-    }
-
+    if (!token) throw boundaryError('ACCESS_TOKEN_REQUIRED', 'Access token is required', 401);
     await repository.revokeSession(sha256(token));
     return Object.freeze({ success: true });
   }
 
-
-  async function loginMobile(
-    input = {},
-    requestMetadata = {}
-  ) {
-    const platform = clean(
-      input.device_platform ??
-      input.devicePlatform ??
-      'ANDROID'
-    ).toUpperCase();
-
-    if (
-      platform !== 'ANDROID' &&
-      platform !== 'IOS'
-    ) {
-      throw boundaryError(
-        'MOBILE_DEVICE_PLATFORM_INVALID',
-        'Mobile device platform must be ANDROID or IOS',
-        400
-      );
+  async function loginMobile(input = {}, requestMetadata = {}) {
+    const platform = clean(input.device_platform ?? input.devicePlatform ?? 'ANDROID').toUpperCase();
+    if (!['ANDROID', 'IOS'].includes(platform)) {
+      throw boundaryError('MOBILE_DEVICE_PLATFORM_INVALID', 'Mobile device platform must be ANDROID or IOS', 400);
     }
 
-    const deviceLabel =
-      clean(
-        input.device_label ??
-        input.deviceLabel
-      ).slice(0, 120) || null;
-
-    const loginResult =
-      await login(input, requestMetadata);
-
-    const deviceToken =
-      crypto.randomBytes(32).toString('base64url');
-
-    const deviceExpiresAt =
-      new Date(
-        Date.now() +
-        deviceTtlSeconds * 1000
-      );
+    const deviceLabel = clean(input.device_label ?? input.deviceLabel).slice(0, 120) || null;
+    const loginResult = await login(input, requestMetadata);
+    const deviceToken = crypto.randomBytes(32).toString('base64url');
+    const deviceExpiresAt = new Date(Date.now() + deviceTtlSeconds * 1000);
 
     try {
-      const deviceSession =
-        await repository.createDeviceSession({
-          workspaceId:
-            loginResult.workspace.workspace_id,
-
-          workspaceMemberId:
-            loginResult.membership
-              .workspace_member_id,
-
-          identityId:
-            loginResult.identity.identity_id,
-
-          tokenHash:
-            sha256(deviceToken),
-
-          expiresAt:
-            deviceExpiresAt,
-
-          devicePlatform:
-            platform,
-
-          deviceLabel,
-
-          userAgentHash:
-            requestMetadata.userAgent
-              ? sha256(
-                  requestMetadata.userAgent
-                )
-              : null,
-
-          clientIpHash:
-            requestMetadata.clientIp
-              ? sha256(
-                  requestMetadata.clientIp
-                )
-              : null,
-        });
+      const deviceSession = await repository.createDeviceSession({
+        workspaceId: loginResult.workspace.workspace_id,
+        workspaceMemberId: loginResult.membership.workspace_member_id,
+        identityId: loginResult.identity.identity_id,
+        tokenHash: sha256(deviceToken),
+        expiresAt: deviceExpiresAt,
+        devicePlatform: platform,
+        deviceLabel,
+        userAgentHash: requestMetadata.userAgent ? sha256(requestMetadata.userAgent) : null,
+        clientIpHash: requestMetadata.clientIp ? sha256(requestMetadata.clientIp) : null,
+      });
 
       return Object.freeze({
         ...loginResult,
-
-        device_token:
-          deviceToken,
-
-        device_expires_at:
-          new Date(
-            deviceSession.expires_at
-          ).toISOString(),
+        device_token: deviceToken,
+        device_expires_at: new Date(deviceSession.expires_at).toISOString(),
       });
     } catch (error) {
-      try {
-        await repository.revokeSession(
-          sha256(loginResult.access_token)
-        );
-      } catch {
-        // Best-effort cleanup if device-session
-        // creation fails after access login.
-      }
-
+      try { await repository.revokeSession(sha256(loginResult.access_token)); } catch {}
       throw error;
     }
   }
 
-
-  async function refreshMobile(
-    input = {},
-    requestMetadata = {}
-  ) {
-    const deviceToken = clean(
-      input.device_token ??
-      input.deviceToken
-    );
-
+  async function refreshMobile(input = {}, requestMetadata = {}) {
+    const deviceToken = clean(input.device_token ?? input.deviceToken);
     if (!deviceToken) {
-      throw boundaryError(
-        'MOBILE_DEVICE_TOKEN_REQUIRED',
-        'Mobile device token is required',
-        401
-      );
+      throw boundaryError('MOBILE_DEVICE_TOKEN_REQUIRED', 'Mobile device token is required', 401);
     }
 
-    const row =
-      await repository.findActiveDeviceSession(
-        sha256(deviceToken)
-      );
-
+    const row = await repository.findActiveDeviceSession(sha256(deviceToken));
     if (
       !row ||
       row.identity_status !== 'ACTIVE' ||
@@ -398,164 +257,70 @@ function createLocalIdentityService(repository, options = {}) {
       row.member_status !== 'ACTIVE' ||
       row.credential_status !== 'ACTIVE'
     ) {
-      throw boundaryError(
-        'MOBILE_DEVICE_SESSION_INVALID',
-        'Mobile device session is invalid or expired',
-        401
-      );
+      throw boundaryError('MOBILE_DEVICE_SESSION_INVALID', 'Mobile device session is invalid or expired', 401);
     }
 
-    const nextDeviceExpiry =
-      new Date(
-        Date.now() +
-        deviceTtlSeconds * 1000
-      );
-
-    const touched =
-      await repository.touchDeviceSession({
-        deviceSessionId:
-          row.device_session_id,
-
-        expiresAt:
-          nextDeviceExpiry,
-      });
-
+    const nextDeviceExpiry = new Date(Date.now() + deviceTtlSeconds * 1000);
+    const touched = await repository.touchDeviceSession({
+      deviceSessionId: row.device_session_id,
+      expiresAt: nextDeviceExpiry,
+    });
     if (!touched) {
-      throw boundaryError(
-        'MOBILE_DEVICE_SESSION_INVALID',
-        'Mobile device session is invalid or expired',
-        401
-      );
+      throw boundaryError('MOBILE_DEVICE_SESSION_INVALID', 'Mobile device session is invalid or expired', 401);
     }
 
-    const accessToken =
-      crypto.randomBytes(32).toString('base64url');
-
-    const accessExpiresAt =
-      new Date(
-        Date.now() +
-        ttlSeconds * 1000
-      );
-
-    const session =
-      await repository.createSession({
-        workspaceId:
-          row.workspace_id,
-
-        workspaceMemberId:
-          row.workspace_member_id,
-
-        identityId:
-          row.identity_id,
-
-        tokenHash:
-          sha256(accessToken),
-
-        expiresAt:
-          accessExpiresAt,
-
-        userAgentHash:
-          requestMetadata.userAgent
-            ? sha256(
-                requestMetadata.userAgent
-              )
-            : null,
-
-        clientIpHash:
-          requestMetadata.clientIp
-            ? sha256(
-                requestMetadata.clientIp
-              )
-            : null,
-      });
+    const accessToken = crypto.randomBytes(32).toString('base64url');
+    const accessExpiresAt = new Date(Date.now() + ttlSeconds * 1000);
+    const session = await repository.createSession({
+      workspaceId: row.workspace_id,
+      workspaceMemberId: row.workspace_member_id,
+      identityId: row.identity_id,
+      identityProvider: 'LOCAL',
+      tokenHash: sha256(accessToken),
+      expiresAt: accessExpiresAt,
+      userAgentHash: requestMetadata.userAgent ? sha256(requestMetadata.userAgent) : null,
+      clientIpHash: requestMetadata.clientIp ? sha256(requestMetadata.clientIp) : null,
+    });
 
     return Object.freeze({
-      access_token:
-        accessToken,
-
-      token_type:
-        'Bearer',
-
-      expires_at:
-        new Date(
-          session.expires_at
-        ).toISOString(),
-
-      session_id:
-        session.session_id,
-
-      device_expires_at:
-        new Date(
-          touched.expires_at
-        ).toISOString(),
-
+      access_token: accessToken,
+      token_type: 'Bearer',
+      expires_at: new Date(session.expires_at).toISOString(),
+      session_id: session.session_id,
+      device_expires_at: new Date(touched.expires_at).toISOString(),
       identity: Object.freeze({
-        identity_id:
-          row.identity_id,
-
-        display_name:
-          row.display_name,
-
-        primary_email:
-          row.primary_email || null,
+        identity_id: row.identity_id,
+        display_name: row.display_name,
+        primary_email: row.primary_email || null,
+        identity_provider: 'LOCAL',
       }),
-
       workspace: Object.freeze({
-        workspace_id:
-          row.workspace_id,
-
-        workspace_code:
-          row.workspace_code,
-
-        workspace_name:
-          row.workspace_name,
+        workspace_id: row.workspace_id,
+        workspace_code: row.workspace_code,
+        workspace_name: row.workspace_name,
       }),
-
       membership: Object.freeze({
-        workspace_member_id:
-          row.workspace_member_id,
-
-        member_role:
-          row.member_role,
+        workspace_member_id: row.workspace_member_id,
+        member_role: row.member_role,
       }),
     });
   }
 
-
-  async function logoutMobile(
-    input = {}
-  ) {
-    const deviceToken = clean(
-      input.device_token ??
-      input.deviceToken
-    );
-
+  async function logoutMobile(input = {}) {
+    const deviceToken = clean(input.device_token ?? input.deviceToken);
     if (!deviceToken) {
-      throw boundaryError(
-        'MOBILE_DEVICE_TOKEN_REQUIRED',
-        'Mobile device token is required',
-        401
-      );
+      throw boundaryError('MOBILE_DEVICE_TOKEN_REQUIRED', 'Mobile device token is required', 401);
     }
-
-    await repository.revokeDeviceSession(
-      sha256(deviceToken)
-    );
-
-    return Object.freeze({
-      success: true,
-    });
+    await repository.revokeDeviceSession(sha256(deviceToken));
+    return Object.freeze({ success: true });
   }
-
 
   async function searchUsers(input = {}) {
     const workspaceId = clean(input.workspace_id);
     const requesterMemberId = clean(input.requester_member_id);
     const searchText = clean(input.search_text);
     const requestedLimit = Number(input.limit);
-    const limit = Number.isInteger(requestedLimit) && requestedLimit > 0
-      ? Math.min(requestedLimit, 100)
-      : 50;
+    const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 100) : 50;
 
     if (!workspaceId || !requesterMemberId) {
       throw boundaryError('VERIFIED_CONTEXT_REQUIRED', 'Trusted workspace context is required', 401);
@@ -568,10 +333,7 @@ function createLocalIdentityService(repository, options = {}) {
       limit,
     });
 
-    if (!rows) {
-      throw boundaryError('WORKSPACE_ACCESS_DENIED', 'Workspace access denied', 403);
-    }
-
+    if (!rows) throw boundaryError('WORKSPACE_ACCESS_DENIED', 'Workspace access denied', 403);
     return rows;
   }
 
