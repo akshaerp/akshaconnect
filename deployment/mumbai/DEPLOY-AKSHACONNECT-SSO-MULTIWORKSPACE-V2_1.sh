@@ -72,15 +72,34 @@ ACTUAL_HEAD="$(git -C "$REPO" rev-parse HEAD)"
 [ "$ACTUAL_HEAD" = "$EXPECTED_HEAD" ] || { echo "ERROR: local server HEAD mismatch"; exit 21; }
 echo "SOURCE HEAD PASS: $ACTUAL_HEAD"
 
-echo "===== 4. SOURCE TESTS ====="
+echo "===== 4. SOURCE TESTS (DOCKERIZED NODE) ====="
 cd "$REPO"
-node --check services/api/src/server.js
-node --check services/api/src/auth/akshaErpSsoHttpHandler.js
-node --check services/api/src/auth/akshaErpSsoRepository.js
-node --check services/api/src/auth/akshaErpSsoService.js
-node --check services/api/src/auth/localIdentityRepository.js
-node --check services/api/src/auth/localIdentityService.js
-node --test test/p1-v9-akshaerp-sso-multiworkspace-v2.test.js
+
+# Mumbai intentionally does not require a host-level Node installation.
+# Use the already accepted live/base image's Node runtime against a read-only
+# bind mount of the exact guarded Git source.
+sudo docker image inspect "$EXPECTED_BASE_IMAGE" >/dev/null 2>&1 || {
+  echo "ERROR: expected base image is not available for source validation"
+  exit 29
+}
+
+sudo docker run --rm \
+  --entrypoint sh \
+  -v "$REPO:/src:ro" \
+  -w /src \
+  "$EXPECTED_BASE_IMAGE" \
+  -lc '
+    set -eu
+    node --version
+    node --check services/api/src/server.js
+    node --check services/api/src/auth/akshaErpSsoHttpHandler.js
+    node --check services/api/src/auth/akshaErpSsoRepository.js
+    node --check services/api/src/auth/akshaErpSsoService.js
+    node --check services/api/src/auth/localIdentityRepository.js
+    node --check services/api/src/auth/localIdentityService.js
+    node --test test/p1-v9-akshaerp-sso-multiworkspace-v2.test.js
+  '
+
 echo "SOURCE TESTS PASS"
 
 echo "===== 5. BUILD ISOLATED CANDIDATE IMAGE ====="
