@@ -29,20 +29,39 @@ WORK="/tmp/akshaconnect_sso_multiworkspace_v2_1_${TS}"
 mkdir -p "$WORK" "$EXPORT_DIR"
 
 TRIAL_CREATED=0
+API_RESTART_NEEDED=0
+
+admin_drop_trial() {
+  if [ "$TRIAL_CREATED" -eq 1 ]; then
+    sudo -u postgres env \
+      -u PGHOST -u PGPORT -u PGUSER -u PGPASSWORD \
+      dropdb --if-exists "$TRIAL_DB" >/dev/null 2>&1 || true
+    TRIAL_CREATED=0
+  fi
+}
+
+restart_api_if_needed() {
+  if [ "$API_RESTART_NEEDED" -eq 1 ]; then
+    sudo docker start "$CONTAINER" >/dev/null 2>&1 || true
+    API_RESTART_NEEDED=0
+  fi
+}
+
 cleanup() {
   code=$?
-  if [ "$TRIAL_CREATED" -eq 1 ]; then
-    dropdb --if-exists "$TRIAL_DB" >/dev/null 2>&1 || true
-  fi
+  restart_api_if_needed
+  admin_drop_trial
   rm -rf "$WORK" >/dev/null 2>&1 || true
   exit "$code"
 }
 trap cleanup EXIT
 
 echo "============================================================"
-echo " AKSHACONNECT DB V2.1 - TRIAL FIRST + LIVE APPLY"
+echo " AKSHACONNECT DB V2.1-R1"
+echo " LOCAL POSTGRES ADMIN TRIAL + APP-ROLE MIGRATION"
 echo "============================================================"
 
+echo "===== 1. LIVE API + SOURCE FILE GUARDS ====="
 sudo docker ps --format '{{.Names}}' | grep -qx "$CONTAINER" || {
   echo "ERROR: $CONTAINER is not running"
   exit 20
@@ -60,6 +79,7 @@ done
 [ "$(sha256sum "$PROVISION" | awk '{print $1}')" = "$EXPECTED_PROVISION_SHA" ] || { echo "ERROR: APP provisioning SHA mismatch"; exit 24; }
 echo "MIGRATION SHA GUARDS PASS"
 
+echo "===== 2. APPLICATION DB CONNECTION ====="
 DB_URL="$(
   sudo docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' |
   sed -n 's/^AKSHACONNECT_DATABASE_URL=//p'
@@ -86,10 +106,53 @@ for k,v in {
 PY
 )"
 
-LIVE_DB="$(psql -X -At -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -c 'select current_database()')"
-[ "$LIVE_DB" = "$EXPECTED_DB" ] || { echo "ERROR: live DB identity mismatch: $LIVE_DB"; exit 27; }
-echo "DATABASE IDENTITY PASS: $LIVE_DB"
+case "$PGHOST" in
+  127.0.0.1|localhost) ;;
+  *)
+    echo "ERROR: R1 admin-trial runner requires local PostgreSQL; PGHOST=$PGHOST"
+    exit 27
+    ;;
+esac
 
+LIVE_DB="$(psql -X -At -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -c 'select current_database()')"
+[ "$LIVE_DB" = "$EXPECTED_DB" ] || { echo "ERROR: live DB identity mismatch: $LIVE_DB"; exit 28; }
+
+APP_USER="$(psql -X -At -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -c 'select current_user')"
+[ -n "$APP_USER" ] || { echo "ERROR: application DB user unresolved"; exit 29; }
+
+echo "DATABASE IDENTITY PASS: $LIVE_DB"
+echo "APPLICATION ROLE       : $APP_USER"
+
+echo "===== 3. LOCAL POSTGRES ADMIN GUARD ====="
+id postgres >/dev/null 2>&1 || { echo "ERROR: OS postgres user missing"; exit 30; }
+
+ADMIN_ROW="$(
+  sudo -u postgres env \
+    -u PGHOST -u PGPORT -u PGUSER -u PGPASSWORD \
+    psql -X -At -v ON_ERROR_STOP=1 -d postgres \
+    -c "select current_user||'|'||rolcreatedb||'|'||rolsuper from pg_roles where rolname=current_user"
+)"
+
+ADMIN_USER="${ADMIN_ROW%%|*}"
+ADMIN_REST="${ADMIN_ROW#*|}"
+ADMIN_CREATEDB="${ADMIN_REST%%|*}"
+ADMIN_SUPER="${ADMIN_REST##*|}"
+
+[ "$ADMIN_CREATEDB" = "t" ] || { echo "ERROR: local postgres admin cannot CREATEDB"; exit 31; }
+
+ROLE_EXISTS="$(
+  sudo -u postgres env \
+    -u PGHOST -u PGPORT -u PGUSER -u PGPASSWORD \
+    psql -X -At -v ON_ERROR_STOP=1 -d postgres \
+    -v app_user="$APP_USER" \
+    -c "select count(*) from pg_roles where rolname=:'app_user'"
+)"
+[ "$ROLE_EXISTS" = "1" ] || { echo "ERROR: application DB role not found by local admin"; exit 32; }
+
+echo "LOCAL ADMIN PASS: user=$ADMIN_USER createdb=$ADMIN_CREATEDB superuser=$ADMIN_SUPER"
+echo "Application role exists: $APP_USER"
+
+echo "===== 4. CURRENT DATABASE STATE ====="
 TENANT_TABLE="$(psql -X -At -d "$EXPECTED_DB" -c "select coalesce(to_regclass('public.ac_tenant')::text,'')")"
 if [ -n "$TENANT_TABLE" ]; then
   echo "V2 tenant model already exists; verifying canonical state."
@@ -104,6 +167,7 @@ fi
 psql -X -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -f "$PREFLIGHT"
 echo "LIVE PREFLIGHT PASS"
 
+echo "===== 5. FULL ROLLBACK DUMP ====="
 pg_dump --format=custom --no-owner --no-acl -d "$EXPECTED_DB" -f "$BACKUP"
 pg_restore --list "$BACKUP" >/dev/null
 BACKUP_SHA="$(sha256sum "$BACKUP" | awk '{print $1}')"
@@ -138,31 +202,51 @@ VALUES
 COMMIT;
 SQL
 
-echo "===== TRIAL RESTORE ====="
-createdb "$TRIAL_DB"
+echo "===== 6. TRIAL DATABASE CREATE AS POSTGRES ADMIN ====="
+sudo -u postgres env \
+  -u PGHOST -u PGPORT -u PGUSER -u PGPASSWORD \
+  createdb --owner="$APP_USER" "$TRIAL_DB"
 TRIAL_CREATED=1
+
+TRIAL_OWNER="$(
+  psql -X -At -v ON_ERROR_STOP=1 -d "$TRIAL_DB" \
+    -c "select pg_get_userbyid(datdba) from pg_database where datname=current_database()"
+)"
+[ "$TRIAL_OWNER" = "$APP_USER" ] || {
+  echo "ERROR: trial DB owner mismatch: expected=$APP_USER actual=$TRIAL_OWNER"
+  exit 33
+}
+echo "TRIAL DATABASE OWNER PASS: $TRIAL_OWNER"
+
+echo "===== 7. TRIAL RESTORE + EXACT CANONICAL APPLY ====="
 pg_restore --no-owner --no-acl -d "$TRIAL_DB" "$BACKUP"
+
+TRIAL_USER="$(psql -X -At -v ON_ERROR_STOP=1 -d "$TRIAL_DB" -c 'select current_user')"
+[ "$TRIAL_USER" = "$APP_USER" ] || {
+  echo "ERROR: trial validation is not running under application role"
+  exit 34
+}
+
 psql -X -v ON_ERROR_STOP=1 -d "$TRIAL_DB" -f "$PREFLIGHT"
 psql -X -v ON_ERROR_STOP=1 -d "$TRIAL_DB" -f "$APPLY_SQL"
 psql -X -v ON_ERROR_STOP=1 -d "$TRIAL_DB" -f "$POSTCHECK"
 psql -X -v ON_ERROR_STOP=1 -d "$TRIAL_DB" -f "$PROVISION_VERIFY"
-dropdb "$TRIAL_DB"
+
+sudo -u postgres env \
+  -u PGHOST -u PGPORT -u PGUSER -u PGPASSWORD \
+  dropdb "$TRIAL_DB"
 TRIAL_CREATED=0
 echo "TRIAL RESTORE / APPLY / POSTCHECK PASS"
 
-echo "===== LIVE RECHECK ====="
+echo "===== 8. LIVE RECHECK ====="
 psql -X -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -f "$PREFLIGHT"
 curl -fsS http://127.0.0.1:4100/health >/dev/null
+curl -fsS http://127.0.0.1:4100/ready >/dev/null
+echo "LIVE RECHECK PASS"
 
-echo "===== QUIESCE API ====="
+echo "===== 9. QUIESCE API ====="
 sudo docker stop "$CONTAINER" >/dev/null
 API_RESTART_NEEDED=1
-restart_api() {
-  if [ "${API_RESTART_NEEDED:-0}" -eq 1 ]; then
-    sudo docker start "$CONTAINER" >/dev/null || true
-  fi
-}
-trap 'restart_api; cleanup' EXIT
 
 ACTIVE="$(psql -X -At -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -c "
 select count(*)
@@ -171,9 +255,10 @@ where datname=current_database()
   and pid<>pg_backend_pid()
   and state<>'idle'
 ")"
-[ "$ACTIVE" = "0" ] || { echo "ERROR: active DB sessions remain: $ACTIVE"; exit 28; }
+[ "$ACTIVE" = "0" ] || { echo "ERROR: active DB sessions remain: $ACTIVE"; exit 35; }
 echo "ZERO ACTIVE DB SESSIONS PASS"
 
+echo "===== 10. LIVE EXACT CANONICAL APPLY ====="
 psql -X -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -f "$APPLY_SQL"
 psql -X -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -f "$POSTCHECK"
 psql -X -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -f "$PROVISION_VERIFY"
@@ -188,7 +273,7 @@ for i in $(seq 1 30); do
     echo "API HEALTH AFTER DB MIGRATION PASS"
     break
   fi
-  [ "$i" -lt 30 ] || { echo "ERROR: API health did not recover"; exit 29; }
+  [ "$i" -lt 30 ] || { echo "ERROR: API health did not recover"; exit 36; }
   sleep 1
 done
 
@@ -196,7 +281,8 @@ trap - EXIT
 rm -rf "$WORK"
 
 echo "============================================================"
-echo " AKSHACONNECT DB V2.1 PASS"
-echo " Rollback: $BACKUP"
-echo " SHA256  : $BACKUP_SHA"
+echo " AKSHACONNECT DB V2.1-R1 PASS"
+echo " Trial owner : $APP_USER"
+echo " Rollback    : $BACKUP"
+echo " SHA256      : $BACKUP_SHA"
 echo "============================================================"
