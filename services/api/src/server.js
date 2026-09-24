@@ -170,6 +170,7 @@ async function start() {
   const workspaceDirectoryHttpHandler = createWorkspaceDirectoryHttpHandler({
     identityService: localIdentityService,
     directoryService,
+    collaborationService,
   });
 
   const appHandler = createRequestHandler({

@@ -2,6 +2,8 @@
 
 const { boundaryError } = require('../core/boundaryError');
 
+const AKSHAERP_DIRECTORY_MEMBER_PREFIX = 'dir:AKSHAERP:';
+
 function clean(value) {
   if (value === null || value === undefined) return null;
   const text = String(value).trim();
@@ -20,6 +22,10 @@ function providerTenantSubject(value) {
 
 function providerIdentitySubject(tenantId, userId) {
   return `${providerTenantSubject(tenantId)}:${Number(userId)}`;
+}
+
+function directoryMemberId(userId) {
+  return `${AKSHAERP_DIRECTORY_MEMBER_PREFIX}${Number(userId)}`;
 }
 
 function normalizedMetadata(value) {
@@ -110,6 +116,96 @@ function createAkshaErpDirectoryRepository(pool) {
     };
   }
 
+  async function decorateDirectoryUsers({
+    workspaceId,
+    erpTenantId,
+    users = [],
+  }) {
+    const normalized = users
+      .map((user) => {
+        const userId = positiveInt(user?.user_id ?? user?.userId);
+        const displayName = displayNameFor(user);
+
+        if (!userId || !displayName || user?.is_active === false) return null;
+
+        return {
+          user,
+          userId,
+          displayName,
+          primaryEmail: primaryEmailFor(user),
+          externalSubject: providerIdentitySubject(erpTenantId, userId),
+        };
+      })
+      .filter(Boolean);
+
+    if (!normalized.length) return [];
+
+    const externalSubjects = normalized.map((item) => item.externalSubject);
+
+    const existingResult = await pool.query(`
+      SELECT
+        p.external_subject,
+        i.identity_id,
+        i.status AS identity_status,
+        wm.workspace_member_id,
+        wm.member_role,
+        wm.status AS member_status
+      FROM ac_identity_provider_link p
+      JOIN ac_identity i
+        ON i.identity_id = p.identity_id
+      LEFT JOIN ac_workspace_member wm
+        ON wm.workspace_id = $1
+       AND wm.identity_id = i.identity_id
+      WHERE p.provider_code = 'AKSHAERP'
+        AND p.external_subject = ANY($2::text[])
+    `, [workspaceId, externalSubjects]);
+
+    const existingBySubject = new Map(
+      (existingResult.rows || []).map((row) => [
+        row.external_subject,
+        row,
+      ])
+    );
+
+    const results = [];
+
+    for (const item of normalized) {
+      const existing = existingBySubject.get(item.externalSubject);
+
+      // An explicitly inactive Connect identity/membership stays blocked even
+      // if the upstream ERP account is active.
+      if (existing?.identity_status && existing.identity_status !== 'ACTIVE') {
+        continue;
+      }
+      if (existing?.member_status && existing.member_status !== 'ACTIVE') {
+        continue;
+      }
+
+      const provisioned = Boolean(existing?.workspace_member_id);
+
+      results.push({
+        workspace_member_id:
+          existing?.workspace_member_id ||
+          directoryMemberId(item.userId),
+        identity_id:
+          existing?.identity_id || null,
+        display_name:
+          item.displayName,
+        primary_email:
+          item.primaryEmail,
+        member_role:
+          existing?.member_role || 'MEMBER',
+        directory_provider:
+          'AKSHAERP',
+        external_user_id:
+          item.userId,
+        provisioned,
+      });
+    }
+
+    return results;
+  }
+
   async function provisionDirectoryUser({
     connectTenantId,
     workspaceId,
@@ -180,8 +276,7 @@ function createAkshaErpDirectoryRepository(pool) {
           p.identity_id,
           i.status AS identity_status
         FROM ac_identity_provider_link p
-        JOIN ac_identity i
-          ON i.identity_id = p.identity_id
+        JOIN ac_identity i ON i.identity_id = p.identity_id
         WHERE p.provider_code = $1
           AND p.external_subject = $2
         LIMIT 1
@@ -202,23 +297,21 @@ function createAkshaErpDirectoryRepository(pool) {
 
       if (linkResult.rowCount) {
         const current = linkResult.rows[0];
+        identityId = current.identity_id;
 
         if (current.identity_status !== 'ACTIVE') {
-          await client.query('ROLLBACK');
-          return {
-            available: false,
-            reason: 'IDENTITY_INACTIVE',
-          };
+          throw boundaryError(
+            'AKSHAERP_IDENTITY_INACTIVE',
+            'The linked AkshaConnect identity is not active.',
+            403
+          );
         }
-
-        identityId = current.identity_id;
 
         await client.query(`
           UPDATE ac_identity
-          SET
-            display_name = $2,
-            primary_email = $3,
-            updated_at = NOW()
+          SET display_name = $2,
+              primary_email = $3,
+              updated_at = NOW()
           WHERE identity_id = $1
         `, [identityId, displayName, primaryEmail]);
 
@@ -346,6 +439,7 @@ function createAkshaErpDirectoryRepository(pool) {
 
   return Object.freeze({
     getTrustedDirectoryContext,
+    decorateDirectoryUsers,
     provisionDirectoryUser,
   });
 }
