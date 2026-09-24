@@ -119,6 +119,10 @@ LIVE_DB="$(psql -X -At -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -c 'select current_d
 
 APP_USER="$(psql -X -At -v ON_ERROR_STOP=1 -d "$EXPECTED_DB" -c 'select current_user')"
 [ -n "$APP_USER" ] || { echo "ERROR: application DB user unresolved"; exit 29; }
+[ "$APP_USER" = "akshaconnect" ] || {
+  echo "ERROR: unexpected application DB role: $APP_USER"
+  exit 29
+}
 
 echo "DATABASE IDENTITY PASS: $LIVE_DB"
 echo "APPLICATION ROLE       : $APP_USER"
@@ -150,10 +154,9 @@ ROLE_EXISTS="$(
   sudo -u postgres env \
     -u PGHOST -u PGPORT -u PGUSER -u PGPASSWORD \
     psql -X -At -v ON_ERROR_STOP=1 -d postgres \
-    -v app_user="$APP_USER" \
-    -c "select count(*) from pg_roles where rolname=:'app_user'"
+    -c "select count(*) from pg_roles where rolname='akshaconnect'"
 )"
-[ "$ROLE_EXISTS" = "1" ] || { echo "ERROR: application DB role not found by local admin"; exit 32; }
+[ "$ROLE_EXISTS" = "1" ] || { echo "ERROR: application DB role akshaconnect not found by local admin"; exit 32; }
 
 echo "LOCAL ADMIN PASS: user=$ADMIN_USER createdb=$ADMIN_CREATEDB superuser=$ADMIN_SUPER"
 echo "Application role exists: $APP_USER"
