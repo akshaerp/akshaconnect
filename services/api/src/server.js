@@ -12,6 +12,10 @@ const { createWorkspaceSessionRepository } = require('./auth/workspaceSessionRep
 const { createWorkspaceSessionService } = require('./auth/workspaceSessionService');
 const { createWorkspaceSessionHttpHandler } = require('./auth/workspaceSessionHttpHandler');
 const { createAkshaErpHttpAdapters } = require('./integration/erpHttpAdapter');
+const { createAkshaErpDirectoryRepository } = require('./auth/akshaErpDirectoryRepository');
+const { createProviderDirectoryService } = require('./auth/providerDirectoryService');
+const { createWorkspaceDirectoryHttpHandler } = require('./auth/workspaceDirectoryHttpHandler');
+const { createTrustedErpBridgeHttpHandler } = require('./auth/trustedErpBridgeHttpHandler');
 const { createCollaborationRepository } = require('./collaboration/collaborationRepository');
 const { createCollaborationService } = require('./collaboration/collaborationService');
 const { createMessagingRepository } = require('./messaging/messagingRepository');
@@ -132,14 +136,17 @@ async function start() {
   );
 
   let ssoService = null;
+  let identityGateway = null;
+  let erpDirectoryRepository = null;
+
   if (identityProvider === 'AKSHAERP') {
-    const { identityGateway } = createAkshaErpHttpAdapters({
+    ({ identityGateway } = createAkshaErpHttpAdapters({
       baseUrl: process.env.AKSHACONNECT_ERP_BASE_URL,
       apiClientId: process.env.AKSHACONNECT_ERP_API_CLIENT_ID,
       apiKey: process.env.AKSHACONNECT_ERP_API_KEY,
       timeoutMs: process.env.AKSHACONNECT_ERP_TIMEOUT_MS || 5000,
       fetchImpl: global.fetch,
-    });
+    }));
 
     const ssoRepository = createAkshaErpSsoRepository(pool);
     ssoService = createAkshaErpSsoService({
@@ -149,7 +156,21 @@ async function start() {
       sessionTtlSeconds:
         process.env.AKSHACONNECT_SSO_SESSION_TTL_SECONDS,
     });
+
+    erpDirectoryRepository = createAkshaErpDirectoryRepository(pool);
   }
+
+  const directoryService = createProviderDirectoryService({
+    identityProvider,
+    localIdentityService,
+    identityGateway,
+    erpDirectoryRepository,
+  });
+
+  const workspaceDirectoryHttpHandler = createWorkspaceDirectoryHttpHandler({
+    identityService: localIdentityService,
+    directoryService,
+  });
 
   const appHandler = createRequestHandler({
     localIdentityService,
@@ -166,11 +187,26 @@ async function start() {
       process.env.AKSHACONNECT_ERP_ALLOWED_ORIGINS,
   });
 
+  const trustedErpBridgeHttpHandler = createTrustedErpBridgeHttpHandler({
+    identityProvider,
+    ssoService,
+    identityService: localIdentityService,
+    messagingService,
+    allowedOrigins:
+      process.env.AKSHACONNECT_ERP_ALLOWED_ORIGINS,
+  });
+
   const server = http.createServer(async (req, res) => {
-    let handled = await ssoHttpHandler(req, res);
+    let handled = await trustedErpBridgeHttpHandler(req, res);
+    if (handled) return;
+
+    handled = await ssoHttpHandler(req, res);
     if (handled) return;
 
     handled = await workspaceSessionHttpHandler(req, res);
+    if (handled) return;
+
+    handled = await workspaceDirectoryHttpHandler(req, res);
     if (handled) return;
 
     await appHandler(req, res);
