@@ -1,4 +1,3 @@
-
 'use strict';
 
 const http = require('node:http');
@@ -9,6 +8,9 @@ const { createLocalIdentityService } = require('./auth/localIdentityService');
 const { createAkshaErpSsoRepository } = require('./auth/akshaErpSsoRepository');
 const { createAkshaErpSsoService } = require('./auth/akshaErpSsoService');
 const { createAkshaErpSsoHttpHandler } = require('./auth/akshaErpSsoHttpHandler');
+const { createWorkspaceSessionRepository } = require('./auth/workspaceSessionRepository');
+const { createWorkspaceSessionService } = require('./auth/workspaceSessionService');
+const { createWorkspaceSessionHttpHandler } = require('./auth/workspaceSessionHttpHandler');
 const { createAkshaErpHttpAdapters } = require('./integration/erpHttpAdapter');
 const { createCollaborationRepository } = require('./collaboration/collaborationRepository');
 const { createCollaborationService } = require('./collaboration/collaborationService');
@@ -62,6 +64,17 @@ async function start() {
       process.env.AKSHACONNECT_LOCAL_SESSION_TTL_SECONDS,
     deviceSessionTtlSeconds:
       process.env.AKSHACONNECT_MOBILE_DEVICE_TTL_SECONDS,
+  });
+
+  // Workspace switching is provider-neutral. It operates only on verified
+  // AkshaConnect sessions and active memberships inside the current tenant.
+  const workspaceSessionRepository = createWorkspaceSessionRepository(pool);
+  const workspaceSessionService = createWorkspaceSessionService({
+    identityService: localIdentityService,
+    repository: workspaceSessionRepository,
+  });
+  const workspaceSessionHttpHandler = createWorkspaceSessionHttpHandler({
+    workspaceSessionService,
   });
 
   const collaborationRepository = createCollaborationRepository(pool);
@@ -154,8 +167,12 @@ async function start() {
   });
 
   const server = http.createServer(async (req, res) => {
-    const handled = await ssoHttpHandler(req, res);
+    let handled = await ssoHttpHandler(req, res);
     if (handled) return;
+
+    handled = await workspaceSessionHttpHandler(req, res);
+    if (handled) return;
+
     await appHandler(req, res);
   });
 
