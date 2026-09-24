@@ -123,14 +123,14 @@ cp packages/contracts/src/providerModesV1.js "$BUILD/overlay/packages/contracts/
 cat > "$BUILD/Dockerfile" <<EOF
 ARG BASE_IMAGE=$EXPECTED_BASE_IMAGE
 FROM \${BASE_IMAGE}
-COPY overlay/src/server.js /app/src/server.js
-COPY overlay/src/auth/akshaErpSsoHttpHandler.js /app/src/auth/akshaErpSsoHttpHandler.js
-COPY overlay/src/auth/akshaErpSsoRepository.js /app/src/auth/akshaErpSsoRepository.js
-COPY overlay/src/auth/akshaErpSsoService.js /app/src/auth/akshaErpSsoService.js
-COPY overlay/src/auth/localIdentityRepository.js /app/src/auth/localIdentityRepository.js
-COPY overlay/src/auth/localIdentityService.js /app/src/auth/localIdentityService.js
-COPY overlay/packages/contracts/src/integrationTransportV1.js /packages/contracts/src/integrationTransportV1.js
-COPY overlay/packages/contracts/src/providerModesV1.js /packages/contracts/src/providerModesV1.js
+COPY --chown=node:node overlay/src/server.js /app/src/server.js
+COPY --chown=node:node overlay/src/auth/akshaErpSsoHttpHandler.js /app/src/auth/akshaErpSsoHttpHandler.js
+COPY --chown=node:node overlay/src/auth/akshaErpSsoRepository.js /app/src/auth/akshaErpSsoRepository.js
+COPY --chown=node:node overlay/src/auth/akshaErpSsoService.js /app/src/auth/akshaErpSsoService.js
+COPY --chown=node:node overlay/src/auth/localIdentityRepository.js /app/src/auth/localIdentityRepository.js
+COPY --chown=node:node overlay/src/auth/localIdentityService.js /app/src/auth/localIdentityService.js
+COPY --chown=node:node overlay/packages/contracts/src/integrationTransportV1.js /packages/contracts/src/integrationTransportV1.js
+COPY --chown=node:node overlay/packages/contracts/src/providerModesV1.js /packages/contracts/src/providerModesV1.js
 RUN node --check /app/src/server.js \
  && node --check /app/src/auth/akshaErpSsoHttpHandler.js \
  && node --check /app/src/auth/akshaErpSsoRepository.js \
