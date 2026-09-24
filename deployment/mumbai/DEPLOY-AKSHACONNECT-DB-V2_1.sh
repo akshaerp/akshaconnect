@@ -138,7 +138,13 @@ ADMIN_REST="${ADMIN_ROW#*|}"
 ADMIN_CREATEDB="${ADMIN_REST%%|*}"
 ADMIN_SUPER="${ADMIN_REST##*|}"
 
-[ "$ADMIN_CREATEDB" = "t" ] || { echo "ERROR: local postgres admin cannot CREATEDB"; exit 31; }
+case "$(printf '%s' "$ADMIN_CREATEDB" | tr '[:upper:]' '[:lower:]')" in
+  t|true|1|y|yes|on) ;;
+  *)
+    echo "ERROR: local postgres admin cannot CREATEDB (reported: $ADMIN_CREATEDB)"
+    exit 31
+    ;;
+esac
 
 ROLE_EXISTS="$(
   sudo -u postgres env \
