@@ -5,7 +5,8 @@ DO $$
 DECLARE
     v_tenant_id uuid;
 BEGIN
-    IF current_database() <> 'akshaconnect' THEN
+    IF current_database() <> 'akshaconnect'
+       AND current_database() NOT LIKE 'akshaconnect_trial_%' THEN
         RAISE EXCEPTION 'Expected database akshaconnect, found %', current_database();
     END IF;
 
