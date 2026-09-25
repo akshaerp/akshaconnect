@@ -9,6 +9,13 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
+function functionSlice(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  assert.ok(start >= 0, `Missing start marker: ${startMarker}`);
+  const end = endMarker ? source.indexOf(endMarker, start + startMarker.length) : -1;
+  return source.slice(start, end >= 0 ? end : source.length);
+}
+
 test('P1-V8A V2 routes channel and DM selections into a native conversation screen', () => {
   const app = read('apps/mobile/App.jsx');
   const home = read('apps/mobile/src/screens/HomeScreen.jsx');
@@ -20,19 +27,34 @@ test('P1-V8A V2 routes channel and DM selections into a native conversation scre
   assert.match(home, /dm\.conversation_id/);
 });
 
-test('P1-V8A V2 mobile client uses the existing durable messaging endpoints', () => {
+test('V10A durable messaging calls remain provider-neutral inside the messaging functions', () => {
   const client = read('apps/mobile/src/api/client.js');
 
-  assert.match(
+  const listMessages = functionSlice(
     client,
+    'export function listMessages(',
+    'export function sendMessage('
+  );
+
+  const sendMessage = functionSlice(
+    client,
+    'export function sendMessage(',
+    'function getNativeBlobUtil()'
+  );
+
+  const durableMessaging = `${listMessages}\n${sendMessage}`;
+
+  assert.match(
+    durableMessaging,
     /\/api\/v1\/conversations\/\$\{encodeURIComponent\(conversationId\)\}/
   );
-  assert.match(client, /messages\?limit=/);
-  assert.match(client, /body_text: bodyText/);
-  assert.match(client, /client_message_id: clientMessageId/);
+  assert.match(durableMessaging, /messages\?limit=/);
+  assert.match(durableMessaging, /body_text: bodyText/);
+  assert.match(durableMessaging, /client_message_id: clientMessageId/);
+
   assert.doesNotMatch(
-    client,
-    /sender_member_id|workspace_id\s*:|AKSHAERP_|module_code|function_code/i
+    durableMessaging,
+    /sender_member_id|workspace_id\s*:|AKSHAERP_|module_code|function_code|tenant_id/i
   );
 });
 

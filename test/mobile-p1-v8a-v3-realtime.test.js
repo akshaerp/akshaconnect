@@ -9,7 +9,7 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
-test('P1-V8A V3 adds a provider-neutral authenticated mobile realtime client', () => {
+test('V10A keeps the authenticated mobile realtime transport provider-neutral', () => {
   const realtime = read(
     'apps/mobile/src/realtime/client.js'
   );
@@ -19,8 +19,11 @@ test('P1-V8A V3 adds a provider-neutral authenticated mobile realtime client', (
   assert.match(realtime, /type:\s*['"]auth['"]/);
   assert.match(realtime, /access_token:\s*token/);
   assert.match(app, /message\.created/);
+
+  // Company/provider selection now belongs to the authentication layer in App.jsx.
+  // The realtime transport itself must remain independent of ERP/tenant authority.
   assert.doesNotMatch(
-    `${realtime}\n${app}`,
+    realtime,
     /AKSHAERP_|module_code|function_code|organization_id|tenant_id/i
   );
 });

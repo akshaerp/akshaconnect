@@ -1,13 +1,8 @@
 'use strict';
 
 function createPushRegistrationRepository(db) {
-  if (
-    !db ||
-    typeof db.query !== 'function'
-  ) {
-    throw new TypeError(
-      'A PostgreSQL pool is required'
-    );
+  if (!db || typeof db.query !== 'function') {
+    throw new TypeError('A PostgreSQL pool is required');
   }
 
   async function upsertRegistration({
@@ -47,54 +42,31 @@ function createPushRegistrationRepository(db) {
         created_at,
         last_seen_at,
         revoked_at
-    `, [
-      deviceSessionId,
-      provider,
-      platform,
-      pushToken,
-    ]);
+    `, [deviceSessionId, provider, platform, pushToken]);
 
     return result.rows?.[0] || null;
   }
 
-  async function revokeRegistration({
-    deviceSessionId,
-    provider,
-    pushToken = null,
-  }) {
+  async function revokeRegistration({ deviceSessionId, provider, pushToken = null }) {
     const result = await db.query(`
       UPDATE ac_push_registration
       SET revoked_at = COALESCE(revoked_at, NOW())
       WHERE device_session_id = $1
         AND provider = $2
         AND revoked_at IS NULL
-        AND (
-          $3::text IS NULL
-          OR push_token = $3
-        )
+        AND ($3::text IS NULL OR push_token = $3)
       RETURNING push_registration_id
-    `, [
-      deviceSessionId,
-      provider,
-      pushToken || null,
-    ]);
+    `, [deviceSessionId, provider, pushToken || null]);
 
     return Number(result.rowCount || 0);
   }
 
-  async function listActiveRegistrations({
-    workspaceId,
-    workspaceMemberIds = [],
-  }) {
-    const memberIds =
-      [...new Set(
-        (workspaceMemberIds || [])
-          .filter(Boolean)
-      )];
-
-    if (memberIds.length === 0) {
-      return [];
-    }
+  // Provider-neutral push lookup. LOCAL password validity is enforced only for
+  // LOCAL device sessions; external-provider devices are validated by their
+  // active device/identity/workspace membership.
+  async function listActiveRegistrations({ workspaceId, workspaceMemberIds = [] }) {
+    const memberIds = [...new Set((workspaceMemberIds || []).filter(Boolean))];
+    if (memberIds.length === 0) return [];
 
     const result = await db.query(`
       SELECT
@@ -115,9 +87,8 @@ function createPushRegistrationRepository(db) {
       JOIN ac_identity i
         ON i.identity_id = d.identity_id
        AND i.status = 'ACTIVE'
-      JOIN ac_local_credential c
+      LEFT JOIN ac_local_credential c
         ON c.identity_id = d.identity_id
-       AND c.credential_status = 'ACTIVE'
       WHERE d.workspace_id = $1
         AND d.workspace_member_id = ANY($2::uuid[])
         AND d.revoked_at IS NULL
@@ -125,31 +96,21 @@ function createPushRegistrationRepository(db) {
         AND pr.revoked_at IS NULL
         AND pr.provider = 'FCM'
         AND (
-          c.password_changed_at IS NULL
-          OR d.created_at > c.password_changed_at
+          d.identity_provider <> 'LOCAL'
+          OR (
+            c.credential_status = 'ACTIVE'
+            AND (c.password_changed_at IS NULL OR d.created_at > c.password_changed_at)
+          )
         )
       ORDER BY pr.last_seen_at DESC
-    `, [
-      workspaceId,
-      memberIds,
-    ]);
+    `, [workspaceId, memberIds]);
 
     return result.rows || [];
   }
 
-  async function revokeTokens({
-    provider,
-    tokens = [],
-  }) {
-    const values =
-      [...new Set(
-        (tokens || [])
-          .filter(Boolean)
-      )];
-
-    if (values.length === 0) {
-      return 0;
-    }
+  async function revokeTokens({ provider, tokens = [] }) {
+    const values = [...new Set((tokens || []).filter(Boolean))];
+    if (values.length === 0) return 0;
 
     const result = await db.query(`
       UPDATE ac_push_registration
@@ -158,10 +119,7 @@ function createPushRegistrationRepository(db) {
         AND push_token = ANY($2::text[])
         AND revoked_at IS NULL
       RETURNING push_registration_id
-    `, [
-      provider,
-      values,
-    ]);
+    `, [provider, values]);
 
     return Number(result.rowCount || 0);
   }

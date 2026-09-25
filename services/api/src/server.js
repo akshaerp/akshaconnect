@@ -11,6 +11,9 @@ const { createAkshaErpSsoHttpHandler } = require('./auth/akshaErpSsoHttpHandler'
 const { createWorkspaceSessionRepository } = require('./auth/workspaceSessionRepository');
 const { createWorkspaceSessionService } = require('./auth/workspaceSessionService');
 const { createWorkspaceSessionHttpHandler } = require('./auth/workspaceSessionHttpHandler');
+const { createMobileAuthRepository } = require('./auth/mobileAuthRepository');
+const { createMobileAuthService } = require('./auth/mobileAuthService');
+const { createMobileAuthHttpHandler } = require('./auth/mobileAuthHttpHandler');
 const { createAkshaErpHttpAdapters } = require('./integration/erpHttpAdapter');
 const { createAkshaErpDirectoryRepository } = require('./auth/akshaErpDirectoryRepository');
 const { createProviderDirectoryService } = require('./auth/providerDirectoryService');
@@ -51,17 +54,16 @@ function configuredIdentityProvider() {
 async function start() {
   const identityProvider = configuredIdentityProvider();
 
-  // Collaboration data is always owned by AkshaConnect, regardless of which
-  // external/local provider authenticated the human identity.
+  // AkshaConnect owns collaboration state even when a customer delegates human
+  // authentication to AkshaERP or another external identity provider.
   const pool = createPostgresPool(process.env);
   await verifyDatabaseIdentity(
     pool,
     process.env.AKSHACONNECT_DATABASE_EXPECTED_NAME || 'akshaconnect'
   );
 
-  // Existing local identity repository also owns the provider-neutral
-  // AkshaConnect ac_session storage. In AKSHAERP mode local credential login
-  // is blocked by the SSO HTTP gate, while session verification remains shared.
+  // This repository owns provider-neutral access-session storage as well as the
+  // legacy LOCAL credential path. External providers never receive LOCAL passwords.
   const identityRepository = createLocalIdentityRepository(pool);
   const localIdentityService = createLocalIdentityService(identityRepository, {
     sessionTtlSeconds:
@@ -70,8 +72,6 @@ async function start() {
       process.env.AKSHACONNECT_MOBILE_DEVICE_TTL_SECONDS,
   });
 
-  // Workspace switching is provider-neutral. It operates only on verified
-  // AkshaConnect sessions and active memberships inside the current tenant.
   const workspaceSessionRepository = createWorkspaceSessionRepository(pool);
   const workspaceSessionService = createWorkspaceSessionService({
     identityService: localIdentityService,
@@ -136,6 +136,7 @@ async function start() {
   );
 
   let ssoService = null;
+  let ssoRepository = null;
   let identityGateway = null;
   let erpDirectoryRepository = null;
 
@@ -148,7 +149,7 @@ async function start() {
       fetchImpl: global.fetch,
     }));
 
-    const ssoRepository = createAkshaErpSsoRepository(pool);
+    ssoRepository = createAkshaErpSsoRepository(pool);
     ssoService = createAkshaErpSsoService({
       identityGateway,
       repository: ssoRepository,
@@ -159,6 +160,26 @@ async function start() {
 
     erpDirectoryRepository = createAkshaErpDirectoryRepository(pool);
   }
+
+  const mobileAuthRepository = createMobileAuthRepository(pool);
+  const mobileAuthService = createMobileAuthService({
+    repository: mobileAuthRepository,
+    identityGateway,
+    ssoRepository,
+    sessionRepository: identityRepository,
+    authRequestTtlSeconds:
+      process.env.AKSHACONNECT_MOBILE_AUTH_REQUEST_TTL_SECONDS,
+    deviceTtlSeconds:
+      process.env.AKSHACONNECT_MOBILE_DEVICE_TTL_SECONDS,
+    accessTtlSeconds:
+      process.env.AKSHACONNECT_SSO_SESSION_TTL_SECONDS ||
+      process.env.AKSHACONNECT_LOCAL_SESSION_TTL_SECONDS,
+  });
+  const mobileAuthHttpHandler = createMobileAuthHttpHandler({
+    mobileAuthService,
+    allowedErpOrigins:
+      process.env.AKSHACONNECT_ERP_ALLOWED_ORIGINS,
+  });
 
   const directoryService = createProviderDirectoryService({
     identityProvider,
@@ -198,7 +219,10 @@ async function start() {
   });
 
   const server = http.createServer(async (req, res) => {
-    let handled = await trustedErpBridgeHttpHandler(req, res);
+    let handled = await mobileAuthHttpHandler(req, res);
+    if (handled) return;
+
+    handled = await trustedErpBridgeHttpHandler(req, res);
     if (handled) return;
 
     handled = await ssoHttpHandler(req, res);

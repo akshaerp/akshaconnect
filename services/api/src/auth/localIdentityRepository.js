@@ -213,6 +213,7 @@ function createLocalIdentityRepository(db) {
         workspace_id,
         workspace_member_id,
         identity_id,
+        identity_provider,
         device_token_hash,
         device_platform,
         device_label,
@@ -220,7 +221,7 @@ function createLocalIdentityRepository(db) {
         user_agent_hash,
         client_ip_hash
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, 'LOCAL', $4, $5, $6, $7, $8, $9)
       RETURNING device_session_id, created_at, last_seen_at, expires_at
     `, [
       workspaceId,
@@ -237,6 +238,8 @@ function createLocalIdentityRepository(db) {
     return result.rows[0];
   }
 
+  // Provider-neutral device-session lookup. External mobile identities do not
+  // have ac_local_credential rows and must not be rejected for that reason.
   async function findActiveDeviceSession(tokenHash) {
     const result = await db.query(`
       SELECT
@@ -244,6 +247,7 @@ function createLocalIdentityRepository(db) {
         d.workspace_id,
         d.workspace_member_id,
         d.identity_id,
+        d.identity_provider,
         d.device_platform,
         d.device_label,
         d.created_at,
@@ -265,12 +269,17 @@ function createLocalIdentityRepository(db) {
         ON wm.workspace_id = d.workspace_id
        AND wm.workspace_member_id = d.workspace_member_id
        AND wm.identity_id = d.identity_id
-      JOIN ac_local_credential c ON c.identity_id = d.identity_id
+      LEFT JOIN ac_local_credential c ON c.identity_id = d.identity_id
       WHERE d.device_token_hash = $1
         AND d.revoked_at IS NULL
         AND d.expires_at > NOW()
-        AND c.credential_status = 'ACTIVE'
-        AND (c.password_changed_at IS NULL OR d.created_at > c.password_changed_at)
+        AND (
+          d.identity_provider <> 'LOCAL'
+          OR (
+            c.credential_status = 'ACTIVE'
+            AND (c.password_changed_at IS NULL OR d.created_at > c.password_changed_at)
+          )
+        )
       LIMIT 1
     `, [tokenHash]);
 

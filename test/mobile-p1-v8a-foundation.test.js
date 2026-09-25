@@ -92,15 +92,23 @@ test('P1-V8A V1 never persists bearer credentials in plaintext mobile storage', 
   );
 });
 
-test('P1-V8A V1 real product screens remain present', () => {
+test('V10A real product screens use organization discovery before company authentication', () => {
   const app = read('apps/mobile/App.jsx');
   const login = read('apps/mobile/src/screens/LoginScreen.jsx');
   const home = read('apps/mobile/src/screens/HomeScreen.jsx');
 
   assert.match(app, /LoginScreen/);
   assert.match(app, /HomeScreen/);
-  assert.match(login, /Sign in to your team/);
-  assert.match(login, /Server URL/);
+  assert.match(app, /discoverMobileOrganizations/);
+  assert.match(app, /exchangeMobileAuthorization/);
+
+  assert.match(login, /Find your organization/);
+  assert.match(login, /Work email/);
+  assert.match(login, /Choose your organization/);
+  assert.match(login, /ONE APP · ALL YOUR COMPANIES/);
+  assert.doesNotMatch(login, /Server URL/);
+  assert.doesNotMatch(login, /Password/);
+
   assert.match(home, /Channels/);
   assert.match(home, /Direct messages/);
 });

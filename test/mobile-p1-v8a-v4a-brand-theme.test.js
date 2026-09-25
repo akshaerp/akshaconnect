@@ -105,7 +105,7 @@ test('V4A conversation uses primary blue with green live state', () => {
   );
 });
 
-test('V4A3R1C login is single-view and home uses light brand navigation', () => {
+test('V10A login is keyboard-safe for organization discovery and home keeps light brand navigation', () => {
   const login = read(
     'apps/mobile/src/screens/LoginScreen.jsx'
   );
@@ -113,8 +113,12 @@ test('V4A3R1C login is single-view and home uses light brand navigation', () => 
     'apps/mobile/src/screens/HomeScreen.jsx'
   );
 
-  assert.doesNotMatch(login, /ScrollView/);
-  assert.match(login, /<View style=\{styles\.page\}>/);
+  assert.match(login, /KeyboardAvoidingView/);
+  assert.match(login, /ScrollView/);
+  assert.match(login, /contentContainerStyle=\{styles\.page\}/);
+  assert.match(login, /keyboardShouldPersistTaps="handled"/);
+  assert.match(login, /Find your organization/);
+  assert.match(login, /Work email/);
 
   assert.match(
     home,

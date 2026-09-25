@@ -68,13 +68,6 @@ test('V3C2B uses secure native device credential storage', () => {
     /value\?\.(password|loginPassword|userPassword)/
   );
 
-  /*
-   * react-native-keychain's generic credential API
-   * itself exposes the encrypted secret through the
-   * property named "password". In this module that
-   * property contains JSON { serverUrl, deviceToken },
-   * never the user's AkshaConnect login password.
-   */
   assert.match(
     secure,
     /stored\.password/
@@ -102,10 +95,15 @@ test('V3C2B uses mobile device-session HTTP endpoints', () => {
     api,
     /\/api\/v1\/auth\/mobile\/logout/
   );
+
+  assert.match(
+    api,
+    /\/api\/v1\/auth\/mobile\/exchange/
+  );
 });
 
 
-test('V3C2B restores session before showing login', () => {
+test('V10A restores the active saved organization before showing discovery login', () => {
   const app =
     read(
       'apps/mobile/App.jsx'
@@ -113,12 +111,12 @@ test('V3C2B restores session before showing login', () => {
 
   assert.match(
     app,
-    /loadDeviceSession/
+    /loadDeviceAccounts/
   );
 
   assert.match(
     app,
-    /restoreDeviceSession/
+    /activateAccount/
   );
 
   assert.match(
@@ -138,21 +136,17 @@ test('V3C2B restores session before showing login', () => {
 });
 
 
-test('V3C2B persists device token only after successful mobile login', () => {
+test('V10A persists a device token only after one-time mobile authorization exchange', () => {
   const app =
     read(
       'apps/mobile/App.jsx'
     );
 
-  assert.match(
-    app,
-    /loginMobile/
-  );
+  const exchangeAt = app.indexOf('exchangeMobileAuthorization(');
+  const saveAt = app.indexOf('saveDeviceAccount({', exchangeAt);
 
-  assert.match(
-    app,
-    /saveDeviceSession/
-  );
+  assert.ok(exchangeAt >= 0, 'mobile authorization exchange is missing');
+  assert.ok(saveAt > exchangeAt, 'device account must be saved only after exchange');
 
   assert.match(
     app,
@@ -162,6 +156,11 @@ test('V3C2B persists device token only after successful mobile login', () => {
   assert.match(
     app,
     /delete accessSession\.device_token/
+  );
+
+  assert.match(
+    app,
+    /exchangeSecret:\s*pending\.exchangeSecret/
   );
 });
 
@@ -194,7 +193,7 @@ test('V3C2B refreshes access sessions during long-lived use', () => {
 });
 
 
-test('V3C2B explicit logout clears local and server device sessions', () => {
+test('V10A explicit organization logout clears local and server device sessions', () => {
   const app =
     read(
       'apps/mobile/App.jsx'
@@ -202,7 +201,7 @@ test('V3C2B explicit logout clears local and server device sessions', () => {
 
   assert.match(
     app,
-    /clearDeviceSession/
+    /removeDeviceAccount/
   );
 
   assert.match(
@@ -213,6 +212,11 @@ test('V3C2B explicit logout clears local and server device sessions', () => {
   assert.match(
     app,
     /credential\.deviceToken/
+  );
+
+  assert.match(
+    app,
+    /credential\.accountId/
   );
 });
 
