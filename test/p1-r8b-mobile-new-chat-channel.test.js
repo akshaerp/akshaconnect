@@ -40,8 +40,8 @@ test('R8B mobile HomeScreen exposes new chat people search and new channel creat
   assert.match(home, /onCreateChannel\(\{/);
 });
 
-test('R8B Android internal build advances to v11', () => {
+test('R8B Android internal build advances to v13', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
-  assert.match(gradle, /versionCode 12/);
-  assert.match(gradle, /versionName "0\.3\.0-v12"/);
+  assert.match(gradle, /versionCode 13/);
+  assert.match(gradle, /versionName "0\.3\.0-v13"/);
 });
