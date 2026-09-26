@@ -29,6 +29,17 @@ react {
 def enableProguardInReleaseBuilds = false
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+def uploadStoreFilePath = System.getenv("AKSHACONNECT_UPLOAD_STORE_FILE")
+def uploadStorePassword = System.getenv("AKSHACONNECT_UPLOAD_STORE_PASSWORD")
+def uploadKeyAlias = System.getenv("AKSHACONNECT_UPLOAD_KEY_ALIAS")
+def uploadKeyPassword = System.getenv("AKSHACONNECT_UPLOAD_KEY_PASSWORD")
+
+def uploadSigningConfigured =
+    uploadStoreFilePath &&
+    uploadStorePassword &&
+    uploadKeyAlias &&
+    uploadKeyPassword
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -53,6 +64,15 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+
+        if (uploadSigningConfigured) {
+            upload {
+                storeFile file(uploadStoreFilePath)
+                storePassword uploadStorePassword
+                keyAlias uploadKeyAlias
+                keyPassword uploadKeyPassword
+            }
+        }
     }
 
     buildTypes {
@@ -63,9 +83,13 @@ android {
         }
 
         release {
-            // Internal test release is deliberately signed with the debug key.
-            // Production will use the AkshaConnect upload/release keystore.
-            signingConfig signingConfigs.debug
+            // Play builds use a dedicated upload key supplied only through
+            // process environment variables. Local non-Play release APKs
+            // retain the historical debug-key fallback until the Play
+            // distribution flow is fully established.
+            signingConfig uploadSigningConfigured
+                ? signingConfigs.upload
+                : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
