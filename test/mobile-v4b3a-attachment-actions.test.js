@@ -39,7 +39,7 @@ test('V4B3A mobile uses icon actions with accessible labels', () => {
   assert.match(screen, /👁/);
   assert.match(screen, /↗/);
   assert.match(screen, /⇩/);
-  assert.match(screen, /📂/);
+  assert.match(screen, /'✓'/);
 
   assert.match(
     screen,
@@ -49,20 +49,32 @@ test('V4B3A mobile uses icon actions with accessible labels', () => {
     screen,
     /accessibilityLabel=[\s\S]*Download/
   );
+  assert.match(
+    screen,
+    /Saved[\s\S]*to Downloads/
+  );
 });
 
-test('V4B3A fixes Android document opening and exposes Downloads location', () => {
+test('V4B3A keeps Android saved files reusable without requiring an OEM Downloads intent', () => {
   const screen = read(
     'apps/mobile/src/screens/ConversationScreen.jsx'
   );
 
-  assert.match(
+  assert.doesNotMatch(
     screen,
     /android\.intent\.action\.VIEW_DOWNLOADS/
   );
-  assert.match(
+  assert.doesNotMatch(
     screen,
     /Linking\.sendIntent/
+  );
+  assert.match(
+    screen,
+    /saved\?\.contentUri/
+  );
+  assert.match(
+    screen,
+    /actionViewIntent\([\s\S]*saved\.contentUri/
   );
 
   assert.doesNotMatch(

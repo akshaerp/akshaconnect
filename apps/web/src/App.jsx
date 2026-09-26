@@ -660,8 +660,10 @@ function ConversationView({
       setMessages((current) => appendOlder ? [...nextMessages, ...current] : nextMessages);
       setPage(result.page || { has_more: false, next_before_message_id: null });
 
+      let dividerId = null;
+
       if (!appendOlder) {
-        const dividerId = initialUnreadCount === null
+        dividerId = initialUnreadCount === null
           ? null
           : findUnreadDivider(nextMessages, initialUnreadCount);
         if (initialUnreadCount !== null) setUnreadDividerMessageId(dividerId);
@@ -680,7 +682,7 @@ function ConversationView({
       }
 
       const latest = nextMessages[nextMessages.length - 1];
-      if (!appendOlder && latest?.message_id) {
+      if (!appendOlder && latest?.message_id && !dividerId) {
         markMessageRead(latest.message_id);
       }
     } catch (requestError) {
@@ -705,8 +707,10 @@ function ConversationView({
     setUnreadDividerMessageId(null);
     setShowNewMessageJump(false);
     lastMarkedReadMessageIdRef.current = null;
-    nearBottomRef.current = true;
-    reportViewportState(true);
+    const unreadAtOpen = Number(selected?.unread_at_open || 0);
+    const startsAtBottom = unreadAtOpen <= 0;
+    nearBottomRef.current = startsAtBottom;
+    reportViewportState(startsAtBottom);
     if (selected?.id) {
       load({ initialUnreadCount: Number(selected?.unread_at_open || 0) });
     }

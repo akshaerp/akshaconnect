@@ -12,7 +12,6 @@ import {
   Image,
   Keyboard,
   KeyboardAvoidingView,
-  Linking,
   Modal,
   Platform,
   Pressable,
@@ -362,6 +361,8 @@ export default function ConversationScreen({
     session?.membership?.workspace_member_id || '';
 
   const scrollRef = useRef(null);
+  const nearBottomRef = useRef(true);
+  const initialUnreadPositionedRef = useRef(false);
   const lastRealtimeSequenceRef = useRef(0);
   const lastReconcileEpochRef = useRef(0);
   const lastMarkedReadMessageIdRef = useRef(null);
@@ -562,20 +563,26 @@ export default function ConversationScreen({
           result.messages || []
         );
 
+        let dividerId = null;
+
         if (initialUnreadCount !== null) {
-          setNewMessageDividerId(
-            findUnreadDivider(
-              latestRows,
-              initialUnreadCount,
-              currentMemberId
-            )
+          dividerId = findUnreadDivider(
+            latestRows,
+            initialUnreadCount,
+            currentMemberId
           );
+          setNewMessageDividerId(dividerId);
+          initialUnreadPositionedRef.current = !dividerId;
+          nearBottomRef.current = !dividerId;
         }
 
         const latest =
           latestRows[latestRows.length - 1];
 
-        if (latest?.message_id) {
+        // Opening a conversation with unread messages must not immediately
+        // acknowledge the newest message. The read cursor advances when the
+        // user actually reaches the bottom of the unread range.
+        if (latest?.message_id && !dividerId) {
           markMessageRead(latest.message_id);
         }
       } catch (requestError) {
@@ -619,6 +626,9 @@ export default function ConversationScreen({
     setNewMessageDividerId(null);
 
     arrivalDividerReadyRef.current = false;
+    initialUnreadPositionedRef.current = false;
+    nearBottomRef.current =
+      Number(conversation?.unreadAtOpen || 0) <= 0;
     lastRealtimeSequenceRef.current = 0;
     lastMarkedReadMessageIdRef.current = null;
 
@@ -896,12 +906,15 @@ export default function ConversationScreen({
     const sortedIncoming = mergeMessages(incoming);
     const latestIncoming =
       sortedIncoming[sortedIncoming.length - 1];
+    const shouldFollow = nearBottomRef.current;
 
-    if (latestIncoming?.message_id) {
-      markMessageRead(latestIncoming.message_id);
+    if (shouldFollow) {
+      if (latestIncoming?.message_id) {
+        markMessageRead(latestIncoming.message_id);
+      }
+      setNewMessageDividerId(null);
+      scrollToBottom(true);
     }
-
-    scrollToBottom(true);
   }, [
     conversation?.conversationId,
     currentMemberId,
@@ -1374,25 +1387,6 @@ export default function ConversationScreen({
         attachmentId: '',
         mode: '',
       });
-    }
-  }
-
-  async function handleOpenDownloadsLocation() {
-    if (Platform.OS !== 'android') {
-      return;
-    }
-
-    setError('');
-
-    try {
-      await Linking.sendIntent(
-        'android.intent.action.VIEW_DOWNLOADS'
-      );
-    } catch (requestError) {
-      setError(
-        requestError?.message ||
-          'Could not open Downloads'
-      );
     }
   }
 
@@ -1941,6 +1935,43 @@ export default function ConversationScreen({
             <ScrollView
               ref={scrollRef}
               onScrollBeginDrag={onUserActivity}
+              onScroll={(event) => {
+                const {
+                  contentOffset,
+                  contentSize,
+                  layoutMeasurement,
+                } = event.nativeEvent;
+                const distanceFromBottom =
+                  contentSize.height -
+                  contentOffset.y -
+                  layoutMeasurement.height;
+                const wasNearBottom =
+                  nearBottomRef.current;
+                const nowNearBottom =
+                  distanceFromBottom < 48;
+
+                nearBottomRef.current =
+                  nowNearBottom;
+
+                if (
+                  nowNearBottom &&
+                  !wasNearBottom
+                ) {
+                  const latest =
+                    messages[
+                      messages.length - 1
+                    ];
+
+                  if (latest?.message_id) {
+                    markMessageRead(
+                      latest.message_id
+                    );
+                  }
+
+                  setNewMessageDividerId(null);
+                }
+              }}
+              scrollEventThrottle={32}
               contentContainerStyle={
                 styles.messageList
               }
@@ -1962,6 +1993,13 @@ export default function ConversationScreen({
                 />
               }
               onContentSizeChange={() => {
+                // When unread messages exist, the divider's onLayout handler
+                // owns the initial position. Never let a generic content-size
+                // event override that position by jumping to the newest item.
+                if (newMessageDividerId) {
+                  return;
+                }
+
                 if (messages.length <= 50) {
                   scrollRef.current?.scrollToEnd({
                     animated: false,
@@ -2071,6 +2109,32 @@ export default function ConversationScreen({
                             style={
                               styles.newMessagesRow
                             }
+                            onLayout={(event) => {
+                              if (
+                                initialUnreadPositionedRef.current
+                              ) {
+                                return;
+                              }
+
+                              initialUnreadPositionedRef.current =
+                                true;
+                              nearBottomRef.current = false;
+
+                              const targetY = Math.max(
+                                0,
+                                Number(
+                                  event.nativeEvent
+                                    ?.layout?.y || 0
+                                ) - 8
+                              );
+
+                              requestAnimationFrame(() => {
+                                scrollRef.current?.scrollTo({
+                                  y: targetY,
+                                  animated: false,
+                                });
+                              });
+                            }}
                           >
                             <View
                               style={
@@ -2124,9 +2188,6 @@ export default function ConversationScreen({
                           }
                           onDownloadAttachment={
                             handleDownloadAttachment
-                          }
-                          onOpenDownloadsLocation={
-                            handleOpenDownloadsLocation
                           }
                         />
                       </React.Fragment>
@@ -2466,7 +2527,6 @@ function MessageBubble({
   onPreviewAttachment,
   onOpenAttachment,
   onDownloadAttachment,
-  onOpenDownloadsLocation,
 }) {
   if (system) {
     return (
@@ -2573,6 +2633,11 @@ function MessageBubble({
                   attachmentAction
                     ?.attachmentId ===
                   item.attachment_id;
+                const saved = Boolean(
+                  savedAttachments?.[
+                    item.attachment_id
+                  ]
+                );
 
                 return (
                   <Pressable
@@ -2723,11 +2788,15 @@ function MessageBubble({
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel={
-                              `Download ${attachmentFileName(
-                                item
-                              )}`
+                              saved
+                                ? `Saved ${attachmentFileName(
+                                    item
+                                  )} to Downloads`
+                                : `Download ${attachmentFileName(
+                                    item
+                                  )}`
                             }
-                            disabled={busy}
+                            disabled={busy || saved}
                             onPress={(event) => {
                               event.stopPropagation?.();
                               onDownloadAttachment?.(
@@ -2751,39 +2820,11 @@ function MessageBubble({
                               attachmentAction?.mode ===
                                 'download'
                                 ? '…'
-                                : '⇩'}
+                                : saved
+                                  ? '✓'
+                                  : '⇩'}
                             </Text>
                           </Pressable>
-
-                          {Platform.OS ===
-                            'android' &&
-                          savedAttachments?.[
-                            item.attachment_id
-                          ] ? (
-                            <Pressable
-                              accessibilityRole="button"
-                              accessibilityLabel="Open Downloads location"
-                              onPress={(event) => {
-                                event.stopPropagation?.();
-                                onOpenDownloadsLocation?.();
-                              }}
-                              style={({ pressed }) => [
-                                styles.messageAttachmentIconAction,
-                                styles.messageAttachmentFolderAction,
-                                pressed
-                                  ? styles.pressed
-                                  : null,
-                              ]}
-                            >
-                              <Text
-                                style={
-                                  styles.messageAttachmentIconText
-                                }
-                              >
-                                📂
-                              </Text>
-                            </Pressable>
-                          ) : null}
                         </View>
                       ) : null}
                     </View>
@@ -3236,9 +3277,6 @@ const styles = StyleSheet.create({
   },
   messageAttachmentDownloadAction: {
     backgroundColor: '#EAF8F2',
-  },
-  messageAttachmentFolderAction: {
-    backgroundColor: '#FFF4E8',
   },
   messageAttachmentIconText: {
     color: colors.navy,

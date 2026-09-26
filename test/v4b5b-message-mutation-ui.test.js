@@ -223,9 +223,22 @@ test(
       'apps/mobile/src/screens/ConversationScreen.jsx'
     );
 
-    assert.match(
+    // V14.1 keeps durable attachment actions while removing the OEM-specific
+    // VIEW_DOWNLOADS launcher. Saved MediaStore content URIs remain directly
+    // reusable through the existing Open action.
+    assert.doesNotMatch(
       screen,
       /android\.intent\.action\.VIEW_DOWNLOADS/
+    );
+
+    assert.doesNotMatch(
+      screen,
+      /Linking\.sendIntent/
+    );
+
+    assert.match(
+      screen,
+      /saved\?\.contentUri/
     );
 
     assert.match(

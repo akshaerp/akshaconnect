@@ -20,9 +20,24 @@ test('R8A.3 mobile captures unread count before opening a conversation', () => {
 test('R8A.3 mobile shows New messages divider for unread-at-open history', () => {
   const screen = read('apps/mobile/src/screens/ConversationScreen.jsx');
 
-  assert.match(screen, /function findUnreadDivider\(rows, unreadCount, currentMemberId\)/);
-  assert.match(screen, /initialUnreadCount:\s*Number\(conversation\?\.unreadAtOpen \|\| 0\)/);
-  assert.match(screen, /setNewMessageDividerId\(\s*findUnreadDivider/s);
+  assert.match(
+    screen,
+    /function findUnreadDivider\(rows, unreadCount, currentMemberId\)/
+  );
+  assert.match(
+    screen,
+    /initialUnreadCount:\s*Number\(conversation\?\.unreadAtOpen \|\| 0\)/
+  );
+
+  // V14.1 keeps the R8A.3 divider contract but stores the calculated id
+  // so the same value can also control initial scroll/read acknowledgement.
+  assert.match(screen, /let dividerId = null/);
+  assert.match(
+    screen,
+    /dividerId = findUnreadDivider\([\s\S]*latestRows,[\s\S]*initialUnreadCount,[\s\S]*currentMemberId[\s\S]*\)/
+  );
+  assert.match(screen, /setNewMessageDividerId\(dividerId\)/);
+  assert.match(screen, /initialUnreadPositionedRef/);
   assert.match(screen, />\s*New messages\s*</);
 });
 
