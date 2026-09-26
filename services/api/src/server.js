@@ -35,6 +35,7 @@ const { createPushDeliveryService } = require('./push/pushDeliveryService');
 const { createRealtimeEventBus } = require('./realtime/realtimeEventBus');
 const { createPresenceRegistry } = require('./realtime/presenceRegistry');
 const { attachRealtimeGateway } = require('./realtime/realtimeGateway');
+const { createMobileVersionPolicyFromEnv } = require('./mobile/mobileVersionPolicy');
 
 const port = Number(process.env.PORT || 4100);
 
@@ -202,12 +203,15 @@ async function start() {
     collaborationService,
   });
 
+  const mobileVersionPolicy = createMobileVersionPolicyFromEnv(process.env);
+
   const appHandler = createRequestHandler({
     localIdentityService,
     collaborationService,
     messagingService,
     attachmentService,
     pushRegistrationService,
+    mobileVersionPolicy,
   });
 
   const ssoHttpHandler = createAkshaErpSsoHttpHandler({

@@ -141,15 +141,23 @@ test('V10A login is keyboard-safe for organization discovery and home keeps ligh
   );
 });
 
-test('V4A3R1C hides both Home vertical scroll indicators', () => {
+test('V4A3R1C hides authenticated mobile vertical scroll indicators', () => {
   const home = read(
     'apps/mobile/src/screens/HomeScreen.jsx'
   );
+  const settings = read(
+    'apps/mobile/src/screens/SettingsScreen.jsx'
+  );
 
-  const matches =
+  const homeMatches =
     home.match(
       /showsVerticalScrollIndicator=\{false\}/g
     ) || [];
+  const settingsMatches =
+    settings.match(
+      /showsVerticalScrollIndicator=\{false\}/g
+    ) || [];
 
-  assert.equal(matches.length, 2);
+  assert.equal(homeMatches.length, 1);
+  assert.equal(settingsMatches.length, 1);
 });

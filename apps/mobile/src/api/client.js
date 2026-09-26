@@ -66,6 +66,13 @@ async function request(baseUrl, path, { token = '', method = 'GET', body, signal
   return parseJsonResponse(response);
 }
 
+export function getMobileAppVersionPolicy(baseUrl, platform = 'ANDROID') {
+  return request(
+    baseUrl,
+    `/api/v1/mobile/app-version?platform=${encodeURIComponent(platform)}`
+  );
+}
+
 export function discoverMobileOrganizations(baseUrl, email) {
   return request(baseUrl, '/api/v1/auth/mobile/discover', {
     method: 'POST',

@@ -115,6 +115,7 @@ function createRequestHandler({
   messagingService = null,
   attachmentService = null,
   pushRegistrationService = null,
+  mobileVersionPolicy = null,
 } = {}) {
   return async function requestHandler(req, res) {
     try {
@@ -129,6 +130,25 @@ function createRequestHandler({
           version: VERSION,
           timestamp: new Date().toISOString(),
         });
+        return;
+      }
+
+      if (
+        req.method === 'GET' &&
+        url.pathname === '/api/v1/mobile/app-version'
+      ) {
+        if (!mobileVersionPolicy) {
+          throw boundaryError(
+            'MOBILE_VERSION_POLICY_NOT_CONFIGURED',
+            'Mobile version policy is not configured',
+            503
+          );
+        }
+
+        const result = mobileVersionPolicy(
+          url.searchParams.get('platform') || 'ANDROID'
+        );
+        writeJson(res, 200, result);
         return;
       }
 

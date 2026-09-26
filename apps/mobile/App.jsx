@@ -26,6 +26,7 @@ import {
   createChannel,
   discoverMobileOrganizations,
   exchangeMobileAuthorization,
+  getMobileAppVersionPolicy,
   listChannels,
   listDirectMessages,
   listUnreadCounts,
@@ -69,6 +70,7 @@ import {
   subscribeToFirebaseNotificationPress,
   subscribeToFirebaseTokenRefresh,
 } from './src/notifications/firebasePush.js';
+import { getInstalledAppVersion } from './src/platform/appInfo.js';
 import ConversationScreen from './src/screens/ConversationScreen.jsx';
 import HomeScreen from './src/screens/HomeScreen.jsx';
 import LoginScreen from './src/screens/LoginScreen.jsx';
@@ -211,6 +213,17 @@ function parseMobileAuthCallback(value) {
   };
 }
 
+function mobileUpdateStatus(appVersion, policy) {
+  const current = Number(appVersion?.versionCode || 0);
+  const latest = Number(policy?.latest_version_code || 0);
+  const minimum = Number(policy?.minimum_version_code || 0);
+
+  if (!policy?.supported || current <= 0 || latest <= 0) return 'unknown';
+  if (minimum > 0 && current < minimum) return 'required';
+  if (current < latest) return 'available';
+  return 'current';
+}
+
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [restoringSession, setRestoringSession] = useState(true);
@@ -240,6 +253,14 @@ export default function App() {
   const [reconcileEpoch, setReconcileEpoch] = useState(0);
   const [showAccountSwitcher, setShowAccountSwitcher] = useState(false);
   const [addingOrganization, setAddingOrganization] = useState(false);
+  const [appVersion, setAppVersion] = useState({
+    platform: DEVICE_PLATFORM,
+    versionCode: 0,
+    versionName: '',
+  });
+  const [updatePolicy, setUpdatePolicy] = useState(null);
+  const [updateCheckState, setUpdateCheckState] = useState('idle');
+  const [updatePromptDismissed, setUpdatePromptDismissed] = useState(false);
 
   const [discoveryEmail, setDiscoveryEmail] = useState('');
   const [organizations, setOrganizations] = useState([]);
@@ -261,8 +282,72 @@ export default function App() {
   const pendingMobileAuthRef = useRef(null);
   const processingMobileAuthCallbackUrlRef = useRef('');
   const completedMobileAuthCallbackUrlRef = useRef('');
+  const startupUpdateCheckStartedRef = useRef(false);
 
   const accounts = accountRegistry.accounts || [];
+
+  const checkAppUpdate = useCallback(async ({
+    baseUrl = serverUrl || DEFAULT_SERVER_URL,
+    revealPrompt = true,
+  } = {}) => {
+    setUpdateCheckState('checking');
+
+    let normalizedVersion;
+    try {
+      const version = await getInstalledAppVersion();
+      normalizedVersion = {
+        platform: DEVICE_PLATFORM,
+        versionCode: Number(version?.versionCode || 0),
+        versionName: clean(version?.versionName),
+      };
+      setAppVersion(normalizedVersion);
+    } catch {
+      setUpdateCheckState('error');
+      return 'error';
+    }
+
+    try {
+      const policy = await getMobileAppVersionPolicy(
+        baseUrl,
+        DEVICE_PLATFORM
+      );
+      setUpdatePolicy(policy || null);
+      if (revealPrompt) setUpdatePromptDismissed(false);
+
+      const status = mobileUpdateStatus(normalizedVersion, policy);
+      setUpdateCheckState(status);
+      return status;
+    } catch {
+      setUpdatePolicy(null);
+      setUpdateCheckState('error');
+      return 'error';
+    }
+  }, [serverUrl]);
+
+  const handleCheckForUpdates = useCallback(() =>
+    checkAppUpdate({ revealPrompt: true }),
+  [checkAppUpdate]);
+
+  const handleOpenUpdate = useCallback(async () => {
+    const updateUrl = clean(updatePolicy?.update_url);
+    if (!updateUrl) return;
+    try {
+      await Linking.openURL(updateUrl);
+    } catch {}
+  }, [updatePolicy]);
+
+  const handleOpenDeviceSettings = useCallback(() => {
+    Linking.openSettings().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (startupUpdateCheckStartedRef.current) return;
+    startupUpdateCheckStartedRef.current = true;
+    checkAppUpdate({
+      baseUrl: DEFAULT_SERVER_URL,
+      revealPrompt: true,
+    }).catch(() => {});
+  }, [checkAppUpdate]);
 
   useEffect(() => {
     const timer = setTimeout(() => setShowSplash(false), 950);
@@ -1605,6 +1690,12 @@ export default function App() {
             presenceByMember={presenceByMember}
             refreshing={loadingWorkspace}
             realtimeStatus={realtimeStatus}
+            appVersion={appVersion}
+            updatePolicy={updatePolicy}
+            updateStatus={updateCheckState}
+            onCheckForUpdates={handleCheckForUpdates}
+            onOpenUpdate={handleOpenUpdate}
+            onOpenDeviceSettings={handleOpenDeviceSettings}
             onRefresh={refreshWorkspace}
             onLogout={handleLogout}
             onOpenConversation={handleOpenConversation}
@@ -1615,6 +1706,25 @@ export default function App() {
           />
         </View>
       )}
+
+      <AppUpdateModal
+        visible={
+          !showSplash &&
+          !restoringSession &&
+          (
+            updateCheckState === 'required' ||
+            (
+              updateCheckState === 'available' &&
+              !updatePromptDismissed
+            )
+          )
+        }
+        required={updateCheckState === 'required'}
+        currentVersion={appVersion}
+        policy={updatePolicy}
+        onLater={() => setUpdatePromptDismissed(true)}
+        onUpdate={handleOpenUpdate}
+      />
 
       <AccountSwitcher
         visible={showAccountSwitcher && Boolean(session)}
@@ -1659,6 +1769,63 @@ export default function App() {
       ) : null}
       </View>
     </SafeAreaProvider>
+  );
+}
+
+function AppUpdateModal({
+  visible,
+  required,
+  currentVersion,
+  policy,
+  onLater,
+  onUpdate,
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={required ? () => {} : onLater}
+    >
+      <View style={updateStyles.backdrop}>
+        <View style={updateStyles.card}>
+          <Text style={updateStyles.eyebrow}>AKSHACONNECT UPDATE</Text>
+          <Text style={updateStyles.title}>
+            {required ? 'Update required' : 'Update available'}
+          </Text>
+          <Text style={updateStyles.copy}>
+            {required
+              ? 'This version is no longer supported. Update AkshaConnect to continue.'
+              : 'A newer AkshaConnect version is available on Google Play.'}
+          </Text>
+          <View style={updateStyles.versionRow}>
+            <Text style={updateStyles.versionLabel}>Installed</Text>
+            <Text style={updateStyles.versionValue}>
+              {currentVersion?.versionName || 'Unknown'}
+            </Text>
+          </View>
+          <View style={updateStyles.versionRow}>
+            <Text style={updateStyles.versionLabel}>Available</Text>
+            <Text style={updateStyles.versionValue}>
+              {policy?.latest_version_name || `v${policy?.latest_version_code || ''}`}
+            </Text>
+          </View>
+          {policy?.release_notes ? (
+            <Text style={updateStyles.notes}>{policy.release_notes}</Text>
+          ) : null}
+          <View style={updateStyles.actions}>
+            {!required ? (
+              <Pressable style={updateStyles.laterButton} onPress={onLater}>
+                <Text style={updateStyles.laterText}>Later</Text>
+              </Pressable>
+            ) : null}
+            <Pressable style={updateStyles.updateButton} onPress={onUpdate}>
+              <Text style={updateStyles.updateText}>Update</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -1758,6 +1925,68 @@ function BrandSplash() {
     </View>
   );
 }
+
+const updateStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    paddingHorizontal: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(7, 19, 46, 0.62)',
+  },
+  card: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 22,
+    padding: 20,
+    backgroundColor: '#FFFFFF',
+  },
+  eyebrow: {
+    color: '#0879E7',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  title: { marginTop: 7, color: '#0E2455', fontSize: 23, fontWeight: '900' },
+  copy: { marginTop: 8, color: '#5F7790', fontSize: 13, lineHeight: 20 },
+  versionRow: {
+    marginTop: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  versionLabel: { color: '#7890A6', fontSize: 12, fontWeight: '700' },
+  versionValue: { color: '#24415E', fontSize: 12, fontWeight: '900' },
+  notes: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#F4F8FC',
+    color: '#4F6B88',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  actions: { marginTop: 18, flexDirection: 'row', justifyContent: 'flex-end', gap: 9 },
+  laterButton: {
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#D7E2EC',
+  },
+  laterText: { color: '#4F6B88', fontSize: 13, fontWeight: '800' },
+  updateButton: {
+    minHeight: 44,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0879E7',
+  },
+  updateText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
+});
 
 const styles = StyleSheet.create({
   interactionRoot: { flex: 1 },

@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors } from '../theme/colors';
+import SettingsScreen from './SettingsScreen.jsx';
 
 const brandMark = require('../assets/brand/akshaconnect-mark.png');
 
@@ -63,8 +64,13 @@ export default function HomeScreen({
   onStartDirectMessage,
   onCreateChannel,
   onOpenAccountSwitcher,
+  appVersion,
+  updatePolicy,
+  updateStatus,
+  onCheckForUpdates,
+  onOpenUpdate,
+  onOpenDeviceSettings,
 }) {
-  const identity = session?.identity || {};
   const tenant = session?.tenant || {};
   const workspace = session?.workspace || {};
   const membership = session?.membership || {};
@@ -265,54 +271,27 @@ export default function HomeScreen({
           onPress={() => setActiveTab('channels')}
         />
         <TopTab
-          label="Profile"
-          active={activeTab === 'profile'}
-          onPress={() => setActiveTab('profile')}
+          label="Settings"
+          active={activeTab === 'settings'}
+          onPress={() => setActiveTab('settings')}
         />
       </View>
 
-      {activeTab === 'profile' ? (
-        <ScrollView
-          contentContainerStyle={styles.profilePage}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={Boolean(refreshing)}
-              onRefresh={onRefresh}
-              tintColor={colors.teal}
-            />
-          }
-        >
-          <View style={styles.profileHero}>
-            <View style={styles.profileAvatar}>
-              <Text style={styles.profileAvatarText}>
-                {initials(identity.display_name)}
-              </Text>
-            </View>
-            <Text style={styles.profileName}>
-              {identity.display_name || 'AkshaConnect member'}
-            </Text>
-            <Text style={styles.profileEmail}>
-              {identity.primary_email || membership.member_role || 'Member'}
-            </Text>
-          </View>
-
-          <InfoCard label="ORGANIZATION" value={organizationName} />
-          <InfoCard label="WORKSPACE" value={workspace.workspace_name || workspace.workspace_code || 'Workspace'} />
-          <InfoCard label="SERVER" value={serverUrl} />
-          <InfoCard label="CONNECTION" value={realtimeLabel(realtimeStatus)} />
-
-          <Pressable
-            accessibilityRole="button"
-            onPress={onLogout}
-            style={({ pressed }) => [
-              styles.signOutButton,
-              pressed ? styles.pressed : null,
-            ]}
-          >
-            <Text style={styles.signOutText}>Sign out</Text>
-          </Pressable>
-        </ScrollView>
+      {activeTab === 'settings' ? (
+        <SettingsScreen
+          session={session}
+          serverUrl={serverUrl}
+          realtimeStatus={realtimeStatus}
+          organizationName={organizationName}
+          appVersion={appVersion}
+          updatePolicy={updatePolicy}
+          updateStatus={updateStatus}
+          onCheckForUpdates={onCheckForUpdates}
+          onOpenUpdate={onOpenUpdate}
+          onOpenDeviceSettings={onOpenDeviceSettings}
+          onOpenAccountSwitcher={onOpenAccountSwitcher}
+          onLogout={onLogout}
+        />
       ) : (
         <ScrollView
           contentContainerStyle={styles.page}
@@ -736,15 +715,6 @@ function EmptyState({ text }) {
     <View style={styles.emptyState}>
       <Image source={brandMark} style={styles.emptyLogo} resizeMode="contain" />
       <Text style={styles.emptyText}>{text}</Text>
-    </View>
-  );
-}
-
-function InfoCard({ label, value }) {
-  return (
-    <View style={styles.infoCard}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue}>{value || '—'}</Text>
     </View>
   );
 }
