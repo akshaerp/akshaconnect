@@ -87,6 +87,7 @@ const DEVICE_LABEL = Platform.OS === 'ios'
   ? 'AkshaConnect iPhone'
   : 'AkshaConnect Android';
 const PRESENCE_IDLE_MS = 5 * 60 * 1000;
+const APP_BACKGROUND_GRACE_MS = 2000;
 
 function normalizeUnreadCounts(payload) {
   const next = {};
@@ -230,6 +231,9 @@ export default function App() {
   const [notificationToast, setNotificationToast] = useState(null);
   const [pendingPushConversationId, setPendingPushConversationId] = useState('');
   const [appState, setAppState] = useState(AppState.currentState);
+  const [stableAppActive, setStableAppActive] = useState(
+    AppState.currentState === 'active'
+  );
   const [realtimeStatus, setRealtimeStatus] = useState('disconnected');
   const [presenceByMember, setPresenceByMember] = useState({});
   const [realtimeEvents, setRealtimeEvents] = useState([]);
@@ -247,6 +251,7 @@ export default function App() {
   const realtimeClientRef = useRef(null);
   const presenceStateRef = useRef(PRESENCE_ACTIVE);
   const presenceIdleTimerRef = useRef(null);
+  const appBackgroundTimerRef = useRef(null);
   const sessionRef = useRef(session);
   const selectedConversationRef = useRef(selectedConversation);
   const channelsRef = useRef(channels);
@@ -275,6 +280,49 @@ export default function App() {
     const subscription = AppState.addEventListener('change', setAppState);
     return () => subscription.remove();
   }, []);
+
+  useEffect(() => {
+    if (appState === 'active') {
+      if (appBackgroundTimerRef.current) {
+        clearTimeout(appBackgroundTimerRef.current);
+        appBackgroundTimerRef.current = null;
+      }
+      setStableAppActive(true);
+      return undefined;
+    }
+
+    if (appBackgroundTimerRef.current) {
+      clearTimeout(appBackgroundTimerRef.current);
+    }
+
+    if (Platform.OS !== 'android') {
+      setStableAppActive(false);
+      return undefined;
+    }
+
+    // Some Android builds emit very short background/active transitions while
+    // the Activity remains visually foregrounded. Do not tear down realtime for
+    // those transient lifecycle events; genuine backgrounding still settles to
+    // offline after the grace period.
+    appBackgroundTimerRef.current = setTimeout(() => {
+      appBackgroundTimerRef.current = null;
+      if (appStateRef.current !== 'active') {
+        setStableAppActive(false);
+      }
+    }, APP_BACKGROUND_GRACE_MS);
+
+    return undefined;
+  }, [appState]);
+
+  useEffect(
+    () => () => {
+      if (appBackgroundTimerRef.current) {
+        clearTimeout(appBackgroundTimerRef.current);
+        appBackgroundTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (!selectedConversation) return undefined;
@@ -535,7 +583,7 @@ export default function App() {
       setRealtimeStatus('disconnected');
       return undefined;
     }
-    if (appState !== 'active') {
+    if (!stableAppActive) {
       setRealtimeStatus('offline');
       return undefined;
     }
@@ -672,7 +720,7 @@ export default function App() {
       }
       realtime.stop();
     };
-  }, [appState, refreshUnreadCounts, serverUrl, session?.access_token]);
+  }, [refreshUnreadCounts, serverUrl, session?.access_token, stableAppActive]);
 
   useEffect(() => {
     const openFromNativeNotification = (selection) => {
@@ -737,7 +785,7 @@ export default function App() {
 
   useEffect(() => {
     if (
-      appState !== 'active' ||
+      !stableAppActive ||
       !session?.access_token ||
       !deviceCredential?.deviceToken
     ) {
@@ -750,7 +798,7 @@ export default function App() {
     }
 
     refreshDeviceAccess().catch(() => {});
-  }, [appState, deviceCredential?.deviceToken, refreshDeviceAccess, session?.access_token, session?.expires_at]);
+  }, [deviceCredential?.deviceToken, refreshDeviceAccess, session?.access_token, session?.expires_at, stableAppActive]);
 
   const refreshWorkspace = useCallback(async () => {
     if (!session?.access_token || !serverUrl) return;
@@ -803,7 +851,7 @@ export default function App() {
 
   useEffect(() => {
     if (
-      appState !== 'active' ||
+      !stableAppActive ||
       !serverUrl ||
       !session?.access_token ||
       !deviceCredential?.deviceToken
@@ -836,7 +884,7 @@ export default function App() {
       cancelled = true;
       unsubscribe();
     };
-  }, [appState, deviceCredential?.deviceToken, serverUrl, session?.access_token]);
+  }, [deviceCredential?.deviceToken, serverUrl, session?.access_token, stableAppActive]);
 
   const handleConversationRead = useCallback((conversationId) => {
     if (!conversationId) return;

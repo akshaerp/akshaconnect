@@ -46,6 +46,6 @@ test('R8A.2 FCM has a stable Android tag per conversation', () => {
 test('R8A.2 Android internal build advances to v10', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
 
-  assert.match(gradle, /versionCode 11/);
-  assert.match(gradle, /versionName "0\.3\.0-v11"/);
+  assert.match(gradle, /versionCode 12/);
+  assert.match(gradle, /versionName "0\.3\.0-v12"/);
 });

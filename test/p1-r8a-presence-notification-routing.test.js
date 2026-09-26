@@ -472,7 +472,9 @@ test('R8A mobile foreground presence becomes Away after five minutes and backgro
 
   assert.match(app, /PRESENCE_IDLE_MS\s*=\s*5\s*\*\s*60\s*\*\s*1000/);
   assert.match(app, /publishPresence\(PRESENCE_AWAY\)/);
-  assert.match(app, /appState !== 'active'/);
+  assert.match(app, /APP_BACKGROUND_GRACE_MS\s*=\s*2000/);
+  assert.match(app, /stableAppActive/);
+  assert.match(app, /if \(!stableAppActive\)\s*\{[\s\S]*setRealtimeStatus\('offline'\)/);
   assert.match(app, /return \(\) => \{[\s\S]*realtime\.stop\(\)/);
   assert.match(app, /presence\.snapshot/);
   assert.match(app, /presence\.updated/);
@@ -550,8 +552,8 @@ test('R8A.3 web DM navigation shows explicit status text with a standalone ringl
   assert.doesNotMatch(styles, /\.dm-avatar-presence\s*\{/);
 });
 
-test('R8A.2 Android release advances to versionCode 11', () => {
+test('R8A.2 Android release advances to versionCode 12', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
-  assert.match(gradle, /versionCode 11/);
-  assert.match(gradle, /versionName "0\.3\.0-v11"/);
+  assert.match(gradle, /versionCode 12/);
+  assert.match(gradle, /versionName "0\.3\.0-v12"/);
 });

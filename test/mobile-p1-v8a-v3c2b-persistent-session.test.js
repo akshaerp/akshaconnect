@@ -183,7 +183,7 @@ test('V3C2B refreshes access sessions during long-lived use', () => {
 
   assert.match(
     app,
-    /appState !== 'active'/
+    /if \(\s*!stableAppActive \|\|\s*!session\?\.access_token/
   );
 
   assert.match(

@@ -47,7 +47,8 @@ test('P1-V8A V3 manages realtime with mobile application lifecycle', () => {
 
   assert.match(app, /AppState/);
   assert.match(app, /createRealtimeClient/);
-  assert.match(app, /appState !== 'active'/);
+  assert.match(app, /stableAppActive/);
+  assert.match(app, /APP_BACKGROUND_GRACE_MS/);
   assert.match(app, /realtime\.stop\(\)/);
   assert.match(app, /realtimeStatus/);
 });

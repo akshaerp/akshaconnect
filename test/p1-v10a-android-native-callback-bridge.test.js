@@ -53,6 +53,6 @@ test('R6 native callback bridge actively emits warm callbacks to React Native', 
 test('R8A.2 APK version is distinct from prior test builds', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
 
-  assert.match(gradle, /versionCode 11/);
-  assert.match(gradle, /versionName "0\.3\.0-v11"/);
+  assert.match(gradle, /versionCode 12/);
+  assert.match(gradle, /versionName "0\.3\.0-v12"/);
 });
