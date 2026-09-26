@@ -351,6 +351,36 @@
   background: #f4f5f7;
 }
 
+.connection-pill.presence-live {
+  color: #27714f;
+  background: #f1faf5;
+  border-color: #d6eee0;
+}
+
+.connection-pill.presence-live .connection-pill-dot {
+  background: #36a66f;
+}
+
+.connection-pill.presence-away {
+  color: #855d13;
+  background: #fff8eb;
+  border-color: #f2dfb7;
+}
+
+.connection-pill.presence-away .connection-pill-dot {
+  background: #e7a73d;
+}
+
+.connection-pill.presence-not-available {
+  color: #747887;
+  background: #f4f5f7;
+  border-color: #e1e3ea;
+}
+
+.connection-pill.presence-not-available .connection-pill-dot {
+  background: #999dab;
+}
+
 @keyframes realtime-pulse {
   50% { opacity: 0.35; transform: scale(0.8); }
 }

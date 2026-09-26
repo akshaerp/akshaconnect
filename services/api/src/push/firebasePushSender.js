@@ -136,6 +136,28 @@ function createFirebasePushSender({
     let successCount = 0;
     let failureCount = 0;
 
+    const conversationId =
+      clean(
+        data?.conversationId ||
+        data?.conversation_id
+      );
+
+    const androidNotification = {
+      channelId:
+        'akshaconnect-messages-v1',
+
+      icon:
+        'ic_notification',
+
+      sound:
+        'default',
+    };
+
+    if (conversationId) {
+      androidNotification.tag =
+        `akshaconnect-conversation-${conversationId}`;
+    }
+
     for (
       const tokenBatch of
       chunk(
@@ -177,17 +199,8 @@ function createFirebasePushSender({
 
             android: {
               priority: 'high',
-
-              notification: {
-                channelId:
-                  'akshaconnect-messages-v1',
-
-                icon:
-                  'ic_notification',
-
-                sound:
-                  'default',
-              },
+              notification:
+                androidNotification,
             },
           });
 

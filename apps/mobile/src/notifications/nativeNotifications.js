@@ -6,6 +6,22 @@ import notifee, {
 } from '@notifee/react-native';
 
 const MESSAGE_CHANNEL_ID = 'akshaconnect-messages-v1';
+const CONVERSATION_NOTIFICATION_PREFIX = 'conversation-';
+const CONVERSATION_NOTIFICATION_TAG_PREFIX = 'akshaconnect-conversation-';
+
+function cleanConversationId(value) {
+  return String(value || '').trim();
+}
+
+function conversationNotificationId(conversationId) {
+  const cleanId = cleanConversationId(conversationId);
+  return cleanId ? `${CONVERSATION_NOTIFICATION_PREFIX}${cleanId}` : '';
+}
+
+function conversationNotificationTag(conversationId) {
+  const cleanId = cleanConversationId(conversationId);
+  return cleanId ? `${CONVERSATION_NOTIFICATION_TAG_PREFIX}${cleanId}` : '';
+}
 
 function notificationPreview(message) {
   const body = String(message?.body_text || '').trim();
@@ -67,7 +83,7 @@ export async function displayNativeMessageNotification({
   if (!allowed) return false;
 
   await notifee.displayNotification({
-    id: `message-${message.message_id}`,
+    id: conversationNotificationId(selection.conversationId),
     title: notificationTitle(message, selection),
     body: notificationPreview(message),
     data: {
@@ -90,6 +106,43 @@ export async function displayNativeMessageNotification({
   });
 
   return true;
+}
+
+export async function clearConversationNotifications(conversationId) {
+  const cleanId = cleanConversationId(conversationId);
+  if (!cleanId) return 0;
+
+  const expectedId = conversationNotificationId(cleanId);
+  const expectedTag = conversationNotificationTag(cleanId);
+  const displayed = await notifee.getDisplayedNotifications();
+
+  const matchingIds = [
+    ...new Set(
+      (displayed || [])
+        .filter((entry) => {
+          const notification = entry?.notification || {};
+          const dataConversationId = cleanConversationId(
+            notification?.data?.conversationId ||
+            notification?.data?.conversation_id
+          );
+          const androidTag = String(notification?.android?.tag || '').trim();
+
+          return (
+            dataConversationId === cleanId ||
+            androidTag === expectedTag ||
+            notification?.id === expectedId
+          );
+        })
+        .map((entry) => String(entry?.notification?.id || '').trim())
+        .filter(Boolean)
+    ),
+  ];
+
+  if (matchingIds.length > 0) {
+    await notifee.cancelDisplayedNotifications(matchingIds);
+  }
+
+  return matchingIds.length;
 }
 
 export function subscribeToNativeNotificationPress(onOpen) {

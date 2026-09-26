@@ -304,10 +304,38 @@ function mergeMessages(rows) {
 }
 
 function realtimeLabel(status) {
-  if (status === 'connected') return 'Live';
+  if (status === 'connected') return 'Connected';
   if (status === 'connecting') return 'Connecting…';
   if (status === 'reconnecting') return 'Reconnecting…';
   return 'Offline';
+}
+
+function presenceLabel(status) {
+  if (status === 'LIVE') return 'Live';
+  if (status === 'AWAY') return 'Away';
+  return 'Not available';
+}
+
+function findUnreadDivider(rows, unreadCount, currentMemberId) {
+  let remaining = Number(unreadCount || 0);
+  if (remaining <= 0) return null;
+
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const item = rows[index];
+    const own =
+      item.sender_type === 'HUMAN' &&
+      item.sender_member_id === currentMemberId;
+
+    if (own) continue;
+
+    remaining -= 1;
+
+    if (remaining <= 0) {
+      return item.message_id;
+    }
+  }
+
+  return rows[0]?.message_id || null;
 }
 
 export default function ConversationScreen({
@@ -317,7 +345,9 @@ export default function ConversationScreen({
   realtimeStatus,
   realtimeEvents,
   reconcileEpoch,
+  peerPresenceStatus,
   onConversationRead,
+  onUserActivity,
   onBack,
 }) {
   const token = session?.access_token || '';
@@ -439,6 +469,7 @@ export default function ConversationScreen({
     async ({
       refresh = false,
       reconcile = false,
+      initialUnreadCount = null,
     } = {}) => {
       if (!token || !conversation?.conversationId) return;
 
@@ -475,6 +506,17 @@ export default function ConversationScreen({
         const latestRows = mergeMessages(
           result.messages || []
         );
+
+        if (initialUnreadCount !== null) {
+          setNewMessageDividerId(
+            findUnreadDivider(
+              latestRows,
+              initialUnreadCount,
+              currentMemberId
+            )
+          );
+        }
+
         const latest =
           latestRows[latestRows.length - 1];
 
@@ -492,6 +534,7 @@ export default function ConversationScreen({
     },
     [
       conversation?.conversationId,
+      currentMemberId,
       markMessageRead,
       serverUrl,
       token,
@@ -525,7 +568,10 @@ export default function ConversationScreen({
     lastRealtimeSequenceRef.current = 0;
     lastMarkedReadMessageIdRef.current = null;
 
-    loadLatest().finally(() => {
+    loadLatest({
+      initialUnreadCount:
+        Number(conversation?.unreadAtOpen || 0),
+    }).finally(() => {
       if (active) {
         arrivalDividerReadyRef.current = true;
       }
@@ -536,6 +582,7 @@ export default function ConversationScreen({
     };
   }, [
     conversation?.conversationId,
+    conversation?.unreadAtOpen,
     loadLatest,
   ]);
 
@@ -1601,6 +1648,20 @@ export default function ConversationScreen({
         !pickingAttachments;
 
   const live = realtimeStatus === 'connected';
+  const showPeerPresence = conversation.kind === 'dm';
+  const normalizedPeerPresence =
+    peerPresenceStatus || 'NOT_AVAILABLE';
+  const statusLive =
+    showPeerPresence
+      ? normalizedPeerPresence === 'LIVE'
+      : live;
+  const statusAway =
+    showPeerPresence &&
+    normalizedPeerPresence === 'AWAY';
+  const statusLabel =
+    showPeerPresence
+      ? presenceLabel(normalizedPeerPresence)
+      : realtimeLabel(realtimeStatus);
 
   return (
     <SafeAreaView
@@ -1649,28 +1710,34 @@ export default function ConversationScreen({
               <View
                 style={[
                   styles.realtimePill,
-                  live
+                  statusLive
                     ? styles.realtimePillConnected
-                    : styles.realtimePillOffline,
+                    : statusAway
+                      ? styles.realtimePillAway
+                      : styles.realtimePillOffline,
                 ]}
               >
                 <View
                   style={[
                     styles.realtimeDot,
-                    live
+                    statusLive
                       ? styles.realtimeDotConnected
-                      : styles.realtimeDotOffline,
+                      : statusAway
+                        ? styles.realtimeDotAway
+                        : styles.realtimeDotOffline,
                   ]}
                 />
                 <Text
                   style={[
                     styles.realtimeText,
-                    live
+                    statusLive
                       ? styles.realtimeTextConnected
-                      : styles.realtimeTextOffline,
+                      : statusAway
+                        ? styles.realtimeTextAway
+                        : styles.realtimeTextOffline,
                   ]}
                 >
-                  {realtimeLabel(realtimeStatus)}
+                  {statusLabel}
                 </Text>
               </View>
             </View>
@@ -1706,6 +1773,7 @@ export default function ConversationScreen({
           ) : (
             <ScrollView
               ref={scrollRef}
+              onScrollBeginDrag={onUserActivity}
               contentContainerStyle={
                 styles.messageList
               }
@@ -2088,8 +2156,12 @@ export default function ConversationScreen({
 
           <TextInput
             value={draft}
-            onChangeText={setDraft}
+            onChangeText={(value) => {
+              onUserActivity?.();
+              setDraft(value);
+            }}
             onFocus={() => {
+              onUserActivity?.();
               scrollToBottom(false);
             }}
             placeholder={
@@ -2678,8 +2750,11 @@ const styles = StyleSheet.create({
   realtimePillConnected: {
     backgroundColor: '#0D5B47',
   },
+  realtimePillAway: {
+    backgroundColor: '#6A4A1F',
+  },
   realtimePillOffline: {
-    backgroundColor: '#4A3823',
+    backgroundColor: '#3D4654',
   },
   realtimeDot: {
     width: 5,
@@ -2690,8 +2765,11 @@ const styles = StyleSheet.create({
   realtimeDotConnected: {
     backgroundColor: colors.brandGreen,
   },
-  realtimeDotOffline: {
+  realtimeDotAway: {
     backgroundColor: colors.orange,
+  },
+  realtimeDotOffline: {
+    backgroundColor: '#94A3B8',
   },
   realtimeText: {
     fontSize: 9,
@@ -2700,8 +2778,11 @@ const styles = StyleSheet.create({
   realtimeTextConnected: {
     color: '#CBFFF3',
   },
-  realtimeTextOffline: {
+  realtimeTextAway: {
     color: '#FFE2BC',
+  },
+  realtimeTextOffline: {
+    color: '#D7E0EA',
   },
   refreshButton: {
     width: 40,

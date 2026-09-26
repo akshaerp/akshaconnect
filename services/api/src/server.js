@@ -33,6 +33,7 @@ const { createPushRegistrationService } = require('./push/pushRegistrationServic
 const { createFirebasePushSender } = require('./push/firebasePushSender');
 const { createPushDeliveryService } = require('./push/pushDeliveryService');
 const { createRealtimeEventBus } = require('./realtime/realtimeEventBus');
+const { createPresenceRegistry } = require('./realtime/presenceRegistry');
 const { attachRealtimeGateway } = require('./realtime/realtimeGateway');
 
 const port = Number(process.env.PORT || 4100);
@@ -103,11 +104,18 @@ async function start() {
         process.env.AKSHACONNECT_FIREBASE_PROJECT_ID,
     });
 
+  // Presence is intentionally ephemeral. It is shared by the realtime gateway
+  // and notification router in this API process, and never treated as durable
+  // authentication or database state.
+  const presenceRegistry =
+    createPresenceRegistry();
+
   const pushDeliveryService =
     createPushDeliveryService({
       messagingRepository,
       pushRegistrationRepository,
       pushSender: firebasePushSender,
+      presenceRegistry,
     });
 
   const attachmentCrypto = createAttachmentCryptoFromEnv(process.env);
@@ -242,6 +250,7 @@ async function start() {
     localIdentityService,
     messagingRepository,
     eventBus: realtimeEventBus,
+    presenceRegistry,
   });
 
   await new Promise((resolve) => server.listen(port, '0.0.0.0', resolve));

@@ -1,7 +1,6 @@
 import React, {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -11,6 +10,8 @@ import {
   Image,
   Linking,
   Modal,
+  NativeModules,
+  DeviceEventEmitter,
   Platform,
   Pressable,
   ScrollView,
@@ -22,16 +23,19 @@ import {
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import {
+  createChannel,
   discoverMobileOrganizations,
   exchangeMobileAuthorization,
   listChannels,
   listDirectMessages,
   listUnreadCounts,
+  listWorkspaceMembers,
   logout,
   logoutMobile,
   refreshMobile,
   registerPush,
   startAkshaErpMobileAuth,
+  startDirectMessage,
   switchWorkspace,
   unregisterPush,
 } from './src/api/client';
@@ -47,8 +51,13 @@ import {
   loadPendingMobileAuth,
   savePendingMobileAuth,
 } from './src/auth/pendingMobileAuth.js';
-import { createRealtimeClient } from './src/realtime/client.js';
 import {
+  createRealtimeClient,
+  PRESENCE_ACTIVE,
+  PRESENCE_AWAY,
+} from './src/realtime/client.js';
+import {
+  clearConversationNotifications,
   consumeInitialNativeNotification,
   displayNativeMessageNotification,
   prepareNativeNotifications,
@@ -77,6 +86,7 @@ const DEVICE_PLATFORM = Platform.OS === 'ios' ? 'IOS' : 'ANDROID';
 const DEVICE_LABEL = Platform.OS === 'ios'
   ? 'AkshaConnect iPhone'
   : 'AkshaConnect Android';
+const PRESENCE_IDLE_MS = 5 * 60 * 1000;
 
 function normalizeUnreadCounts(payload) {
   const next = {};
@@ -85,6 +95,32 @@ function normalizeUnreadCounts(payload) {
     next[item.conversation_id] = Number(item.unread_count || 0);
   }
   return next;
+}
+
+function normalizePresenceMembers(members = []) {
+  const next = {};
+
+  for (const member of members || []) {
+    const memberId = clean(member?.workspace_member_id);
+    if (!memberId) continue;
+    next[memberId] =
+      clean(member?.status).toUpperCase() ||
+      'NOT_AVAILABLE';
+  }
+
+  return next;
+}
+
+function peerPresenceStatus(selection, presenceByMember) {
+  if (selection?.kind !== 'dm') return null;
+
+  const memberId = clean(
+    selection?.otherWorkspaceMemberId
+  );
+
+  return memberId
+    ? presenceByMember?.[memberId] || 'NOT_AVAILABLE'
+    : 'NOT_AVAILABLE';
 }
 
 function navigationSelection(conversationId, channels, directMessages) {
@@ -111,6 +147,8 @@ function navigationSelection(conversationId, channels, directMessages) {
       conversationId,
       title: dm.other_display_name || 'Member',
       subtitle: dm.other_primary_email || 'Direct message',
+      otherWorkspaceMemberId:
+        dm.other_workspace_member_id || '',
     };
   }
 
@@ -141,6 +179,37 @@ function clean(value) {
   return value == null ? '' : String(value).trim();
 }
 
+function decodeQueryComponent(value) {
+  try {
+    return decodeURIComponent(String(value || '').replace(/\+/g, ' '));
+  } catch {
+    return '';
+  }
+}
+
+function parseMobileAuthCallback(value) {
+  const callbackUrl = clean(value);
+  const match = /^akshaconnect:\/\/auth\/callback(?:\?([^#]*))?(?:#.*)?$/i.exec(callbackUrl);
+  if (!match) return null;
+
+  const params = {};
+  for (const pair of String(match[1] || '').split('&')) {
+    if (!pair) continue;
+    const separator = pair.indexOf('=');
+    const rawKey = separator >= 0 ? pair.slice(0, separator) : pair;
+    const rawValue = separator >= 0 ? pair.slice(separator + 1) : '';
+    const key = decodeQueryComponent(rawKey);
+    if (!key) continue;
+    params[key] = decodeQueryComponent(rawValue);
+  }
+
+  return {
+    requestId: clean(params.request_id),
+    code: clean(params.code),
+    state: clean(params.state),
+  };
+}
+
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [restoringSession, setRestoringSession] = useState(true);
@@ -162,6 +231,7 @@ export default function App() {
   const [pendingPushConversationId, setPendingPushConversationId] = useState('');
   const [appState, setAppState] = useState(AppState.currentState);
   const [realtimeStatus, setRealtimeStatus] = useState('disconnected');
+  const [presenceByMember, setPresenceByMember] = useState({});
   const [realtimeEvents, setRealtimeEvents] = useState([]);
   const [reconcileEpoch, setReconcileEpoch] = useState(0);
   const [showAccountSwitcher, setShowAccountSwitcher] = useState(false);
@@ -174,11 +244,18 @@ export default function App() {
 
   const realtimeSequenceRef = useRef(0);
   const hasConnectedRef = useRef(false);
+  const realtimeClientRef = useRef(null);
+  const presenceStateRef = useRef(PRESENCE_ACTIVE);
+  const presenceIdleTimerRef = useRef(null);
   const sessionRef = useRef(session);
   const selectedConversationRef = useRef(selectedConversation);
   const channelsRef = useRef(channels);
   const directMessagesRef = useRef(directMessages);
   const appStateRef = useRef(appState);
+  const unreadCountsRef = useRef(unreadCounts);
+  const pendingMobileAuthRef = useRef(null);
+  const processingMobileAuthCallbackUrlRef = useRef('');
+  const completedMobileAuthCallbackUrlRef = useRef('');
 
   const accounts = accountRegistry.accounts || [];
 
@@ -192,6 +269,7 @@ export default function App() {
   useEffect(() => { channelsRef.current = channels; }, [channels]);
   useEffect(() => { directMessagesRef.current = directMessages; }, [directMessages]);
   useEffect(() => { appStateRef.current = appState; }, [appState]);
+  useEffect(() => { unreadCountsRef.current = unreadCounts; }, [unreadCounts]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', setAppState);
@@ -230,6 +308,7 @@ export default function App() {
     setUnreadCounts({});
     setNotificationToast(null);
     setRealtimeStatus('disconnected');
+    setPresenceByMember({});
     setRealtimeEvents([]);
     setReconcileEpoch(0);
     hasConnectedRef.current = false;
@@ -265,6 +344,7 @@ export default function App() {
     hasConnectedRef.current = false;
     realtimeSequenceRef.current = 0;
     setRealtimeStatus('disconnected');
+    setPresenceByMember({});
     setRealtimeEvents([]);
     setReconcileEpoch(0);
   }, []);
@@ -376,6 +456,79 @@ export default function App() {
     [serverUrl, session?.access_token]
   );
 
+  const publishPresence = useCallback((state) => {
+    const normalized =
+      state === PRESENCE_AWAY
+        ? PRESENCE_AWAY
+        : PRESENCE_ACTIVE;
+
+    presenceStateRef.current = normalized;
+
+    realtimeClientRef.current?.updatePresence?.({
+      state: normalized,
+      activeConversationId:
+        normalized === PRESENCE_ACTIVE
+          ? selectedConversationRef.current?.conversationId || null
+          : null,
+    });
+  }, []);
+
+  const schedulePresenceIdle = useCallback(() => {
+    if (presenceIdleTimerRef.current) {
+      clearTimeout(presenceIdleTimerRef.current);
+      presenceIdleTimerRef.current = null;
+    }
+
+    if (appStateRef.current !== 'active') return;
+
+    presenceIdleTimerRef.current = setTimeout(() => {
+      presenceIdleTimerRef.current = null;
+      if (appStateRef.current === 'active') {
+        publishPresence(PRESENCE_AWAY);
+      }
+    }, PRESENCE_IDLE_MS);
+  }, [publishPresence]);
+
+  const markUserActivity = useCallback(() => {
+    if (appStateRef.current !== 'active') return;
+
+    publishPresence(PRESENCE_ACTIVE);
+    schedulePresenceIdle();
+  }, [publishPresence, schedulePresenceIdle]);
+
+  useEffect(() => {
+    if (appState === 'active') {
+      markUserActivity();
+      return undefined;
+    }
+
+    if (presenceIdleTimerRef.current) {
+      clearTimeout(presenceIdleTimerRef.current);
+      presenceIdleTimerRef.current = null;
+    }
+
+    return undefined;
+  }, [appState, markUserActivity]);
+
+  useEffect(() => {
+    realtimeClientRef.current?.updatePresence?.({
+      state: presenceStateRef.current,
+      activeConversationId:
+        presenceStateRef.current === PRESENCE_ACTIVE
+          ? selectedConversation?.conversationId || null
+          : null,
+    });
+  }, [selectedConversation?.conversationId]);
+
+  useEffect(
+    () => () => {
+      if (presenceIdleTimerRef.current) {
+        clearTimeout(presenceIdleTimerRef.current);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     const token = session?.access_token;
     if (!token || !serverUrl) {
@@ -390,6 +543,7 @@ export default function App() {
     const realtime = createRealtimeClient({
       serverUrl,
       token,
+      clientType: 'MOBILE',
       onStatus: setRealtimeStatus,
       onEvent: (payload) => {
         if (payload?.type === 'ready') {
@@ -402,12 +556,38 @@ export default function App() {
           return;
         }
 
+        if (payload?.type === 'presence.snapshot') {
+          setPresenceByMember(
+            normalizePresenceMembers(payload.members || [])
+          );
+          return;
+        }
+
+        if (
+          payload?.type === 'presence.updated' &&
+          payload.workspace_member_id
+        ) {
+          setPresenceByMember((current) => ({
+            ...current,
+            [payload.workspace_member_id]:
+              clean(payload.status).toUpperCase() ||
+              'NOT_AVAILABLE',
+          }));
+          return;
+        }
+
         if (payload?.type === 'read_cursor.updated') {
           if (payload.conversation_id) {
             setUnreadCounts((current) => ({
               ...current,
               [payload.conversation_id]: 0,
             }));
+            clearConversationNotifications(payload.conversation_id).catch(() => {});
+            setNotificationToast((current) =>
+              current?.selection?.conversationId === payload.conversation_id
+                ? null
+                : current
+            );
           }
           return;
         }
@@ -436,15 +616,18 @@ export default function App() {
         const activeConversation = selectedConversationRef.current;
         const activelyReading =
           appStateRef.current === 'active' &&
+          presenceStateRef.current === PRESENCE_ACTIVE &&
           activeConversation?.conversationId === payload.conversation_id;
 
-        if (!activelyReading) {
-          setUnreadCounts((current) => ({
-            ...current,
-            [payload.conversation_id]:
-              Number(current[payload.conversation_id] || 0) + 1,
-          }));
+        if (activelyReading) {
+          return;
         }
+
+        setUnreadCounts((current) => ({
+          ...current,
+          [payload.conversation_id]:
+            Number(current[payload.conversation_id] || 0) + 1,
+        }));
 
         const selection = navigationSelection(
           payload.conversation_id,
@@ -474,7 +657,21 @@ export default function App() {
       },
     });
 
-    return () => realtime.stop();
+    realtimeClientRef.current = realtime;
+    realtime.updatePresence({
+      state: presenceStateRef.current,
+      activeConversationId:
+        presenceStateRef.current === PRESENCE_ACTIVE
+          ? selectedConversationRef.current?.conversationId || null
+          : null,
+    });
+
+    return () => {
+      if (realtimeClientRef.current === realtime) {
+        realtimeClientRef.current = null;
+      }
+      realtime.stop();
+    };
   }, [appState, refreshUnreadCounts, serverUrl, session?.access_token]);
 
   useEffect(() => {
@@ -592,8 +789,14 @@ export default function App() {
       channels,
       directMessages
     );
+    const unreadAtOpen = Number(
+      unreadCountsRef.current?.[pendingPushConversationId] || 0
+    );
     setNotificationToast(null);
-    setSelectedConversation(selection);
+    setSelectedConversation({
+      ...selection,
+      unreadAtOpen,
+    });
     setReconcileEpoch((value) => value + 1);
     setPendingPushConversationId('');
   }, [channels, directMessages, pendingPushConversationId, session?.access_token]);
@@ -637,13 +840,176 @@ export default function App() {
 
   const handleConversationRead = useCallback((conversationId) => {
     if (!conversationId) return;
+
     setUnreadCounts((current) => ({ ...current, [conversationId]: 0 }));
+    clearConversationNotifications(conversationId).catch(() => {});
+    setNotificationToast((current) =>
+      current?.selection?.conversationId === conversationId
+        ? null
+        : current
+    );
   }, []);
 
   const handleOpenConversation = useCallback((selection) => {
+    const conversationId = clean(selection?.conversationId);
+    const unreadAtOpen = conversationId
+      ? Number(unreadCountsRef.current?.[conversationId] || 0)
+      : 0;
+
     setNotificationToast(null);
-    setSelectedConversation(selection);
+    setSelectedConversation({
+      ...selection,
+      unreadAtOpen,
+    });
   }, []);
+
+  const handleSearchWorkspaceMembers = useCallback(
+    async (query = '') => {
+      if (!serverUrl || !session?.access_token) {
+        return [];
+      }
+
+      const payload = await listWorkspaceMembers(
+        serverUrl,
+        session.access_token,
+        {
+          query: clean(query),
+          limit: 50,
+        }
+      );
+
+      return payload.members || [];
+    },
+    [serverUrl, session?.access_token]
+  );
+
+  const handleStartDirectMessage = useCallback(
+    async (member) => {
+      const memberId = clean(member?.workspace_member_id);
+      if (!memberId || !serverUrl || !session?.access_token) {
+        throw new Error('Choose a workspace member to start a message.');
+      }
+
+      setLoadingWorkspace(true);
+      try {
+        const result = await startDirectMessage(
+          serverUrl,
+          session.access_token,
+          memberId
+        );
+
+        const conversationId = clean(
+          result?.direct_message?.conversation_id
+        );
+
+        const payloads = await loadWorkspacePayload(
+          serverUrl,
+          session.access_token
+        );
+        const nextChannels = payloads.channelPayload.channels || [];
+        const nextDirectMessages = payloads.dmPayload.direct_messages || [];
+
+        setChannels(nextChannels);
+        setDirectMessages(nextDirectMessages);
+        setUnreadCounts(normalizeUnreadCounts(payloads.unreadPayload));
+
+        const directMessage = nextDirectMessages.find(
+          (item) =>
+            item.conversation_id === conversationId ||
+            item.other_workspace_member_id === memberId
+        );
+
+        handleOpenConversation({
+          kind: 'dm',
+          conversationId:
+            directMessage?.conversation_id || conversationId,
+          title:
+            directMessage?.other_display_name ||
+            member.display_name ||
+            'Member',
+          subtitle:
+            directMessage?.other_primary_email ||
+            member.primary_email ||
+            'Direct message',
+          otherWorkspaceMemberId:
+            directMessage?.other_workspace_member_id || memberId,
+        });
+
+        return result;
+      } finally {
+        setLoadingWorkspace(false);
+      }
+    },
+    [
+      handleOpenConversation,
+      loadWorkspacePayload,
+      serverUrl,
+      session?.access_token,
+    ]
+  );
+
+  const handleCreateChannel = useCallback(
+    async ({ channelName, visibility = 'PUBLIC' } = {}) => {
+      const name = clean(channelName);
+      if (!name || !serverUrl || !session?.access_token) {
+        throw new Error('Channel name is required.');
+      }
+
+      setLoadingWorkspace(true);
+      try {
+        const result = await createChannel(
+          serverUrl,
+          session.access_token,
+          {
+            channelName: name,
+            visibility,
+          }
+        );
+
+        const payloads = await loadWorkspacePayload(
+          serverUrl,
+          session.access_token
+        );
+        const nextChannels = payloads.channelPayload.channels || [];
+
+        setChannels(nextChannels);
+        setDirectMessages(payloads.dmPayload.direct_messages || []);
+        setUnreadCounts(normalizeUnreadCounts(payloads.unreadPayload));
+
+        const createdChannel = result?.channel || {};
+        const channel = nextChannels.find(
+          (item) =>
+            item.channel_id === createdChannel.channel_id ||
+            item.conversation_id === createdChannel.conversation_id
+        ) || createdChannel;
+
+        const conversationId = clean(channel.conversation_id);
+        if (!conversationId) {
+          throw new Error('Channel was created but its conversation is unavailable.');
+        }
+
+        handleOpenConversation({
+          kind: 'channel',
+          conversationId,
+          title: channel.channel_name || name,
+          subtitle:
+            channel.visibility === 'PRIVATE'
+              ? 'Private channel'
+              : 'Public channel',
+        });
+
+        return result;
+      } finally {
+        setLoadingWorkspace(false);
+      }
+    },
+    [
+      handleOpenConversation,
+      loadWorkspacePayload,
+      serverUrl,
+      session?.access_token,
+    ]
+  );
 
   const resetDiscovery = useCallback(() => {
     setDiscoveryEmail('');
@@ -683,6 +1049,25 @@ export default function App() {
     setLoginError('');
 
     try {
+      // A user explicitly starting a new sign-in supersedes any retained callback
+      // from an earlier attempt. Clear only that native fallback before creating
+      // the new request; the server-side request itself remains independently guarded.
+      if (Platform.OS === 'android') {
+        const bridge = NativeModules.AkshaConnectAuthBridge;
+        if (bridge?.getPendingCallback && bridge?.acknowledgePendingCallback) {
+          try {
+            const staleCallback = await bridge.getPendingCallback();
+            if (staleCallback) {
+              await bridge.acknowledgePendingCallback(staleCallback);
+            }
+          } catch {}
+        }
+      }
+
+      pendingMobileAuthRef.current = null;
+      processingMobileAuthCallbackUrlRef.current = '';
+      completedMobileAuthCallbackUrlRef.current = '';
+
       const started = await startAkshaErpMobileAuth(DEFAULT_SERVER_URL, {
         email,
         tenantId: organization.tenant_id,
@@ -692,7 +1077,7 @@ export default function App() {
         deviceLabel: DEVICE_LABEL,
       });
 
-      await savePendingMobileAuth({
+      const pending = await savePendingMobileAuth({
         requestId: started.request_id,
         state: started.state,
         exchangeSecret: started.exchange_secret,
@@ -700,6 +1085,7 @@ export default function App() {
         tenantId: organization.tenant_id,
         email,
       });
+      pendingMobileAuthRef.current = pending;
 
       const supported = await Linking.canOpenURL(started.authorization_url);
       if (!supported) {
@@ -708,6 +1094,7 @@ export default function App() {
 
       await Linking.openURL(started.authorization_url);
     } catch (error) {
+      pendingMobileAuthRef.current = null;
       await clearPendingMobileAuth().catch(() => {});
       setLoginError(error?.message || 'Could not start company sign-in.');
     } finally {
@@ -716,53 +1103,69 @@ export default function App() {
   }, []);
 
   const completeMobileAuthorization = useCallback(async (callbackUrl) => {
-    let parsed;
-    try {
-      parsed = new URL(callbackUrl);
-    } catch {
-      return false;
-    }
+    const parsed = parseMobileAuthCallback(callbackUrl);
+    if (!parsed) return false;
 
-    if (
-      parsed.protocol !== 'akshaconnect:' ||
-      parsed.hostname !== 'auth' ||
-      parsed.pathname !== '/callback'
-    ) {
-      return false;
-    }
-
-    const requestId = clean(parsed.searchParams.get('request_id'));
-    const code = clean(parsed.searchParams.get('code'));
-    const state = clean(parsed.searchParams.get('state'));
+    const { requestId, code, state } = parsed;
     if (!requestId || !code || !state) {
+      console.warn('[AkshaConnectAuth] JS callback is incomplete.');
       setLoginError('Company sign-in returned an incomplete authorization.');
-      return true;
+      return false;
     }
 
     setLoginBusy(true);
     setLoadingWorkspace(true);
     setLoginError('');
 
+    let stage = 'load_pending';
+    let exchangeConsumed = false;
+
     try {
-      const pending = await loadPendingMobileAuth();
-      if (!pending) throw new Error('Mobile sign-in request is no longer available. Start again.');
+      console.info('[AkshaConnectAuth] JS callback accepted.');
+
+      const pending =
+        pendingMobileAuthRef.current ||
+        await loadPendingMobileAuth();
+
+      if (!pending) {
+        throw new Error('Mobile sign-in request is no longer available. Start again.');
+      }
+      console.info('[AkshaConnectAuth] Pending mobile sign-in state loaded.');
+
+      stage = 'validate_state';
       if (pending.requestId !== requestId || pending.state !== state) {
         throw new Error('Mobile sign-in state did not match. Start again.');
       }
+      console.info('[AkshaConnectAuth] Mobile sign-in state validated.');
 
+      stage = 'exchange';
+      console.info('[AkshaConnectAuth] Starting mobile authorization exchange.');
       const result = await exchangeMobileAuthorization(pending.serverUrl, {
         requestId,
         code,
         state,
         exchangeSecret: pending.exchangeSecret,
       });
+      exchangeConsumed = true;
+      console.info('[AkshaConnectAuth] Mobile authorization exchange succeeded.');
 
+      // The authorization code is one-time. Once exchange succeeds, clear both
+      // persistent pending state and the retained native callback immediately.
+      pendingMobileAuthRef.current = null;
+      await clearPendingMobileAuth().catch(() => {});
+      if (Platform.OS === 'android') {
+        const bridge = NativeModules.AkshaConnectAuthBridge;
+        await bridge?.acknowledgePendingCallback?.(callbackUrl).catch(() => {});
+      }
+
+      stage = 'validate_session';
       const deviceToken = clean(result?.device_token);
       if (!deviceToken) throw new Error('AkshaConnect did not return a mobile device session.');
 
       const accessSession = { ...result };
       delete accessSession.device_token;
 
+      stage = 'save_device';
       const credential = await saveDeviceAccount({
         serverUrl: pending.serverUrl,
         deviceToken,
@@ -777,44 +1180,172 @@ export default function App() {
         workspaceName: result?.workspace?.workspace_name,
       });
 
+      stage = 'load_workspace';
       const payloads = await loadWorkspacePayload(
         pending.serverUrl,
         result.access_token
       );
 
-      await clearPendingMobileAuth();
+      stage = 'apply_session';
       await refreshAccountRegistry();
       applySession(credential, accessSession, payloads);
       resetDiscovery();
+      console.info('[AkshaConnectAuth] Mobile sign-in completed.');
+      return true;
     } catch (error) {
-      setLoginError(error?.message || 'Could not complete company sign-in.');
-      await clearPendingMobileAuth().catch(() => {});
+      const status = Number(error?.status || 0);
+      const codeValue = clean(error?.code || '');
+      const message = error?.message || 'Could not complete company sign-in.';
+      console.error(
+        `[AkshaConnectAuth] Mobile sign-in failed at ${stage}` +
+          `${status ? ` status=${status}` : ''}` +
+          `${codeValue ? ` code=${codeValue}` : ''}: ${message}`
+      );
+
+      // Before exchange succeeds the callback remains retryable, so preserve the
+      // pending secret and native callback. After exchange succeeds the one-time
+      // code is consumed and the pending state was already cleared above.
+      if (exchangeConsumed) {
+        pendingMobileAuthRef.current = null;
+      }
+      setLoginError(message);
+      return false;
     } finally {
       setLoginBusy(false);
       setLoadingWorkspace(false);
     }
-
-    return true;
   }, [applySession, loadWorkspacePayload, refreshAccountRegistry, resetDiscovery]);
 
   useEffect(() => {
     let mounted = true;
 
-    const handleUrl = ({ url } = {}) => {
-      if (!mounted || !url) return;
-      completeMobileAuthorization(url).catch(() => {});
+    const processMobileAuthUrl = ({ url } = {}) => {
+      const callbackUrl = clean(url);
+      if (
+        !mounted ||
+        !callbackUrl ||
+        !/^akshaconnect:\/\/auth\/callback(?:\?|$)/i.test(callbackUrl) ||
+        processingMobileAuthCallbackUrlRef.current === callbackUrl ||
+        completedMobileAuthCallbackUrlRef.current === callbackUrl
+      ) {
+        return;
+      }
+
+      // Suppress only concurrent duplicate delivery. A failed pre-exchange
+      // attempt remains retryable because the native callback is retained.
+      processingMobileAuthCallbackUrlRef.current = callbackUrl;
+      console.info('[AkshaConnectAuth] JS received mobile auth callback.');
+
+      completeMobileAuthorization(callbackUrl)
+        .then((completed) => {
+          if (completed) {
+            completedMobileAuthCallbackUrlRef.current = callbackUrl;
+          }
+        })
+        .catch((error) => {
+          console.error(
+            '[AkshaConnectAuth] Unexpected JS callback processing failure:',
+            error?.message || error
+          );
+        })
+        .finally(() => {
+          if (processingMobileAuthCallbackUrlRef.current === callbackUrl) {
+            processingMobileAuthCallbackUrlRef.current = '';
+          }
+        });
     };
 
-    const subscription = Linking.addEventListener('url', handleUrl);
-    Linking.getInitialURL()
-      .then((url) => {
-        if (mounted && url) handleUrl({ url });
-      })
-      .catch(() => {});
+    const readRetainedMobileAuthUrl = () => {
+      Linking.getInitialURL()
+        .then((url) => {
+          if (mounted && url) processMobileAuthUrl({ url });
+        })
+        .catch(() => {});
+    };
+
+    const linkingSubscription =
+      Linking.addEventListener('url', processMobileAuthUrl);
+
+    const resumeRetryTimers = new Set();
+
+    const readNativeMobileAuthUrl = () => {
+      if (Platform.OS !== 'android') return;
+
+      const bridge = NativeModules.AkshaConnectAuthBridge;
+      if (!bridge?.getPendingCallback) return;
+
+      bridge.getPendingCallback()
+        .then((url) => {
+          if (mounted && url) {
+            console.info('[AkshaConnectAuth] JS read retained native callback.');
+            processMobileAuthUrl({ url });
+          }
+        })
+        .catch((error) => {
+          console.warn(
+            '[AkshaConnectAuth] Could not read retained native callback:',
+            error?.message || error
+          );
+        });
+    };
+
+    const nativeCallbackSubscription = Platform.OS === 'android'
+      ? DeviceEventEmitter.addListener(
+        'AkshaConnectAuthCallback',
+        (url) => {
+          console.info('[AkshaConnectAuth] JS received native callback event.');
+          processMobileAuthUrl({ url });
+        }
+      )
+      : null;
+
+    const readAllMobileAuthUrls = () => {
+      readNativeMobileAuthUrl();
+      readRetainedMobileAuthUrl();
+    };
+
+    const scheduleRetainedMobileAuthRead = () => {
+      // The native bridge is the authoritative Android fallback. Keep React Native
+      // Linking reads too so standard devices and iOS continue to use normal paths.
+      readAllMobileAuthUrls();
+
+      for (const delay of [250, 1000]) {
+        const timer = setTimeout(() => {
+          resumeRetryTimers.delete(timer);
+          if (mounted) readAllMobileAuthUrls();
+        }, delay);
+        resumeRetryTimers.add(timer);
+      }
+    };
+
+    const handleMobileAuthAppState = (nextState) => {
+      if (nextState === 'active') {
+        scheduleRetainedMobileAuthRead();
+      }
+    };
+
+    const handleMobileAuthFocus = () => {
+      scheduleRetainedMobileAuthRead();
+    };
+
+    const appStateSubscription =
+      AppState.addEventListener('change', handleMobileAuthAppState);
+    const focusSubscription = Platform.OS === 'android'
+      ? AppState.addEventListener('focus', handleMobileAuthFocus)
+      : null;
+
+    readAllMobileAuthUrls();
 
     return () => {
       mounted = false;
-      subscription.remove();
+      for (const timer of resumeRetryTimers) {
+        clearTimeout(timer);
+      }
+      resumeRetryTimers.clear();
+      linkingSubscription.remove();
+      nativeCallbackSubscription?.remove();
+      appStateSubscription.remove();
+      focusSubscription?.remove();
     };
   }, [completeMobileAuthorization]);
 
@@ -968,18 +1499,16 @@ export default function App() {
     }
   }, [activateAccount, clearAuthenticatedState, deviceCredential?.accountId, refreshAccountRegistry]);
 
-  const currentAccountLabel = useMemo(() => (
-    session?.tenant?.tenant_name ||
-    deviceCredential?.tenantName ||
-    session?.workspace?.workspace_name ||
-    'AkshaConnect'
-  ), [deviceCredential?.tenantName, session]);
 
   const showLogin = !session || addingOrganization;
 
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle="light-content" backgroundColor="#0E2455" />
+      <View
+        style={styles.interactionRoot}
+        onTouchStart={markUserActivity}
+      >
+        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
       {showSplash || restoringSession ? (
         <BrandSplash />
@@ -1009,28 +1538,32 @@ export default function App() {
           realtimeStatus={realtimeStatus}
           realtimeEvents={realtimeEvents}
           reconcileEpoch={reconcileEpoch}
+          peerPresenceStatus={peerPresenceStatus(
+            selectedConversation,
+            presenceByMember
+          )}
           onConversationRead={handleConversationRead}
+          onUserActivity={markUserActivity}
           onBack={() => setSelectedConversation(null)}
         />
       ) : (
         <View style={styles.authenticatedShell}>
-          <AccountBar
-            label={currentAccountLabel}
-            workspace={session?.workspace?.workspace_name || ''}
-            accountCount={accounts.length}
-            onPress={() => setShowAccountSwitcher(true)}
-          />
           <HomeScreen
             session={session}
             serverUrl={serverUrl}
             channels={channels}
             directMessages={directMessages}
             unreadCounts={unreadCounts}
+            presenceByMember={presenceByMember}
             refreshing={loadingWorkspace}
             realtimeStatus={realtimeStatus}
             onRefresh={refreshWorkspace}
             onLogout={handleLogout}
             onOpenConversation={handleOpenConversation}
+            onSearchMembers={handleSearchWorkspaceMembers}
+            onStartDirectMessage={handleStartDirectMessage}
+            onCreateChannel={handleCreateChannel}
+            onOpenAccountSwitcher={() => setShowAccountSwitcher(true)}
           />
         </View>
       )}
@@ -1076,26 +1609,8 @@ export default function App() {
           </Pressable>
         </View>
       ) : null}
+      </View>
     </SafeAreaProvider>
-  );
-}
-
-function AccountBar({ label, workspace, accountCount, onPress }) {
-  return (
-    <Pressable onPress={onPress} style={styles.accountBar}>
-      <View style={styles.accountAvatar}>
-        <Text style={styles.accountAvatarText}>
-          {String(label || 'A').slice(0, 1).toUpperCase()}
-        </Text>
-      </View>
-      <View style={styles.accountBarCopy}>
-        <Text style={styles.accountBarTenant} numberOfLines={1}>{label}</Text>
-        <Text style={styles.accountBarWorkspace} numberOfLines={1}>
-          {workspace || 'Workspace'} · {accountCount} signed-in {accountCount === 1 ? 'organization' : 'organizations'}
-        </Text>
-      </View>
-      <Text style={styles.accountChevron}>⌄</Text>
-    </Pressable>
   );
 }
 
@@ -1197,28 +1712,8 @@ function BrandSplash() {
 }
 
 const styles = StyleSheet.create({
+  interactionRoot: { flex: 1 },
   authenticatedShell: { flex: 1, backgroundColor: '#F4F7FB' },
-  accountBar: {
-    minHeight: 58,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    backgroundColor: '#0E2455',
-  },
-  accountAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  accountAvatarText: { color: '#0E2455', fontSize: 16, fontWeight: '900' },
-  accountBarCopy: { flex: 1, marginLeft: 10 },
-  accountBarTenant: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
-  accountBarWorkspace: { marginTop: 2, color: '#BFD0E5', fontSize: 10.5, fontWeight: '600' },
-  accountChevron: { color: '#FFFFFF', fontSize: 22, marginLeft: 8 },
   modalBackdrop: {
     flex: 1,
     justifyContent: 'flex-end',

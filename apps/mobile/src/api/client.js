@@ -197,6 +197,21 @@ export function listChannels(baseUrl, token) {
   return request(baseUrl, '/api/v1/channels', { token });
 }
 
+export function createChannel(
+  baseUrl,
+  token,
+  { channelName, visibility = 'PUBLIC' }
+) {
+  return request(baseUrl, '/api/v1/channels', {
+    token,
+    method: 'POST',
+    body: {
+      channel_name: channelName,
+      visibility,
+    },
+  });
+}
+
 export function listDirectMessages(baseUrl, token) {
   return request(baseUrl, '/api/v1/direct-messages', { token });
 }

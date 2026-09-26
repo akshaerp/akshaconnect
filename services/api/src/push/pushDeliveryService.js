@@ -35,6 +35,7 @@ function createPushDeliveryService({
   messagingRepository,
   pushRegistrationRepository,
   pushSender,
+  presenceRegistry = null,
 } = {}) {
   if (
     !messagingRepository ||
@@ -68,6 +69,28 @@ function createPushDeliveryService({
     );
   }
 
+  function shouldPush({
+    workspaceId,
+    workspaceMemberId,
+    conversationId,
+  }) {
+    if (
+      !presenceRegistry ||
+      typeof presenceRegistry
+        .isActivelyReading !==
+        'function'
+    ) {
+      return true;
+    }
+
+    return !presenceRegistry
+      .isActivelyReading({
+        workspaceId,
+        workspaceMemberId,
+        conversationId,
+      });
+  }
+
   async function publishMessage({
     workspaceId,
     conversationId,
@@ -95,14 +118,23 @@ function createPushDeliveryService({
       (memberIds || [])
         .filter(
           (memberId) =>
-            !excludeWorkspaceMemberId ||
-            memberId !==
-              excludeWorkspaceMemberId
+            (
+              !excludeWorkspaceMemberId ||
+              memberId !==
+                excludeWorkspaceMemberId
+            ) &&
+            shouldPush({
+              workspaceId,
+              workspaceMemberId:
+                memberId,
+              conversationId,
+            })
         );
 
     if (recipients.length === 0) {
       return {
         attempted: 0,
+        suppressed_active_readers: true,
       };
     }
 

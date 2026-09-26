@@ -166,7 +166,7 @@ test('P1-V8A V3B1 notification navigation reconciles durable history', () => {
   );
 });
 
-test('P1-V8A V3B2 open-chat incoming messages notify without unread and render one arrival divider', () => {
+test('R8A open-chat incoming messages render realtime content without unread or notification noise', () => {
   const app = read('apps/mobile/App.jsx');
 
   const screen = read(
@@ -191,14 +191,19 @@ test('P1-V8A V3B2 open-chat incoming messages notify without unread and render o
     flowEnd + 200
   );
 
-  assert.doesNotMatch(
+  assert.match(
     flow,
-    /if\s*\(activelyReading\)\s*return/
+    /presenceStateRef\.current === PRESENCE_ACTIVE/
   );
 
   assert.match(
     flow,
-    /if\s*\(!activelyReading\)[\s\S]*setUnreadCounts/
+    /if\s*\(activelyReading\)\s*\{[\s\S]*return;[\s\S]*\}/
+  );
+
+  assert.match(
+    flow,
+    /setUnreadCounts/
   );
 
   assert.match(
@@ -271,4 +276,16 @@ test('P1-V8A V3C1 keeps Android composer above keyboard and latest chat visible'
     screen,
     /onFocus=\{\(\) => \{[\s\S]*scrollToBottom\(false\)/
   );
+});
+
+
+test('R8A.1 mobile realtime explicitly leaves presence and renews the foreground lease', () => {
+  const realtime = read(
+    'apps/mobile/src/realtime/client.js'
+  );
+
+  assert.match(realtime, /PRESENCE_HEARTBEAT_MS/);
+  assert.match(realtime, /schedulePresenceHeartbeat/);
+  assert.match(realtime, /type:\s*'presence\.leave'/);
+  assert.match(realtime, /leavePresence\(\);[\s\S]*current\.close/);
 });

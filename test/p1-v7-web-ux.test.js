@@ -53,7 +53,10 @@ test('P1-V7 preserves user scroll position when realtime arrives above the fold'
 });
 
 test('P1-V7 notification toast opens its authorized conversation', () => {
-  assert.match(app, /selection: channel \?/);
+  // R8A resolves the authorized conversation selection once, then reuses the
+  // same object for the in-app toast and hidden-browser notification path.
+  assert.match(app, /const selection = channel \?/);
+  assert.match(app, /const notification = \{[\s\S]*?selection,/);
   assert.match(app, /notificationToast\.selection/);
   assert.match(app, /selectConversation\(notificationToast\.selection\)/);
 });

@@ -449,6 +449,68 @@ select:focus {
   font-size: 8px;
 }
 
+.dm-avatar-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+
+.presence-dot {
+  position: static;
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border: 0;
+  border-radius: 50%;
+  background: #94a3b8;
+  box-shadow: none;
+}
+
+.presence-dot.presence-live {
+  background: #22a861;
+}
+
+.presence-dot.presence-away {
+  background: #e59a22;
+}
+
+.presence-dot.presence-not-available {
+  background: #94a3b8;
+}
+
+.dm-nav-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 1px;
+}
+
+.dm-nav-copy .nav-label {
+  width: 100%;
+}
+
+.dm-presence-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.dm-presence-label.presence-live {
+  color: #16804e;
+}
+
+.dm-presence-label.presence-away {
+  color: #a56612;
+}
+
+.dm-presence-label.presence-not-available {
+  color: #7b8798;
+}
+
 .avatar-small {
   width: 32px;
   height: 32px;

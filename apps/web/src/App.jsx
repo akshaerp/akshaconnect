@@ -26,8 +26,12 @@ import {
 } from './sessionStore.js';
 import {
   createRealtimeClient,
+  displayBrowserMessageNotification,
   playIncomingMessageSound,
+  requestBrowserNotificationPermission,
   unlockNotificationSound,
+  PRESENCE_ACTIVE,
+  PRESENCE_AWAY,
 } from './realtime.js';
 
 function initials(name = '') {
@@ -501,6 +505,14 @@ function connectionLabel(status) {
   return 'Offline';
 }
 
+function presenceLabel(status) {
+  if (status === 'LIVE') return 'Live';
+  if (status === 'AWAY') return 'Away';
+  return 'Not available';
+}
+
+const PRESENCE_IDLE_MS = 5 * 60 * 1000;
+
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_PENDING_ATTACHMENTS = 4;
 const ACCEPTED_ATTACHMENT_TYPES = new Set([
@@ -551,6 +563,7 @@ function ConversationView({
   realtimeMessage,
   reconnectEpoch,
   realtimeStatus,
+  peerPresenceStatus,
   onReadConversation,
   onViewportState,
   onOpenSidebar,
@@ -1144,6 +1157,19 @@ function ConversationView({
     );
   }
 
+  const peerPresence =
+    peerPresenceStatus || 'NOT_AVAILABLE';
+  const statusClass =
+    selected.kind === 'dm'
+      ? `presence-${peerPresence
+          .toLowerCase()
+          .replaceAll('_', '-')}`
+      : `connection-${realtimeStatus}`;
+  const statusText =
+    selected.kind === 'dm'
+      ? presenceLabel(peerPresence)
+      : connectionLabel(realtimeStatus);
+
   return (
     <>
       <header className="conversation-header">
@@ -1158,9 +1184,9 @@ function ConversationView({
           </div>
         </div>
         <div className="conversation-header-actions">
-          <span className={`connection-pill connection-${realtimeStatus}`} role="status" aria-live="polite">
+          <span className={`connection-pill ${statusClass}`} role="status" aria-live="polite">
             <span className="connection-pill-dot" aria-hidden="true" />
-            {connectionLabel(realtimeStatus)}
+            {statusText}
           </span>
           <button
             type="button"
@@ -1671,6 +1697,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [unreadCounts, setUnreadCounts] = useState({});
   const [realtimeStatus, setRealtimeStatus] = useState('disconnected');
+  const [presenceByMember, setPresenceByMember] = useState({});
   const [realtimeMessage, setRealtimeMessage] = useState(null);
   const [reconnectEpoch, setReconnectEpoch] = useState(0);
   const [notificationToast, setNotificationToast] = useState(null);
@@ -1678,11 +1705,17 @@ export default function App() {
   const selectedRef = useRef(selected);
   const sessionRef = useRef(session);
   const navigationRef = useRef({ channels, directMessages });
+  const unreadCountsRef = useRef(unreadCounts);
   const conversationReadStateRef = useRef({ conversationId: null, atBottom: true });
+  const realtimeClientRef = useRef(null);
+  const presenceStateRef = useRef(PRESENCE_ACTIVE);
+  const presenceIdleTimerRef = useRef(null);
+  const browserNotificationPromptedRef = useRef(false);
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { sessionRef.current = session; }, [session]);
   useEffect(() => { navigationRef.current = { channels, directMessages }; }, [channels, directMessages]);
+  useEffect(() => { unreadCountsRef.current = unreadCounts; }, [unreadCounts]);
 
   const totalUnread = useMemo(
     () => Object.values(unreadCounts).reduce((sum, value) => sum + Number(value || 0), 0),
@@ -1724,6 +1757,7 @@ export default function App() {
     setUnreadCounts({});
     setRealtimeMessage(null);
     setRealtimeStatus('disconnected');
+    setPresenceByMember({});
     setNotificationToast(null);
     setMobileSidebarOpen(false);
     setShowSettings(false);
@@ -1772,7 +1806,15 @@ export default function App() {
       }
       if (current?.kind === 'dm') {
         const dmStillExists = nextDms.find((item) => item.conversation_id === current.id);
-        if (dmStillExists) return current;
+        if (dmStillExists) {
+          return {
+            ...current,
+            otherWorkspaceMemberId:
+              dmStillExists.other_workspace_member_id ||
+              current.otherWorkspaceMemberId ||
+              '',
+          };
+        }
       }
 
       if (nextChannels[0]) {
@@ -1790,6 +1832,8 @@ export default function App() {
           id: nextDms[0].conversation_id,
           title: nextDms[0].other_display_name,
           subtitle: nextDms[0].other_primary_email || 'Direct message',
+          otherWorkspaceMemberId:
+            nextDms[0].other_workspace_member_id || '',
         };
       }
 
@@ -1829,6 +1873,104 @@ export default function App() {
     };
   }, [token, refreshNavigation, refreshUnreadCounts, handleApiFailure, clearSession]);
 
+  const publishPresence = useCallback((state) => {
+    const normalized =
+      state === PRESENCE_AWAY
+        ? PRESENCE_AWAY
+        : PRESENCE_ACTIVE;
+
+    presenceStateRef.current = normalized;
+
+    const readState = conversationReadStateRef.current;
+    const currentSelection = selectedRef.current;
+    const activelyReading =
+      normalized === PRESENCE_ACTIVE &&
+      document.visibilityState === 'visible' &&
+      readState.atBottom &&
+      readState.conversationId === currentSelection?.id;
+
+    realtimeClientRef.current?.updatePresence?.({
+      state: normalized,
+      activeConversationId:
+        activelyReading
+          ? currentSelection?.id || null
+          : null,
+    });
+  }, []);
+
+  const schedulePresenceIdle = useCallback(() => {
+    if (presenceIdleTimerRef.current) {
+      window.clearTimeout(presenceIdleTimerRef.current);
+      presenceIdleTimerRef.current = null;
+    }
+
+    if (document.visibilityState !== 'visible') return;
+
+    presenceIdleTimerRef.current = window.setTimeout(() => {
+      presenceIdleTimerRef.current = null;
+      if (document.visibilityState === 'visible') {
+        publishPresence(PRESENCE_AWAY);
+      }
+    }, PRESENCE_IDLE_MS);
+  }, [publishPresence]);
+
+  const markWebActivity = useCallback(() => {
+    if (document.visibilityState !== 'visible') return;
+    publishPresence(PRESENCE_ACTIVE);
+    schedulePresenceIdle();
+  }, [publishPresence, schedulePresenceIdle]);
+
+  useEffect(() => {
+    if (!token || !session) return undefined;
+
+    const activity = () => {
+      unlockNotificationSound();
+
+      if (!browserNotificationPromptedRef.current) {
+        browserNotificationPromptedRef.current = true;
+        requestBrowserNotificationPermission().catch(() => {});
+      }
+
+      markWebActivity();
+    };
+
+    const visibility = () => {
+      if (document.visibilityState === 'visible') {
+        markWebActivity();
+      } else {
+        publishPresence(PRESENCE_AWAY);
+      }
+    };
+
+    window.addEventListener('pointerdown', activity);
+    window.addEventListener('keydown', activity);
+    window.addEventListener('scroll', markWebActivity, true);
+    document.addEventListener('visibilitychange', visibility);
+
+    markWebActivity();
+
+    return () => {
+      window.removeEventListener('pointerdown', activity);
+      window.removeEventListener('keydown', activity);
+      window.removeEventListener('scroll', markWebActivity, true);
+      document.removeEventListener('visibilitychange', visibility);
+
+      if (presenceIdleTimerRef.current) {
+        window.clearTimeout(presenceIdleTimerRef.current);
+        presenceIdleTimerRef.current = null;
+      }
+    };
+  }, [
+    markWebActivity,
+    publishPresence,
+    session,
+    token,
+  ]);
+
+  useEffect(() => {
+    publishPresence(presenceStateRef.current);
+  }, [publishPresence, selected?.id]);
+
   useEffect(() => {
     if (!token || !session) return undefined;
 
@@ -1838,6 +1980,7 @@ export default function App() {
 
     const client = createRealtimeClient({
       token,
+      clientType: 'WEB',
       onStatus: setRealtimeStatus,
       onEvent: (event) => {
         if (event.type === 'ready') {
@@ -1846,6 +1989,29 @@ export default function App() {
             refreshNavigation(token),
             refreshUnreadCounts(token),
           ]).catch((error) => handleApiFailure(error));
+          return;
+        }
+
+        if (event.type === 'presence.snapshot') {
+          const next = {};
+          for (const member of event.members || []) {
+            if (!member?.workspace_member_id) continue;
+            next[member.workspace_member_id] =
+              String(member.status || 'NOT_AVAILABLE').toUpperCase();
+          }
+          setPresenceByMember(next);
+          return;
+        }
+
+        if (
+          event.type === 'presence.updated' &&
+          event.workspace_member_id
+        ) {
+          setPresenceByMember((current) => ({
+            ...current,
+            [event.workspace_member_id]:
+              String(event.status || 'NOT_AVAILABLE').toUpperCase(),
+          }));
           return;
         }
 
@@ -1885,46 +2051,95 @@ export default function App() {
         const readState = conversationReadStateRef.current;
         const activeAndReadable = currentSelection?.id === event.conversation_id
           && document.visibilityState === 'visible'
+          && presenceStateRef.current === PRESENCE_ACTIVE
           && readState.conversationId === event.conversation_id
           && readState.atBottom;
 
-        if (!activeAndReadable) {
-          setUnreadCounts((current) => ({
-            ...current,
-            [event.conversation_id]: Number(current[event.conversation_id] || 0) + 1,
-          }));
+        if (activeAndReadable) {
+          return;
         }
+
+        setUnreadCounts((current) => ({
+          ...current,
+          [event.conversation_id]: Number(current[event.conversation_id] || 0) + 1,
+        }));
 
         playIncomingMessageSound();
         const nav = navigationRef.current;
         const channel = nav.channels.find((item) => item.conversation_id === event.conversation_id);
         const dm = nav.directMessages.find((item) => item.conversation_id === event.conversation_id);
-        setNotificationToast({
+        const selection = channel ? {
+          kind: 'channel',
+          id: channel.conversation_id,
+          title: channel.channel_name,
+          subtitle: channel.visibility === 'PRIVATE' ? 'Private channel' : 'Public channel',
+        } : dm ? {
+          kind: 'dm',
+          id: dm.conversation_id,
+          title: dm.other_display_name,
+          subtitle: dm.other_primary_email || 'Direct message',
+          otherWorkspaceMemberId:
+            dm.other_workspace_member_id || '',
+        } : null;
+
+        const notification = {
           id: `${event.message.message_id}-${Date.now()}`,
           sender: event.message.sender_display_name || 'New message',
           conversation: channel?.channel_name ? `#${channel.channel_name}` : dm?.other_display_name || 'Conversation',
           preview: event.message.body_text || '',
-          selection: channel ? {
-            kind: 'channel',
-            id: channel.conversation_id,
-            title: channel.channel_name,
-            subtitle: channel.visibility === 'PRIVATE' ? 'Private channel' : 'Public channel',
-          } : dm ? {
-            kind: 'dm',
-            id: dm.conversation_id,
-            title: dm.other_display_name,
-            subtitle: dm.other_primary_email || 'Direct message',
-          } : null,
-        });
+          selection,
+        };
+
+        const browserDisplayed =
+          document.visibilityState !== 'visible' &&
+          displayBrowserMessageNotification({
+            sender: notification.sender,
+            conversation: notification.conversation,
+            preview: notification.preview,
+            conversationId: event.conversation_id,
+            onOpen: () => {
+              if (!selection) return;
+              const unreadAtOpen = Number(
+                unreadCountsRef.current?.[selection.id] || 0
+              );
+              conversationReadStateRef.current = {
+                conversationId: selection.id,
+                atBottom: unreadAtOpen <= 0,
+              };
+              setSelected({
+                ...selection,
+                unread_at_open: unreadAtOpen,
+              });
+              setMobileSidebarOpen(false);
+              setNotificationToast(null);
+            },
+          });
+
+        if (!browserDisplayed) {
+          setNotificationToast(notification);
+        }
       },
     });
 
+    realtimeClientRef.current = client;
+    publishPresence(presenceStateRef.current);
+
     return () => {
+      if (realtimeClientRef.current === client) {
+        realtimeClientRef.current = null;
+      }
       client.stop();
       window.removeEventListener('pointerdown', unlock);
       window.removeEventListener('keydown', unlock);
     };
-  }, [token, session, refreshNavigation, refreshUnreadCounts, handleApiFailure]);
+  }, [
+    token,
+    session,
+    refreshNavigation,
+    refreshUnreadCounts,
+    handleApiFailure,
+    publishPresence,
+  ]);
 
   useEffect(() => {
     if (!notificationToast) return undefined;
@@ -1941,7 +2156,8 @@ export default function App() {
 
   const handleConversationViewportState = useCallback((conversationId, atBottom) => {
     conversationReadStateRef.current = { conversationId, atBottom: Boolean(atBottom) };
-  }, []);
+    publishPresence(presenceStateRef.current);
+  }, [publishPresence]);
 
   const handleReadConversation = useCallback((conversationId) => {
     if (!conversationId) return;
@@ -1992,6 +2208,8 @@ export default function App() {
         id: dm.conversation_id,
         title: member.display_name,
         subtitle: member.primary_email || 'Direct message',
+        otherWorkspaceMemberId:
+          member.workspace_member_id || '',
       });
       setShowDmPicker(false);
     } catch (error) {
@@ -2129,6 +2347,14 @@ export default function App() {
             <div className="nav-items">
               {directMessages.map((dm) => {
                 const active = selected?.kind === 'dm' && selected.id === dm.conversation_id;
+                const memberPresence =
+                  presenceByMember[
+                    dm.other_workspace_member_id
+                  ] || 'NOT_AVAILABLE';
+                const memberPresenceClass =
+                  memberPresence
+                    .toLowerCase()
+                    .replaceAll('_', '-');
                 return (
                   <button
                     type="button"
@@ -2139,10 +2365,26 @@ export default function App() {
                       id: dm.conversation_id,
                       title: dm.other_display_name,
                       subtitle: dm.other_primary_email || 'Direct message',
+                      otherWorkspaceMemberId:
+                        dm.other_workspace_member_id || '',
                     })}
                   >
-                    <span className="avatar avatar-tiny">{initials(dm.other_display_name)}</span>
-                    <span className="nav-label">{dm.other_display_name}</span>
+                    <span className="dm-avatar-status">
+                      <span className="avatar avatar-tiny">{initials(dm.other_display_name)}</span>
+                      <span
+                        className={`presence-dot presence-${memberPresenceClass}`}
+                        title={presenceLabel(memberPresence)}
+                        aria-label={presenceLabel(memberPresence)}
+                      />
+                    </span>
+                    <span className="dm-nav-copy">
+                      <span className="nav-label">{dm.other_display_name}</span>
+                      <span
+                        className={`dm-presence-label presence-${memberPresenceClass}`}
+                      >
+                        {presenceLabel(memberPresence)}
+                      </span>
+                    </span>
                     {Number(unreadCounts[dm.conversation_id] || 0) > 0 ? (
                       <span className="unread-badge">{Math.min(99, unreadCounts[dm.conversation_id])}</span>
                     ) : null}
@@ -2192,6 +2434,13 @@ export default function App() {
           realtimeMessage={realtimeMessage}
           reconnectEpoch={reconnectEpoch}
           realtimeStatus={realtimeStatus}
+          peerPresenceStatus={
+            selected?.kind === 'dm'
+              ? presenceByMember[
+                  selected.otherWorkspaceMemberId
+                ] || 'NOT_AVAILABLE'
+              : null
+          }
           onReadConversation={handleReadConversation}
           onViewportState={handleConversationViewportState}
           onOpenSidebar={() => setMobileSidebarOpen(true)}

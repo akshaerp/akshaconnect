@@ -3,6 +3,10 @@ import { normalizeBaseUrl } from '../api/client.js';
 
 const BASE_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 5000;
+const PRESENCE_HEARTBEAT_MS = 10 * 1000;
+
+const PRESENCE_ACTIVE = 'ACTIVE';
+const PRESENCE_AWAY = 'AWAY';
 
 export function websocketUrl(baseUrl) {
   const root = normalizeBaseUrl(baseUrl);
@@ -32,6 +36,7 @@ export function createRealtimeClient({
   token,
   onEvent,
   onStatus,
+  clientType = 'MOBILE',
   WebSocketImpl = globalThis.WebSocket,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -49,10 +54,82 @@ export function createRealtimeClient({
   let socket = null;
   let stopped = false;
   let reconnectTimer = null;
+  let presenceHeartbeatTimer = null;
   let reconnectAttempt = 0;
+  let ready = false;
+  let latestPresence = {
+    state: PRESENCE_ACTIVE,
+    activeConversationId: null,
+  };
 
   function status(value) {
     onStatus?.(value);
+  }
+
+  function sendPresence() {
+    if (!ready || !socket || socket.readyState !== 1) return false;
+
+    try {
+      socket.send(
+        JSON.stringify({
+          type: 'presence.update',
+          state: latestPresence.state,
+          active_conversation_id:
+            latestPresence.activeConversationId,
+        })
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function clearPresenceHeartbeat() {
+    if (!presenceHeartbeatTimer) return;
+    clearTimer(presenceHeartbeatTimer);
+    presenceHeartbeatTimer = null;
+  }
+
+  function schedulePresenceHeartbeat() {
+    if (stopped || !ready || presenceHeartbeatTimer) return;
+
+    presenceHeartbeatTimer = setTimer(() => {
+      presenceHeartbeatTimer = null;
+      if (stopped || !ready) return;
+      sendPresence();
+      schedulePresenceHeartbeat();
+    }, PRESENCE_HEARTBEAT_MS);
+  }
+
+  function leavePresence() {
+    if (!ready || !socket || socket.readyState !== 1) return false;
+
+    try {
+      socket.send(JSON.stringify({ type: 'presence.leave' }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function updatePresence({
+    state = PRESENCE_ACTIVE,
+    activeConversationId = null,
+  } = {}) {
+    latestPresence = {
+      state:
+        state === PRESENCE_AWAY
+          ? PRESENCE_AWAY
+          : PRESENCE_ACTIVE,
+      activeConversationId:
+        state === PRESENCE_AWAY
+          ? null
+          : String(
+              activeConversationId || ''
+            ).trim() || null,
+    };
+
+    sendPresence();
   }
 
   function scheduleReconnect() {
@@ -64,6 +141,7 @@ export function createRealtimeClient({
     );
 
     reconnectAttempt += 1;
+    ready = false;
     status('reconnecting');
 
     reconnectTimer = setTimer(() => {
@@ -96,6 +174,7 @@ export function createRealtimeClient({
           JSON.stringify({
             type: 'auth',
             access_token: token,
+            client_type: clientType,
           })
         );
       } catch {
@@ -115,7 +194,10 @@ export function createRealtimeClient({
 
       if (payload.type === 'ready') {
         reconnectAttempt = 0;
+        ready = true;
         status('connected');
+        sendPresence();
+        schedulePresenceHeartbeat();
       }
 
       onEvent?.(payload);
@@ -125,6 +207,9 @@ export function createRealtimeClient({
       if (socket === nextSocket) {
         socket = null;
       }
+
+      ready = false;
+      clearPresenceHeartbeat();
 
       if (!stopped) {
         scheduleReconnect();
@@ -139,7 +224,13 @@ export function createRealtimeClient({
   function stop() {
     if (stopped) return;
 
+    // Explicitly leave presence before closing. The server also expires a
+    // MOBILE presence lease if Android suspends/kills JS before cleanup runs.
+    leavePresence();
+
     stopped = true;
+    ready = false;
+    clearPresenceHeartbeat();
 
     if (reconnectTimer) {
       clearTimer(reconnectTimer);
@@ -164,6 +255,8 @@ export function createRealtimeClient({
 
   return Object.freeze({
     stop,
+    updatePresence,
+    leavePresence,
     url,
   });
 }
@@ -171,4 +264,7 @@ export function createRealtimeClient({
 export {
   BASE_RECONNECT_DELAY_MS,
   MAX_RECONNECT_DELAY_MS,
+  PRESENCE_HEARTBEAT_MS,
+  PRESENCE_ACTIVE,
+  PRESENCE_AWAY,
 };

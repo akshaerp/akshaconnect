@@ -298,7 +298,7 @@ test('browser websocket auth keeps bearer token out of URL and reconnects with d
   const realtime = fs.readFileSync(path.join(__dirname, '..', 'apps', 'web', 'src', 'realtime.js'), 'utf8');
   const app = fs.readFileSync(path.join(__dirname, '..', 'apps', 'web', 'src', 'App.jsx'), 'utf8');
   assert.match(realtime, /new WebSocket\(websocketUrl\(\)\)/);
-  assert.match(realtime, /type: 'auth', access_token: token/);
+  assert.match(realtime, /type:\s*'auth'[\s\S]*access_token:\s*token[\s\S]*client_type:\s*clientType/);
   assert.doesNotMatch(realtime, /[?&](token|access_token)=/i);
   assert.match(realtime, /scheduleReconnect/);
   assert.match(app, /refreshUnreadCounts/);
