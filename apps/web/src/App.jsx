@@ -25,6 +25,11 @@ import {
   saveStoredSession,
 } from './sessionStore.js';
 import {
+  clearConversationDraft,
+  loadConversationDraft,
+  saveConversationDraft,
+} from './drafts.js';
+import {
   createRealtimeClient,
   displayBrowserMessageNotification,
   playIncomingMessageSound,
@@ -591,6 +596,18 @@ function ConversationView({
   const nearBottomRef = useRef(true);
   const lastMarkedReadMessageIdRef = useRef(null);
 
+  const draftScope = useMemo(() => ({
+    identityId: session?.identity_id || '',
+    workspaceId: session?.workspace_id || '',
+    conversationId: selected?.id || '',
+  }), [selected?.id, session?.identity_id, session?.workspace_id]);
+
+  const updateDraft = useCallback((value) => {
+    const next = String(value ?? '');
+    setDraft(next);
+    saveConversationDraft(draftScope, next);
+  }, [draftScope]);
+
   const reportViewportState = useCallback((atBottom) => {
     if (selected?.id) onViewportState?.(selected.id, Boolean(atBottom));
   }, [selected?.id, onViewportState]);
@@ -680,7 +697,7 @@ function ConversationView({
   useEffect(() => {
     setMessages([]);
     setPage({ has_more: false, next_before_message_id: null });
-    setDraft('');
+    setDraft(loadConversationDraft(draftScope));
     setPendingFiles([]);
     setEditingMessageId('');
     setEditDraft('');
@@ -693,7 +710,13 @@ function ConversationView({
     if (selected?.id) {
       load({ initialUnreadCount: Number(selected?.unread_at_open || 0) });
     }
-  }, [selected?.id, selected?.unread_at_open, load, reportViewportState]);
+  }, [
+    selected?.id,
+    selected?.unread_at_open,
+    draftScope,
+    load,
+    reportViewportState,
+  ]);
 
   useEffect(() => {
     if (!selected?.id || reconnectEpoch <= 0) return;
@@ -1109,6 +1132,11 @@ function ConversationView({
           clientMessageId: makeClientMessageId(),
         });
         if (result.message) createdMessages.push(result.message);
+
+        // Text was durably acknowledged. Clear its draft now so a later
+        // attachment failure cannot cause the acknowledged text to be resent.
+        clearConversationDraft(draftScope);
+        setDraft('');
       }
 
       for (const pending of pendingFiles) {
@@ -1130,7 +1158,6 @@ function ConversationView({
         return next;
       });
 
-      setDraft('');
       setPendingFiles([]);
       setUnreadDividerMessageId(null);
       window.requestAnimationFrame(() => scrollToBottom('smooth'));
@@ -1623,7 +1650,7 @@ function ConversationView({
             aria-label="Message composer"
             value={draft}
             maxLength={8000}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => updateDraft(event.target.value)}
             onInput={(event) => {
               event.currentTarget.style.height = 'auto';
               event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 180)}px`;

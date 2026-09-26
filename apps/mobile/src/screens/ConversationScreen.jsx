@@ -1,12 +1,14 @@
 import React, {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -40,6 +42,11 @@ import {
   sendMessage,
   uploadAttachment,
 } from '../api/client';
+import {
+  clearConversationDraft,
+  loadConversationDraft,
+  saveConversationDraft,
+} from '../drafts/draftStore';
 import { colors } from '../theme/colors';
 
 const MAX_MESSAGE_CHARS = 8000;
@@ -359,6 +366,11 @@ export default function ConversationScreen({
   const lastReconcileEpochRef = useRef(0);
   const lastMarkedReadMessageIdRef = useRef(null);
   const arrivalDividerReadyRef = useRef(false);
+  const draftRef = useRef('');
+  const draftSaveTimerRef = useRef(null);
+  const draftHydratedScopeRef = useRef('');
+  const draftUserChangedScopeRef = useRef('');
+  const editingMessageRef = useRef(null);
 
   const [messages, setMessages] = useState([]);
   const [page, setPage] = useState({
@@ -404,6 +416,49 @@ export default function ConversationScreen({
   const [error, setError] = useState('');
   const [newMessageDividerId, setNewMessageDividerId] =
     useState(null);
+
+  const draftScope = useMemo(
+    () => ({
+      identityId:
+        session?.identity?.identity_id ||
+        session?.identity_id ||
+        '',
+      workspaceId:
+        session?.workspace?.workspace_id ||
+        session?.workspace_id ||
+        '',
+      conversationId:
+        conversation?.conversationId || '',
+    }),
+    [
+      conversation?.conversationId,
+      session?.identity?.identity_id,
+      session?.identity_id,
+      session?.workspace?.workspace_id,
+      session?.workspace_id,
+    ]
+  );
+
+  const draftScopeKey = [
+    draftScope.identityId,
+    draftScope.workspaceId,
+    draftScope.conversationId,
+  ].join('|');
+
+  const updateDraft = useCallback((value) => {
+    const next = String(value ?? '');
+    draftRef.current = next;
+    setDraft(next);
+  }, []);
+
+  const handleDraftChange = useCallback((value) => {
+    draftUserChangedScopeRef.current = draftScopeKey;
+    updateDraft(value);
+  }, [draftScopeKey, updateDraft]);
+
+  useEffect(() => {
+    editingMessageRef.current = editingMessage;
+  }, [editingMessage]);
 
   const scrollToBottom = useCallback((animated = true) => {
     setTimeout(() => {
@@ -549,7 +604,6 @@ export default function ConversationScreen({
       has_more: false,
       next_before_message_id: null,
     });
-    setDraft('');
     setPendingAttachments([]);
     setPickingAttachments(false);
     setAttachmentAction({
@@ -585,6 +639,118 @@ export default function ConversationScreen({
     conversation?.unreadAtOpen,
     loadLatest,
   ]);
+
+  useEffect(() => {
+    let active = true;
+
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current);
+      draftSaveTimerRef.current = null;
+    }
+
+    draftHydratedScopeRef.current = '';
+    draftUserChangedScopeRef.current = '';
+    updateDraft('');
+
+    if (!draftScopeKey) {
+      return () => {
+        active = false;
+      };
+    }
+
+    loadConversationDraft(draftScope)
+      .then((storedDraft) => {
+        if (!active) return;
+        draftHydratedScopeRef.current = draftScopeKey;
+        if (draftUserChangedScopeRef.current !== draftScopeKey) {
+          updateDraft(storedDraft);
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        draftHydratedScopeRef.current = draftScopeKey;
+      });
+
+    return () => {
+      active = false;
+
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
+
+      if (
+        (
+          draftHydratedScopeRef.current === draftScopeKey ||
+          draftUserChangedScopeRef.current === draftScopeKey
+        ) &&
+        !editingMessageRef.current
+      ) {
+        saveConversationDraft(
+          draftScope,
+          draftRef.current
+        ).catch(() => {});
+      }
+    };
+  }, [draftScope, draftScopeKey, updateDraft]);
+
+  useEffect(() => {
+    if (
+      !draftScopeKey ||
+      (
+        draftHydratedScopeRef.current !== draftScopeKey &&
+        draftUserChangedScopeRef.current !== draftScopeKey
+      ) ||
+      editingMessage
+    ) {
+      return undefined;
+    }
+
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current);
+    }
+
+    draftSaveTimerRef.current = setTimeout(() => {
+      draftSaveTimerRef.current = null;
+      saveConversationDraft(
+        draftScope,
+        draftRef.current
+      ).catch(() => {});
+    }, 300);
+
+    return () => {
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current);
+        draftSaveTimerRef.current = null;
+      }
+    };
+  }, [draft, draftScope, draftScopeKey, editingMessage]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener(
+      'change',
+      (nextState) => {
+        if (
+          nextState === 'active' ||
+          !draftScopeKey ||
+          (
+            draftHydratedScopeRef.current !== draftScopeKey &&
+            draftUserChangedScopeRef.current !== draftScopeKey
+          ) ||
+          editingMessageRef.current
+        ) {
+          return;
+        }
+
+        saveConversationDraft(
+          draftScope,
+          draftRef.current
+        ).catch(() => {});
+      }
+    );
+
+    return () => subscription.remove();
+  }, [draftScope, draftScopeKey]);
 
   useEffect(() => {
     const pending = (realtimeEvents || []).filter(
@@ -656,7 +822,7 @@ export default function ConversationScreen({
         )
       ) {
         setEditingMessage(null);
-        setDraft('');
+        updateDraft('');
       }
 
       setPreviewAttachment(
@@ -1270,7 +1436,7 @@ export default function ConversationScreen({
     }
 
     setEditingMessage(message);
-    setDraft(
+    updateDraft(
       String(message.body_text || '')
     );
     setError('');
@@ -1279,7 +1445,7 @@ export default function ConversationScreen({
 
   function cancelEditingMessage() {
     setEditingMessage(null);
-    setDraft('');
+    updateDraft('');
   }
 
   async function deleteOwnedMessage(
@@ -1483,7 +1649,7 @@ export default function ConversationScreen({
         }
 
         setEditingMessage(null);
-        setDraft('');
+        updateDraft('');
       } catch (requestError) {
         setError(
           requestError?.message ||
@@ -1535,7 +1701,8 @@ export default function ConversationScreen({
 
         // Clear only after durable acknowledgement so an attachment retry
         // cannot resend already acknowledged text.
-        setDraft('');
+        await clearConversationDraft(draftScope).catch(() => {});
+        updateDraft('');
       }
 
       for (const pending of attachmentsToSend) {
@@ -2158,7 +2325,7 @@ export default function ConversationScreen({
             value={draft}
             onChangeText={(value) => {
               onUserActivity?.();
-              setDraft(value);
+              handleDraftChange(value);
             }}
             onFocus={() => {
               onUserActivity?.();

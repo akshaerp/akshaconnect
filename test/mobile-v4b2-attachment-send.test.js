@@ -57,7 +57,7 @@ test('V4B2 enables file-only send and prevents acknowledged text from being rese
   );
   assert.match(
     screen,
-    /setDraft\(''\);[\s\S]*for \(const pending of attachmentsToSend\)/
+    /await clearConversationDraft\(draftScope\)\.catch\(\(\) => \{\}\);[\s\S]*updateDraft\(''\);[\s\S]*for \(const pending of attachmentsToSend\)/
   );
   assert.match(screen, /Could not send message or attachment/);
 });
