@@ -50,9 +50,8 @@ android {
         applicationId "com.akshaerp.akshaconnect"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 13
-        versionName "0.3.0-v13"
-
+        versionCode 14
+        versionName "0.3.0-v14"
         // Secure default: all non-debug variants are HTTPS-only.
         manifestPlaceholders = [usesCleartextTraffic: "false"]
     }
