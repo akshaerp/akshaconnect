@@ -20,6 +20,14 @@ import {
   deleteMessage,
 } from './api.js';
 import {
+  addChannelMember,
+  listChannelMembers,
+  removeChannelMember,
+} from './channelMembersApi.js';
+import './channelMembers.css';
+import ConversationDetailsPanel from './ConversationDetailsPanel.jsx';
+import './conversationDetails.css';
+import {
   clearStoredSession,
   loadStoredSession,
   saveStoredSession,
@@ -29,6 +37,7 @@ import {
   loadConversationDraft,
   saveConversationDraft,
 } from './drafts.js';
+import ThreadPanel from './ThreadPanel.jsx';
 import {
   createRealtimeClient,
   displayBrowserMessageNotification,
@@ -560,6 +569,387 @@ function attachmentPreviewKind(contentType = '') {
   return 'unsupported';
 }
 
+function ChannelPeopleDialog({
+  token,
+  selected,
+  onClose,
+  onApiFailure,
+}) {
+  const [members, setMembers] = useState([]);
+  const [canManage, setCanManage] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busyMemberId, setBusyMemberId] = useState('');
+  const [query, setQuery] = useState('');
+  const [candidates, setCandidates] = useState([]);
+  const [error, setError] = useState('');
+
+  const refresh = useCallback(async () => {
+    if (!selected?.id) return;
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const payload =
+        await listChannelMembers(
+          token,
+          selected.id
+        );
+
+      setMembers(payload?.members || []);
+      setCanManage(
+        Boolean(
+          payload?.can_manage_members
+        )
+      );
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(
+          requestError.message ||
+            'Could not load channel people'
+        );
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [
+    onApiFailure,
+    selected?.id,
+    token,
+  ]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function searchPeople(event) {
+    event?.preventDefault?.();
+
+    if (!canManage) return;
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const payload =
+        await listMembers(
+          token,
+          query
+        );
+
+      const existingIds =
+        new Set(
+          members.map(
+            (item) =>
+              item.workspace_member_id
+          )
+        );
+
+      setCandidates(
+        (payload?.members || []).filter(
+          (item) =>
+            !existingIds.has(
+              item.workspace_member_id
+            )
+        )
+      );
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(
+          requestError.message ||
+            'Could not search workspace people'
+        );
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function addPerson(member) {
+    const memberId =
+      member?.workspace_member_id;
+
+    if (!memberId) return;
+
+    setBusyMemberId(memberId);
+    setError('');
+
+    try {
+      await addChannelMember(
+        token,
+        selected.id,
+        memberId
+      );
+
+      setCandidates((current) =>
+        current.filter(
+          (item) =>
+            item.workspace_member_id !==
+            memberId
+        )
+      );
+
+      await refresh();
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(
+          requestError.message ||
+            'Could not add person to channel'
+        );
+      }
+    } finally {
+      setBusyMemberId('');
+    }
+  }
+
+  async function removePerson(member) {
+    const memberId =
+      member?.workspace_member_id;
+
+    if (!memberId) return;
+
+    if (
+      !window.confirm(
+        `Remove ${
+          member.display_name || 'this person'
+        } from #${selected.title}?`
+      )
+    ) {
+      return;
+    }
+
+    setBusyMemberId(memberId);
+    setError('');
+
+    try {
+      await removeChannelMember(
+        token,
+        selected.id,
+        memberId
+      );
+
+      await refresh();
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setError(
+          requestError.message ||
+            'Could not remove person from channel'
+        );
+      }
+    } finally {
+      setBusyMemberId('');
+    }
+  }
+
+  return (
+    <div
+      className="channel-people-overlay"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <section
+        className="channel-people-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="channel-people-title"
+      >
+        <header
+          className="channel-people-header"
+        >
+          <div
+            className="channel-people-header-copy"
+          >
+            <h3 id="channel-people-title">
+              #{selected.title} · People
+            </h3>
+            <p>
+              {members.length}{' '}
+              {members.length === 1
+                ? 'person'
+                : 'people'}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="channel-people-close"
+            onClick={onClose}
+            aria-label="Close channel people"
+          >
+            ×
+          </button>
+        </header>
+
+        {canManage ? (
+          <form
+            className="channel-people-search"
+            onSubmit={searchPeople}
+          >
+            <input
+              value={query}
+              onChange={(event) =>
+                setQuery(event.target.value)
+              }
+              placeholder="Search workspace people"
+              aria-label="Search workspace people"
+            />
+            <button
+              type="submit"
+              disabled={loading}
+            >
+              Search
+            </button>
+          </form>
+        ) : null}
+
+        {error ? (
+          <div
+            className="channel-people-error"
+            role="alert"
+          >
+            {error}
+          </div>
+        ) : null}
+
+        {loading ? (
+          <div
+            className="channel-people-loading"
+          >
+            Loading…
+          </div>
+        ) : null}
+
+        <div
+          className="channel-people-list"
+        >
+          {members.map((member) => {
+            const busy =
+              busyMemberId ===
+              member.workspace_member_id;
+
+            return (
+              <div
+                className="channel-person-row"
+                key={
+                  member.workspace_member_id
+                }
+              >
+                <div
+                  className="channel-person-avatar"
+                  aria-hidden="true"
+                >
+                  {initials(
+                    member.display_name ||
+                      'Member'
+                  ).slice(0, 1)}
+                </div>
+
+                <div
+                  className="channel-person-copy"
+                >
+                  <strong>
+                    {member.display_name ||
+                      'Member'}
+                  </strong>
+                  <span>
+                    {member.member_role}
+                    {member.primary_email
+                      ? ` · ${member.primary_email}`
+                      : ''}
+                  </span>
+                </div>
+
+                {canManage &&
+                member.member_role !==
+                  'OWNER' ? (
+                  <button
+                    type="button"
+                    className="channel-person-action remove"
+                    disabled={busy}
+                    onClick={() =>
+                      removePerson(member)
+                    }
+                  >
+                    {busy
+                      ? '…'
+                      : 'Remove'}
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
+
+          {canManage &&
+          candidates.length > 0 ? (
+            <>
+              <div
+                className="channel-people-section-title"
+              >
+                Add people
+              </div>
+
+              {candidates.map((member) => {
+                const busy =
+                  busyMemberId ===
+                  member.workspace_member_id;
+
+                return (
+                  <div
+                    className="channel-person-row"
+                    key={
+                      member.workspace_member_id
+                    }
+                  >
+                    <div
+                      className="channel-person-avatar"
+                      aria-hidden="true"
+                    >
+                      {initials(
+                        member.display_name ||
+                          'Member'
+                      ).slice(0, 1)}
+                    </div>
+
+                    <div
+                      className="channel-person-copy"
+                    >
+                      <strong>
+                        {member.display_name ||
+                          'Member'}
+                      </strong>
+                      <span>
+                        {member.primary_email ||
+                          'Workspace member'}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="channel-person-action add"
+                      disabled={busy}
+                      onClick={() =>
+                        addPerson(member)
+                      }
+                    >
+                      {busy
+                        ? '…'
+                        : 'Add'}
+                    </button>
+                  </div>
+                );
+              })}
+            </>
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ConversationView({
   token,
   session,
@@ -591,10 +981,17 @@ function ConversationView({
   const [unreadDividerMessageId, setUnreadDividerMessageId] = useState(null);
   const fileInputRef = useRef(null);
   const [showNewMessageJump, setShowNewMessageJump] = useState(false);
+  const [showChannelPeople, setShowChannelPeople] = useState(false);
+  const [threadParent, setThreadParent] = useState(null);
   const historyRef = useRef(null);
   const bottomRef = useRef(null);
   const nearBottomRef = useRef(true);
   const lastMarkedReadMessageIdRef = useRef(null);
+
+  useEffect(() => {
+    setShowChannelPeople(false);
+    setThreadParent(null);
+  }, [selected?.id]);
 
   const draftScope = useMemo(() => ({
     identityId: session?.identity_id || '',
@@ -771,6 +1168,28 @@ function ConversationView({
       event.type !==
       'message.created'
     ) {
+      return;
+    }
+
+    if (event.message.reply_to_message_id) {
+      const rootId = event.message.reply_to_message_id;
+      setMessages((current) => current.map((item) => {
+        if (item.message_id !== rootId) return item;
+        const currentCount = Number(item.thread_reply_count || 0);
+        const isNew = event.type === 'message.created';
+        return {
+          ...item,
+          thread_reply_count: isNew ? currentCount + 1 : currentCount,
+          thread_last_reply_at: event.message.created_at || item.thread_last_reply_at || null,
+          thread_last_reply_message_id: event.message.message_id || item.thread_last_reply_message_id || null,
+        };
+      }));
+
+      const ownThreadReply = event.message.sender_type === 'HUMAN'
+        && event.message.sender_member_id === session.workspace_member_id;
+      if (!ownThreadReply && event.message.message_id) {
+        setShowNewMessageJump(true);
+      }
       return;
     }
 
@@ -1215,22 +1634,33 @@ function ConversationView({
           </div>
         </div>
         <div className="conversation-header-actions">
+          <button
+            type="button"
+            className="channel-people-button"
+            onClick={() => setShowChannelPeople(true)}
+            aria-label="Conversation details"
+            title="Conversation details"
+          >
+            <span aria-hidden="true">⋮</span>
+            <span>Details</span>
+          </button>
           <span className={`connection-pill ${statusClass}`} role="status" aria-live="polite">
             <span className="connection-pill-dot" aria-hidden="true" />
             {statusText}
           </span>
-          <button
-            type="button"
-            className="message-refresh-button compact-refresh-button"
-            disabled={refreshing}
-            onClick={() => load({ manual: true })}
-            aria-label="Reload conversation"
-            title="Reload conversation"
-          >
-            {refreshing ? '…' : '↻'}
-          </button>
         </div>
       </header>
+
+      {showChannelPeople ? (
+        <ConversationDetailsPanel
+          token={token}
+          selected={selected}
+          onClose={() =>
+            setShowChannelPeople(false)
+          }
+          onApiFailure={onApiFailure}
+        />
+      ) : null}
 
       {realtimeStatus !== 'connected' ? (
         <div className={`connection-banner connection-banner-${realtimeStatus}`} role="status">
@@ -1466,9 +1896,28 @@ function ConversationView({
                       </div>
                     ) : null}
 
-                    {(canEdit ||
-                      canDelete) ? (
+                    {!deleted && Number(message.thread_reply_count || 0) > 0 ? (
+                      <button
+                        type="button"
+                        className="thread-reply-summary"
+                        onClick={() => setThreadParent(message)}
+                      >
+                        {Number(message.thread_reply_count)} {Number(message.thread_reply_count) === 1 ? 'reply' : 'replies'}
+                        {message.thread_last_reply_at ? ` · last ${formatMessageTime(message.thread_last_reply_at)}` : ''}
+                      </button>
+                    ) : null}
+
+                    {!deleted ? (
                       <div className="message-own-actions">
+                        <button
+                          type="button"
+                          className="message-thread-action"
+                          onClick={() => setThreadParent(message)}
+                          aria-label="Reply in thread"
+                          title="Reply in thread"
+                        >
+                          ↩
+                        </button>
                         {canEdit ? (
                           <button
                             type="button"
@@ -1529,6 +1978,21 @@ function ConversationView({
           </button>
         ) : null}
       </div>
+
+      {threadParent ? (
+        <ThreadPanel
+          token={token}
+          session={session}
+          conversation={selected}
+          parentMessage={threadParent}
+          realtimeMessage={realtimeMessage}
+          onClose={() => setThreadParent(null)}
+          onApiFailure={onApiFailure}
+          onThreadActivity={(messageId) => {
+            if (messageId) markMessageRead(messageId);
+          }}
+        />
+      ) : null}
 
       {attachmentPreview ? (
         <div

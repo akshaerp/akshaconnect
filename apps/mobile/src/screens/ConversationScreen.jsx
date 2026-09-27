@@ -17,6 +17,7 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -37,16 +38,24 @@ import {
   downloadAttachmentToCache,
   editMessage,
   listMessages,
+  listWorkspaceMembers,
   markRead,
   sendMessage,
   uploadAttachment,
 } from '../api/client';
+import {
+  addChannelMember,
+  listChannelMembers,
+  removeChannelMember,
+} from '../api/channelMembers';
 import {
   clearConversationDraft,
   loadConversationDraft,
   saveConversationDraft,
 } from '../drafts/draftStore';
 import { colors } from '../theme/colors';
+import ThreadModal from './ThreadModal.jsx';
+import ConversationDetailsModal from './ConversationDetailsModal';
 
 const MAX_MESSAGE_CHARS = 8000;
 const MAX_PENDING_ATTACHMENTS = 4;
@@ -417,6 +426,39 @@ export default function ConversationScreen({
   const [error, setError] = useState('');
   const [newMessageDividerId, setNewMessageDividerId] =
     useState(null);
+  const [threadParent, setThreadParent] = useState(null);
+  const [
+    showConversationDetails,
+    setShowConversationDetails,
+  ] = useState(false);
+  const [showChannelPeople, setShowChannelPeople] =
+    useState(false);
+  const [channelPeople, setChannelPeople] =
+    useState([]);
+  const [
+    canManageChannelPeople,
+    setCanManageChannelPeople,
+  ] = useState(false);
+  const [
+    channelPeopleLoading,
+    setChannelPeopleLoading,
+  ] = useState(false);
+  const [
+    channelPeopleBusyMemberId,
+    setChannelPeopleBusyMemberId,
+  ] = useState('');
+  const [
+    channelPeopleSearch,
+    setChannelPeopleSearch,
+  ] = useState('');
+  const [
+    channelPeopleCandidates,
+    setChannelPeopleCandidates,
+  ] = useState([]);
+  const [
+    channelPeopleError,
+    setChannelPeopleError,
+  ] = useState('');
 
   const draftScope = useMemo(
     () => ({
@@ -872,7 +914,50 @@ export default function ConversationScreen({
       return;
     }
 
-    const incomingFromOthers = incoming.filter(
+    const threadReplies = incoming.filter(
+      (message) => message.reply_to_message_id
+    );
+    const timelineIncoming = incoming.filter(
+      (message) => !message.reply_to_message_id
+    );
+
+    if (threadReplies.length > 0) {
+      setMessages((current) => current.map((item) => {
+        const repliesForItem = threadReplies.filter(
+          (reply) => reply.reply_to_message_id === item.message_id
+        );
+        if (repliesForItem.length === 0) return item;
+        const sorted = mergeMessages(repliesForItem);
+        const latestReply = sorted[sorted.length - 1];
+        return {
+          ...item,
+          thread_reply_count:
+            Number(item.thread_reply_count || 0) + repliesForItem.length,
+          thread_last_reply_at:
+            latestReply?.created_at || item.thread_last_reply_at || null,
+          thread_last_reply_message_id:
+            latestReply?.message_id || item.thread_last_reply_message_id || null,
+        };
+      }));
+
+      const externalThreadReply = threadReplies.find(
+        (message) =>
+          !(message.sender_type === 'HUMAN' &&
+            message.sender_member_id === currentMemberId)
+      );
+
+      if (externalThreadReply?.reply_to_message_id) {
+        setNewMessageDividerId(
+          (current) => current || externalThreadReply.reply_to_message_id
+        );
+      }
+    }
+
+    if (timelineIncoming.length === 0) {
+      return;
+    }
+
+    const incomingFromOthers = timelineIncoming.filter(
       (message) =>
         !(
           message.sender_type === 'HUMAN' &&
@@ -899,11 +984,11 @@ export default function ConversationScreen({
     setMessages((current) =>
       mergeMessages([
         ...current,
-        ...incoming,
+        ...timelineIncoming,
       ])
     );
 
-    const sortedIncoming = mergeMessages(incoming);
+    const sortedIncoming = mergeMessages(timelineIncoming);
     const latestIncoming =
       sortedIncoming[sortedIncoming.length - 1];
     const shouldFollow = nearBottomRef.current;
@@ -1531,7 +1616,8 @@ export default function ConversationScreen({
   }
 
   function manageOwnMessage(
-    message
+    message,
+    onReplyInThread
   ) {
     if (
       !message ||
@@ -1542,7 +1628,19 @@ export default function ConversationScreen({
 
     const actions = [];
 
+    if (!message.reply_to_message_id) {
+      actions.push({
+        text: 'Reply in thread',
+        onPress: () => onReplyInThread?.(),
+      });
+    }
+
+    const own =
+      message.sender_type === 'HUMAN' &&
+      message.sender_member_id === currentMemberId;
+
     if (
+      own &&
       message.message_type === 'TEXT'
     ) {
       actions.push({
@@ -1553,9 +1651,12 @@ export default function ConversationScreen({
     }
 
     if (
-      message.message_type === 'TEXT' ||
-      message.message_type ===
-        'ATTACHMENT'
+      own &&
+      (
+        message.message_type === 'TEXT' ||
+        message.message_type ===
+          'ATTACHMENT'
+      )
     ) {
       actions.push({
         text:
@@ -1794,6 +1895,257 @@ export default function ConversationScreen({
     }
   }
 
+  const loadChannelPeople = useCallback(
+    async () => {
+      if (
+        conversation?.kind !== 'channel' ||
+        !conversation?.conversationId ||
+        !token
+      ) {
+        return;
+      }
+
+      setChannelPeopleLoading(true);
+      setChannelPeopleError('');
+
+      try {
+        const payload =
+          await listChannelMembers(
+            serverUrl,
+            token,
+            conversation.conversationId
+          );
+
+        setChannelPeople(
+          payload?.members || []
+        );
+        setCanManageChannelPeople(
+          Boolean(
+            payload?.can_manage_members
+          )
+        );
+      } catch (requestError) {
+        setChannelPeopleError(
+          requestError?.message ||
+            'Could not load channel people'
+        );
+      } finally {
+        setChannelPeopleLoading(false);
+      }
+    },
+    [
+      conversation?.conversationId,
+      conversation?.kind,
+      serverUrl,
+      token,
+    ]
+  );
+
+  const openChannelPeople = useCallback(
+    () => {
+      if (
+        conversation?.kind !== 'channel'
+      ) {
+        return;
+      }
+
+      setShowChannelPeople(true);
+      setChannelPeopleSearch('');
+      setChannelPeopleCandidates([]);
+      setChannelPeopleError('');
+      loadChannelPeople();
+    },
+    [
+      conversation?.kind,
+      loadChannelPeople,
+    ]
+  );
+
+  const searchChannelPeople = useCallback(
+    async () => {
+      if (
+        !canManageChannelPeople ||
+        !token
+      ) {
+        return;
+      }
+
+      setChannelPeopleLoading(true);
+      setChannelPeopleError('');
+
+      try {
+        const payload =
+          await listWorkspaceMembers(
+            serverUrl,
+            token,
+            {
+              query:
+                channelPeopleSearch.trim(),
+              limit: 50,
+            }
+          );
+
+        const existingIds =
+          new Set(
+            channelPeople.map(
+              (item) =>
+                item.workspace_member_id
+            )
+          );
+
+        setChannelPeopleCandidates(
+          (payload?.members || [])
+            .filter(
+              (item) =>
+                !existingIds.has(
+                  item.workspace_member_id
+                )
+            )
+        );
+      } catch (requestError) {
+        setChannelPeopleError(
+          requestError?.message ||
+            'Could not search workspace people'
+        );
+      } finally {
+        setChannelPeopleLoading(false);
+      }
+    },
+    [
+      canManageChannelPeople,
+      channelPeople,
+      channelPeopleSearch,
+      serverUrl,
+      token,
+    ]
+  );
+
+  const addPersonToChannel = useCallback(
+    async (member) => {
+      const memberId =
+        member?.workspace_member_id;
+
+      if (
+        !memberId ||
+        !conversation?.conversationId
+      ) {
+        return;
+      }
+
+      setChannelPeopleBusyMemberId(
+        memberId
+      );
+      setChannelPeopleError('');
+
+      try {
+        await addChannelMember(
+          serverUrl,
+          token,
+          conversation.conversationId,
+          memberId
+        );
+
+        await loadChannelPeople();
+
+        setChannelPeopleCandidates(
+          (current) =>
+            current.filter(
+              (item) =>
+                item.workspace_member_id !==
+                memberId
+            )
+        );
+      } catch (requestError) {
+        setChannelPeopleError(
+          requestError?.message ||
+            'Could not add person to channel'
+        );
+      } finally {
+        setChannelPeopleBusyMemberId('');
+      }
+    },
+    [
+      conversation?.conversationId,
+      loadChannelPeople,
+      serverUrl,
+      token,
+    ]
+  );
+
+  const removePersonFromChannel =
+    useCallback(
+      async (member) => {
+        const memberId =
+          member?.workspace_member_id;
+
+        if (
+          !memberId ||
+          !conversation?.conversationId
+        ) {
+          return;
+        }
+
+        Alert.alert(
+          'Remove from channel?',
+          `${
+            member?.display_name ||
+            'This person'
+          } will lose access if this is a private channel.`,
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel',
+            },
+            {
+              text: 'Remove',
+              style: 'destructive',
+              onPress: async () => {
+                setChannelPeopleBusyMemberId(
+                  memberId
+                );
+                setChannelPeopleError('');
+
+                try {
+                  await removeChannelMember(
+                    serverUrl,
+                    token,
+                    conversation.conversationId,
+                    memberId
+                  );
+
+                  await loadChannelPeople();
+                } catch (requestError) {
+                  setChannelPeopleError(
+                    requestError?.message ||
+                      'Could not remove person from channel'
+                  );
+                } finally {
+                  setChannelPeopleBusyMemberId(
+                    ''
+                  );
+                }
+              },
+            },
+          ]
+        );
+      },
+      [
+        conversation?.conversationId,
+        loadChannelPeople,
+        serverUrl,
+        token,
+      ]
+    );
+
+  useEffect(() => {
+    setShowChannelPeople(false);
+    setChannelPeople([]);
+    setChannelPeopleCandidates([]);
+    setChannelPeopleSearch('');
+    setChannelPeopleError('');
+    setCanManageChannelPeople(false);
+  }, [conversation?.conversationId]);
+
   const canSend =
     editingMessage
       ? draft.trim().length > 0 &&
@@ -1829,6 +2181,10 @@ export default function ConversationScreen({
       style={styles.safeArea}
       edges={['top', 'bottom']}
     >
+      <StatusBar
+        backgroundColor={colors.primary}
+        barStyle="light-content"
+      />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={
@@ -1906,17 +2262,21 @@ export default function ConversationScreen({
 
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel="Conversation details"
             onPress={() =>
-              loadLatest({ refresh: true })
+              setShowConversationDetails(true)
             }
-            disabled={refreshing}
             style={({ pressed }) => [
-              styles.refreshButton,
-              pressed ? styles.pressed : null,
+              styles.peopleButton,
+              pressed
+                ? styles.pressed
+                : null,
             ]}
           >
-            <Text style={styles.refreshText}>
-              {refreshing ? '…' : '↻'}
+            <Text
+              style={styles.detailsButtonText}
+            >
+              ⋮
             </Text>
           </Pressable>
         </View>
@@ -2167,6 +2527,9 @@ export default function ConversationScreen({
                           }
                           onManageMessage={
                             manageOwnMessage
+                          }
+                          onReplyInThread={() =>
+                            setThreadParent(message)
                           }
                           attachmentAction={
                             attachmentAction
@@ -2445,6 +2808,381 @@ export default function ConversationScreen({
           </Text>
         ) : null}
 
+        <ConversationDetailsModal
+          visible={showConversationDetails}
+          onClose={() =>
+            setShowConversationDetails(false)
+          }
+          serverUrl={serverUrl}
+          token={token}
+          conversation={conversation}
+        />
+
+        <Modal
+          visible={showChannelPeople}
+          transparent
+          animationType="fade"
+          onRequestClose={() =>
+            setShowChannelPeople(false)
+          }
+        >
+          <View
+            style={styles.peopleOverlay}
+          >
+            <View
+              style={styles.peoplePanel}
+            >
+              <View
+                style={styles.peopleHeader}
+              >
+                <View
+                  style={styles.peopleHeaderCopy}
+                >
+                  <Text
+                    style={styles.peopleTitle}
+                    numberOfLines={1}
+                  >
+                    {`# ${conversation.title} · People`}
+                  </Text>
+                  <Text
+                    style={styles.peopleSubtitle}
+                  >
+                    {channelPeople.length}{' '}
+                    {channelPeople.length === 1
+                      ? 'person'
+                      : 'people'}
+                  </Text>
+                </View>
+
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close channel people"
+                  onPress={() =>
+                    setShowChannelPeople(false)
+                  }
+                  style={({ pressed }) => [
+                    styles.peopleCloseButton,
+                    pressed
+                      ? styles.pressed
+                      : null,
+                  ]}
+                >
+                  <Text
+                    style={styles.peopleCloseText}
+                  >
+                    ×
+                  </Text>
+                </Pressable>
+              </View>
+
+              {canManageChannelPeople ? (
+                <View
+                  style={
+                    styles.peopleSearchRow
+                  }
+                >
+                  <TextInput
+                    value={channelPeopleSearch}
+                    onChangeText={
+                      setChannelPeopleSearch
+                    }
+                    placeholder="Search workspace people"
+                    placeholderTextColor={
+                      colors.textMuted
+                    }
+                    style={
+                      styles.peopleSearchInput
+                    }
+                    returnKeyType="search"
+                    onSubmitEditing={
+                      searchChannelPeople
+                    }
+                  />
+
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={
+                      searchChannelPeople
+                    }
+                    disabled={
+                      channelPeopleLoading
+                    }
+                    style={({ pressed }) => [
+                      styles.peopleSearchButton,
+                      pressed &&
+                      !channelPeopleLoading
+                        ? styles.pressed
+                        : null,
+                    ]}
+                  >
+                    <Text
+                      style={
+                        styles.peopleSearchButtonText
+                      }
+                    >
+                      Search
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
+              {channelPeopleError ? (
+                <Text
+                  style={
+                    styles.peopleError
+                  }
+                >
+                  {channelPeopleError}
+                </Text>
+              ) : null}
+
+              {channelPeopleLoading ? (
+                <View
+                  style={
+                    styles.peopleLoading
+                  }
+                >
+                  <ActivityIndicator
+                    color={colors.primary}
+                  />
+                </View>
+              ) : null}
+
+              <ScrollView
+                style={styles.peopleList}
+                contentContainerStyle={
+                  styles.peopleListContent
+                }
+              >
+                {channelPeople.map(
+                  (member) => {
+                    const busy =
+                      channelPeopleBusyMemberId ===
+                      member.workspace_member_id;
+
+                    return (
+                      <View
+                        key={
+                          member.workspace_member_id
+                        }
+                        style={
+                          styles.peopleRow
+                        }
+                      >
+                        <View
+                          style={
+                            styles.peopleAvatar
+                          }
+                        >
+                          <Text
+                            style={
+                              styles.peopleAvatarText
+                            }
+                          >
+                            {String(
+                              member.display_name ||
+                                'M'
+                            )
+                              .trim()
+                              .slice(0, 1)
+                              .toUpperCase()}
+                          </Text>
+                        </View>
+
+                        <View
+                          style={
+                            styles.peopleRowCopy
+                          }
+                        >
+                          <Text
+                            style={
+                              styles.peopleName
+                            }
+                            numberOfLines={1}
+                          >
+                            {member.display_name ||
+                              'Member'}
+                          </Text>
+                          <Text
+                            style={
+                              styles.peopleMeta
+                            }
+                            numberOfLines={1}
+                          >
+                            {member.member_role}
+                            {member.primary_email
+                              ? ` · ${member.primary_email}`
+                              : ''}
+                          </Text>
+                        </View>
+
+                        {canManageChannelPeople &&
+                        member.member_role !==
+                          'OWNER' ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Remove ${
+                              member.display_name ||
+                              'member'
+                            } from channel`}
+                            disabled={busy}
+                            onPress={() =>
+                              removePersonFromChannel(
+                                member
+                              )
+                            }
+                            style={({ pressed }) => [
+                              styles.peopleRemoveButton,
+                              pressed && !busy
+                                ? styles.pressed
+                                : null,
+                            ]}
+                          >
+                            <Text
+                              style={
+                                styles.peopleRemoveText
+                              }
+                            >
+                              {busy
+                                ? '…'
+                                : 'Remove'}
+                            </Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    );
+                  }
+                )}
+
+                {canManageChannelPeople &&
+                channelPeopleCandidates.length >
+                  0 ? (
+                  <>
+                    <Text
+                      style={
+                        styles.peopleSectionTitle
+                      }
+                    >
+                      Add people
+                    </Text>
+
+                    {channelPeopleCandidates.map(
+                      (member) => {
+                        const busy =
+                          channelPeopleBusyMemberId ===
+                          member.workspace_member_id;
+
+                        return (
+                          <View
+                            key={
+                              member.workspace_member_id
+                            }
+                            style={
+                              styles.peopleRow
+                            }
+                          >
+                            <View
+                              style={
+                                styles.peopleAvatar
+                              }
+                            >
+                              <Text
+                                style={
+                                  styles.peopleAvatarText
+                                }
+                              >
+                                {String(
+                                  member.display_name ||
+                                    'M'
+                                )
+                                  .trim()
+                                  .slice(0, 1)
+                                  .toUpperCase()}
+                              </Text>
+                            </View>
+
+                            <View
+                              style={
+                                styles.peopleRowCopy
+                              }
+                            >
+                              <Text
+                                style={
+                                  styles.peopleName
+                                }
+                                numberOfLines={1}
+                              >
+                                {member.display_name ||
+                                  'Member'}
+                              </Text>
+                              <Text
+                                style={
+                                  styles.peopleMeta
+                                }
+                                numberOfLines={1}
+                              >
+                                {member.primary_email ||
+                                  'Workspace member'}
+                              </Text>
+                            </View>
+
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Add ${
+                                member.display_name ||
+                                'member'
+                              } to channel`}
+                              disabled={busy}
+                              onPress={() =>
+                                addPersonToChannel(
+                                  member
+                                )
+                              }
+                              style={({ pressed }) => [
+                                styles.peopleAddButton,
+                                pressed && !busy
+                                  ? styles.pressed
+                                  : null,
+                              ]}
+                            >
+                              <Text
+                                style={
+                                  styles.peopleAddText
+                                }
+                              >
+                                {busy
+                                  ? '…'
+                                  : 'Add'}
+                              </Text>
+                            </Pressable>
+                          </View>
+                        );
+                      }
+                    )}
+                  </>
+                ) : null}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        <ThreadModal
+          visible={Boolean(threadParent)}
+          serverUrl={serverUrl}
+          token={token}
+          conversationId={conversation?.conversationId || ''}
+          parentMessage={threadParent}
+          realtimeEvents={realtimeEvents}
+          currentMemberId={currentMemberId}
+          onClose={() => setThreadParent(null)}
+          onRead={(messageId) => {
+            if (messageId) {
+              markMessageRead(messageId);
+              setNewMessageDividerId(null);
+            }
+          }}
+        />
+
         <Modal
           visible={Boolean(previewAttachment)}
           transparent
@@ -2520,6 +3258,7 @@ function MessageBubble({
   system,
   messageMutationId,
   onManageMessage,
+  onReplyInThread,
   attachmentAction,
   expandedAttachmentId,
   savedAttachments,
@@ -2566,19 +3305,23 @@ function MessageBubble({
         'ATTACHMENT'
     );
 
+  const replyable =
+    !deleted &&
+    !message.reply_to_message_id;
+
   const mutating =
     messageMutationId ===
     message.message_id;
 
   return (
     <Pressable
-      disabled={!manageable || mutating}
+      disabled={(!manageable && !replyable) || mutating}
       delayLongPress={350}
       onLongPress={() =>
-        onManageMessage?.(message)
+        onManageMessage?.(message, onReplyInThread)
       }
       accessibilityHint={
-        manageable
+        manageable || replyable
           ? 'Long press for message actions'
           : undefined
       }
@@ -2878,7 +3621,26 @@ function MessageBubble({
           </Text>
         ) : null}
 
-        {manageable ? (
+        {replyable && Number(message.thread_reply_count || 0) > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open thread"
+            onPress={onReplyInThread}
+            style={({ pressed }) => [
+              styles.threadSummary,
+              pressed ? styles.pressed : null,
+            ]}
+          >
+            <Text style={styles.threadSummaryText}>
+              {Number(message.thread_reply_count)} {Number(message.thread_reply_count) === 1 ? 'reply' : 'replies'}
+              {message.thread_last_reply_at
+                ? ` · last ${formatMessageTime(message.thread_last_reply_at)}`
+                : ''}
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {manageable || replyable ? (
           <Text
             style={[
               styles.longPressHint,
@@ -2898,27 +3660,40 @@ function MessageBubble({
 }
 
 const styles = StyleSheet.create({
+  threadSummary: {
+    marginTop: 7,
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+    borderRadius: 7,
+    backgroundColor: 'rgba(49,95,156,0.08)',
+  },
+  threadSummaryText: {
+    color: '#315f9c',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   flex: {
     flex: 1,
   },
   safeArea: {
     flex: 1,
-    backgroundColor: colors.shell,
+    backgroundColor: colors.primary,
   },
   header: {
     minHeight: 72,
     paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.navy,
-    borderBottomWidth: 3,
-    borderBottomColor: colors.primary,
+    backgroundColor: colors.primary,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.22)',
   },
   backButton: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: '#173A72',
+    backgroundColor: 'rgba(0,0,0,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2992,13 +3767,197 @@ const styles = StyleSheet.create({
   realtimeTextOffline: {
     color: '#D7E0EA',
   },
+  peopleButton: {
+    width: 40,
+    height: 40,
+    marginRight: 8,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.12)',
+  },
+  peopleButtonText: {
+    fontSize: 18,
+  },
+  detailsButtonText: {
+    color: '#FFFFFF',
+    fontSize: 24,
+    lineHeight: 26,
+    fontWeight: '900',
+  },
+  peopleOverlay: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 38,
+    backgroundColor:
+      'rgba(5, 18, 44, 0.62)',
+    justifyContent: 'center',
+  },
+  peoplePanel: {
+    maxHeight: '88%',
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  peopleHeader: {
+    minHeight: 68,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E4EBF3',
+  },
+  peopleHeaderCopy: {
+    flex: 1,
+    marginRight: 10,
+  },
+  peopleTitle: {
+    color: colors.navy,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  peopleSubtitle: {
+    marginTop: 3,
+    color: colors.textMuted,
+    fontSize: 11,
+  },
+  peopleCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EEF4FA',
+  },
+  peopleCloseText: {
+    color: colors.navy,
+    fontSize: 24,
+    lineHeight: 26,
+  },
+  peopleSearchRow: {
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF2F6',
+  },
+  peopleSearchInput: {
+    flex: 1,
+    minHeight: 42,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#CBD9E8',
+    borderRadius: 10,
+    color: colors.text,
+    backgroundColor: '#FBFDFF',
+  },
+  peopleSearchButton: {
+    minHeight: 42,
+    marginLeft: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+  },
+  peopleSearchButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  peopleError: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    padding: 9,
+    borderRadius: 9,
+    color: '#A12A3A',
+    backgroundColor: '#FFF0F3',
+    fontSize: 11,
+  },
+  peopleLoading: {
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  peopleList: {
+    flexGrow: 0,
+  },
+  peopleListContent: {
+    padding: 12,
+  },
+  peopleRow: {
+    minHeight: 58,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF2F6',
+  },
+  peopleAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EAF3FF',
+  },
+  peopleAvatarText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  peopleRowCopy: {
+    flex: 1,
+    minWidth: 0,
+    marginHorizontal: 10,
+  },
+  peopleName: {
+    color: colors.navy,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  peopleMeta: {
+    marginTop: 2,
+    color: colors.textMuted,
+    fontSize: 10,
+  },
+  peopleRemoveButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#FFF0F3',
+  },
+  peopleRemoveText: {
+    color: '#A12A3A',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  peopleAddButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#EAF7EF',
+  },
+  peopleAddText: {
+    color: '#117A45',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  peopleSectionTitle: {
+    marginTop: 18,
+    marginBottom: 6,
+    color: colors.navy,
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
   refreshButton: {
     width: 40,
     height: 40,
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#173A72',
+    backgroundColor: 'rgba(0,0,0,0.12)',
   },
   refreshText: {
     color: '#FFFFFF',
@@ -3029,7 +3988,7 @@ const styles = StyleSheet.create({
   },
   history: {
     flex: 1,
-    backgroundColor: colors.shell,
+    backgroundColor: '#F6F9FC',
   },
   messageList: {
     flexGrow: 1,
@@ -3115,11 +4074,21 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderColor: '#DCE5ED',
     borderBottomLeftRadius: 5,
+    shadowColor: '#0F2742',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 2,
+    elevation: 1,
   },
   ownBubble: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+    backgroundColor: '#EAF4FF',
+    borderColor: '#C9E1FA',
     borderBottomRightRadius: 5,
+    shadowColor: '#0F2742',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 2,
+    elevation: 1,
   },
   sender: {
     marginBottom: 4,
@@ -3128,7 +4097,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   ownSender: {
-    color: '#E9FFFB',
+    color: '#1769AA',
   },
   body: {
     color: '#243B53',
@@ -3136,7 +4105,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   ownBody: {
-    color: '#FFFFFF',
+    color: '#18324A',
   },
   deletedBody: {
     fontStyle: 'italic',

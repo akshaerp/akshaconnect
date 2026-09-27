@@ -169,6 +169,36 @@ function createMessagingService(repository, {
     };
   }
 
+  async function listThread(claims, conversationId, parentMessageId) {
+    const { actor } = await requireActiveActor(claims);
+    const allowed = await requireConversationAccess(actor, conversationId);
+    const cleanParentMessageId = clean(parentMessageId);
+
+    if (!cleanParentMessageId) {
+      throw boundaryError(
+        'THREAD_PARENT_MESSAGE_REQUIRED',
+        'Thread parent message id is required',
+        400
+      );
+    }
+
+    const thread = await repository.listThread({
+      workspaceId: actor.workspaceId,
+      conversationId: allowed.conversationId,
+      parentMessageId: cleanParentMessageId,
+    });
+
+    if (!thread) {
+      throw boundaryError(
+        'THREAD_PARENT_NOT_FOUND',
+        'Thread parent message is unavailable',
+        404
+      );
+    }
+
+    return thread;
+  }
+
   async function sendHumanMessage(claims, conversationId, input = {}) {
     const { actor } = await requireActiveActor(claims);
     const allowed = await requireConversationAccess(actor, conversationId);
@@ -180,8 +210,15 @@ function createMessagingService(repository, {
         conversationId: allowed.conversationId,
         messageId: message.replyToMessageId,
       });
-      if (!reply) {
+      if (!reply || reply.deleted_at) {
         throw boundaryError('MESSAGE_REPLY_INVALID', 'Reply target is invalid', 400);
+      }
+      if (reply.reply_to_message_id) {
+        throw boundaryError(
+          'MESSAGE_REPLY_NESTED_INVALID',
+          'Replies must target the thread root message',
+          400
+        );
       }
     }
 
@@ -620,6 +657,7 @@ function createMessagingService(repository, {
 
   return Object.freeze({
     listMessages,
+    listThread,
     sendHumanMessage,
     editHumanMessage,
     deleteHumanMessage,

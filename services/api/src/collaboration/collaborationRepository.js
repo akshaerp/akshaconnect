@@ -144,6 +144,194 @@ function createCollaborationRepository(db) {
     }
   }
 
+  async function getChannelForConversation({
+    workspaceId,
+    conversationId,
+    requesterMemberId,
+  }) {
+    const result = await db.query(`
+      SELECT
+        c.channel_id,
+        c.conversation_id,
+        c.channel_code,
+        c.channel_name,
+        c.visibility,
+        c.status,
+        c.created_by_member_id,
+        (requester_cm.workspace_member_id IS NOT NULL) AS requester_is_member,
+        requester_cm.member_role AS requester_channel_role
+      FROM ac_channel c
+      JOIN ac_conversation conv
+        ON conv.workspace_id = c.workspace_id
+       AND conv.conversation_id = c.conversation_id
+       AND conv.status = 'ACTIVE'
+      LEFT JOIN ac_channel_member requester_cm
+        ON requester_cm.workspace_id = c.workspace_id
+       AND requester_cm.channel_id = c.channel_id
+       AND requester_cm.workspace_member_id = $3
+       AND requester_cm.left_at IS NULL
+      WHERE c.workspace_id = $1
+        AND c.conversation_id = $2
+        AND c.status = 'ACTIVE'
+      LIMIT 1
+    `, [workspaceId, conversationId, requesterMemberId]);
+
+    return result.rows?.[0] || null;
+  }
+
+  async function listChannelMembers({ workspaceId, conversationId }) {
+    const result = await db.query(`
+      SELECT
+        cm.workspace_member_id,
+        cm.member_role,
+        cm.joined_at,
+        wm.identity_id,
+        wm.status AS workspace_member_status,
+        i.status AS identity_status,
+        COALESCE(wm.display_name_override, i.display_name) AS display_name,
+        i.primary_email
+      FROM ac_channel c
+      JOIN ac_channel_member cm
+        ON cm.workspace_id = c.workspace_id
+       AND cm.channel_id = c.channel_id
+       AND cm.left_at IS NULL
+      JOIN ac_workspace_member wm
+        ON wm.workspace_id = cm.workspace_id
+       AND wm.workspace_member_id = cm.workspace_member_id
+      JOIN ac_identity i
+        ON i.identity_id = wm.identity_id
+      WHERE c.workspace_id = $1
+        AND c.conversation_id = $2
+        AND c.status = 'ACTIVE'
+      ORDER BY
+        CASE cm.member_role
+          WHEN 'OWNER' THEN 1
+          WHEN 'MODERATOR' THEN 2
+          ELSE 3
+        END,
+        LOWER(COALESCE(wm.display_name_override, i.display_name)),
+        cm.workspace_member_id
+    `, [workspaceId, conversationId]);
+
+    return result.rows;
+  }
+
+  async function getChannelMember({
+    workspaceId,
+    conversationId,
+    workspaceMemberId,
+  }) {
+    const result = await db.query(`
+      SELECT
+        cm.workspace_member_id,
+        cm.member_role,
+        cm.joined_at,
+        wm.identity_id,
+        wm.status AS workspace_member_status,
+        i.status AS identity_status,
+        COALESCE(wm.display_name_override, i.display_name) AS display_name,
+        i.primary_email
+      FROM ac_channel c
+      JOIN ac_channel_member cm
+        ON cm.workspace_id = c.workspace_id
+       AND cm.channel_id = c.channel_id
+       AND cm.workspace_member_id = $3
+       AND cm.left_at IS NULL
+      JOIN ac_workspace_member wm
+        ON wm.workspace_id = cm.workspace_id
+       AND wm.workspace_member_id = cm.workspace_member_id
+      JOIN ac_identity i
+        ON i.identity_id = wm.identity_id
+      WHERE c.workspace_id = $1
+        AND c.conversation_id = $2
+        AND c.status = 'ACTIVE'
+      LIMIT 1
+    `, [workspaceId, conversationId, workspaceMemberId]);
+
+    return result.rows?.[0] || null;
+  }
+
+  async function addChannelMember({
+    workspaceId,
+    conversationId,
+    workspaceMemberId,
+  }) {
+    const result = await db.query(`
+      INSERT INTO ac_channel_member (
+        workspace_id,
+        channel_id,
+        workspace_member_id,
+        member_role,
+        joined_at,
+        left_at
+      )
+      SELECT
+        c.workspace_id,
+        c.channel_id,
+        $3,
+        'MEMBER',
+        NOW(),
+        NULL
+      FROM ac_channel c
+      WHERE c.workspace_id = $1
+        AND c.conversation_id = $2
+        AND c.status = 'ACTIVE'
+      ON CONFLICT (
+        workspace_id,
+        channel_id,
+        workspace_member_id
+      )
+      DO UPDATE SET
+        member_role = CASE
+          WHEN ac_channel_member.left_at IS NULL
+            THEN ac_channel_member.member_role
+          ELSE 'MEMBER'
+        END,
+        joined_at = CASE
+          WHEN ac_channel_member.left_at IS NULL
+            THEN ac_channel_member.joined_at
+          ELSE NOW()
+        END,
+        left_at = NULL
+      RETURNING workspace_member_id
+    `, [workspaceId, conversationId, workspaceMemberId]);
+
+    if (!result.rows?.[0]) {
+      return null;
+    }
+
+    return getChannelMember({
+      workspaceId,
+      conversationId,
+      workspaceMemberId,
+    });
+  }
+
+  async function removeChannelMember({
+    workspaceId,
+    conversationId,
+    workspaceMemberId,
+  }) {
+    const result = await db.query(`
+      UPDATE ac_channel_member cm
+      SET left_at = NOW()
+      FROM ac_channel c
+      WHERE c.workspace_id = cm.workspace_id
+        AND c.channel_id = cm.channel_id
+        AND c.workspace_id = $1
+        AND c.conversation_id = $2
+        AND c.status = 'ACTIVE'
+        AND cm.workspace_member_id = $3
+        AND cm.left_at IS NULL
+      RETURNING
+        cm.workspace_member_id,
+        cm.member_role,
+        cm.left_at
+    `, [workspaceId, conversationId, workspaceMemberId]);
+
+    return result.rows?.[0] || null;
+  }
+
   function canonicalPair(memberOne, memberTwo) {
     return memberOne < memberTwo
       ? [memberOne, memberTwo]
@@ -320,6 +508,11 @@ function createCollaborationRepository(db) {
     getActiveWorkspaceMember,
     listChannels,
     createChannel,
+    getChannelForConversation,
+    listChannelMembers,
+    getChannelMember,
+    addChannelMember,
+    removeChannelMember,
     findDirectMessageByPair,
     startDirectMessage,
     listDirectMessages,

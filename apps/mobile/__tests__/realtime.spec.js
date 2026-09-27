@@ -80,6 +80,7 @@ describe('AkshaConnect mobile realtime client', () => {
     expect(JSON.parse(socket.sent[0])).toEqual({
       type: 'auth',
       access_token: token,
+      client_type: 'MOBILE',
     });
   });
 

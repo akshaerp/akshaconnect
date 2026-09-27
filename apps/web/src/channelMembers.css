@@ -1,0 +1,227 @@
+.channel-people-button {
+  min-height: 34px;
+  padding: 0 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--ac-border);
+  border-radius: 9px;
+  color: var(--ac-navy);
+  background: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.channel-people-button:hover {
+  border-color: #9dc9f4;
+  background: #f0f7ff;
+}
+
+.channel-people-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1800;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(5, 18, 44, 0.56);
+}
+
+.channel-people-dialog {
+  width: min(680px, 96vw);
+  max-height: min(760px, 90vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--ac-border);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 28px 70px rgba(5, 18, 44, 0.28);
+}
+
+.channel-people-header {
+  min-height: 72px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid var(--ac-border);
+}
+
+.channel-people-header-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.channel-people-header h3 {
+  margin: 0;
+  color: var(--ac-navy);
+  font-size: 17px;
+}
+
+.channel-people-header p {
+  margin: 4px 0 0;
+  color: var(--ac-text-muted);
+  font-size: 12px;
+}
+
+.channel-people-close {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--ac-navy);
+  background: #eef4fa;
+  font-size: 23px;
+  cursor: pointer;
+}
+
+.channel-people-search {
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  border-bottom: 1px solid #eef2f6;
+}
+
+.channel-people-search input {
+  min-width: 0;
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid #cbd9e8;
+  border-radius: 9px;
+  color: var(--ac-text);
+  background: #fbfdff;
+}
+
+.channel-people-search button {
+  padding: 0 15px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--ac-blue);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.channel-people-error {
+  margin: 10px 16px 0;
+  padding: 9px 10px;
+  border-radius: 9px;
+  color: #9a2940;
+  background: #fff0f3;
+  font-size: 12px;
+}
+
+.channel-people-loading {
+  padding: 12px 16px;
+  color: var(--ac-text-muted);
+  font-size: 12px;
+}
+
+.channel-people-list {
+  overflow: auto;
+  padding: 8px 16px 16px;
+}
+
+.channel-people-section-title {
+  margin: 16px 0 6px;
+  color: var(--ac-text-muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.channel-person-row {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #eef2f6;
+}
+
+.channel-person-avatar {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--ac-blue);
+  background: #eaf3ff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.channel-person-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.channel-person-copy strong,
+.channel-person-copy span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-person-copy strong {
+  color: var(--ac-navy);
+  font-size: 13px;
+}
+
+.channel-person-copy span {
+  margin-top: 2px;
+  color: var(--ac-text-muted);
+  font-size: 11px;
+}
+
+.channel-person-action {
+  min-width: 68px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.channel-person-action.add {
+  color: #117a45;
+  background: #eaf7ef;
+}
+
+.channel-person-action.remove {
+  color: #9a2940;
+  background: #fff0f3;
+}
+
+.channel-person-action:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+@media (max-width: 620px) {
+  .channel-people-overlay {
+    padding: 10px;
+  }
+
+  .channel-people-dialog {
+    width: 100%;
+    max-height: 94vh;
+  }
+
+  .channel-people-search {
+    grid-template-columns: 1fr;
+  }
+
+  .channel-people-search button {
+    min-height: 38px;
+  }
+
+  .channel-people-button span:last-child {
+    display: none;
+  }
+}

@@ -129,6 +129,17 @@ export function listMessages(token, conversationId, { limit = 50, before = '' } 
   );
 }
 
+export function listThread(
+  token,
+  conversationId,
+  parentMessageId
+) {
+  return request(`/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(parentMessageId)}/thread`,
+    { token }
+  );
+}
+
 export function sendMessage(
   token,
   conversationId,
@@ -188,7 +199,7 @@ export function deleteMessage(
 export async function uploadAttachment(
   token,
   conversationId,
-  { file, clientMessageId }
+  { file, clientMessageId, replyToMessageId = null }
 ) {
   if (!file) throw new TypeError('file is required');
 
@@ -202,6 +213,7 @@ export async function uploadAttachment(
         'content-type': file.type || 'application/octet-stream',
         'x-akshaconnect-file-name': encodeURIComponent(file.name || 'attachment'),
         'x-client-message-id': clientMessageId,
+        ...(replyToMessageId ? { 'x-reply-to-message-id': replyToMessageId } : {}),
       },
       body: file,
     }

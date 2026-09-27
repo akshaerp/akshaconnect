@@ -120,7 +120,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
 
   async function getMessageInConversation({ workspaceId, conversationId, messageId }) {
     const result = await db.query(`
-      SELECT message_id, conversation_id, created_at
+      SELECT message_id, conversation_id, reply_to_message_id, created_at, deleted_at
       FROM ac_message
       WHERE workspace_id = $1
         AND conversation_id = $2
@@ -642,6 +642,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
         WHERE workspace_id = $1
           AND conversation_id = $2
           AND message_id = $3
+          AND reply_to_message_id IS NULL
         LIMIT 1
       `, [workspaceId, conversationId, beforeMessageId]);
       cursor = cursorResult.rows?.[0] || null;
@@ -653,6 +654,102 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     if (cursor) {
       params.push(cursor.created_at, cursor.message_id);
       cursorClause = `AND (m.created_at, m.message_id) < ($4::timestamptz, $5::uuid)`;
+    }
+
+    const result = await db.query(`
+      SELECT
+        m.workspace_id,
+        m.message_id,
+        m.conversation_id,
+        m.sender_type,
+        m.sender_member_id,
+        m.system_sender_id,
+        m.message_type,
+        m.body_ciphertext,
+        m.body_nonce,
+        m.body_auth_tag,
+        m.body_key_id,
+        m.body_encryption_version,
+        m.client_message_id,
+        m.source_event_id,
+        m.reply_to_message_id,
+        m.created_at,
+        m.edited_at,
+        m.deleted_at,
+        (
+          SELECT COUNT(*)::int
+          FROM ac_message tr
+          WHERE tr.workspace_id = m.workspace_id
+            AND tr.conversation_id = m.conversation_id
+            AND tr.reply_to_message_id = m.message_id
+        ) AS thread_reply_count,
+        (
+          SELECT tr.created_at
+          FROM ac_message tr
+          WHERE tr.workspace_id = m.workspace_id
+            AND tr.conversation_id = m.conversation_id
+            AND tr.reply_to_message_id = m.message_id
+          ORDER BY tr.created_at DESC, tr.message_id DESC
+          LIMIT 1
+        ) AS thread_last_reply_at,
+        (
+          SELECT tr.message_id
+          FROM ac_message tr
+          WHERE tr.workspace_id = m.workspace_id
+            AND tr.conversation_id = m.conversation_id
+            AND tr.reply_to_message_id = m.message_id
+          ORDER BY tr.created_at DESC, tr.message_id DESC
+          LIMIT 1
+        ) AS thread_last_reply_message_id,
+        CASE
+          WHEN m.sender_type = 'HUMAN'
+            THEN COALESCE(wm.display_name_override, i.display_name)
+          ELSE ss.display_name
+        END AS sender_display_name,
+        CASE
+          WHEN m.sender_type = 'HUMAN' THEN i.primary_email
+          ELSE NULL
+        END AS sender_primary_email
+      FROM ac_message m
+      LEFT JOIN ac_workspace_member wm
+        ON wm.workspace_id = m.workspace_id
+       AND wm.workspace_member_id = m.sender_member_id
+      LEFT JOIN ac_identity i ON i.identity_id = wm.identity_id
+      LEFT JOIN ac_system_sender ss
+        ON ss.workspace_id = m.workspace_id
+       AND ss.system_sender_id = m.system_sender_id
+      WHERE m.workspace_id = $1
+        AND m.conversation_id = $2
+        AND m.reply_to_message_id IS NULL
+        ${cursorClause}
+      ORDER BY m.created_at DESC, m.message_id DESC
+      LIMIT $3
+    `, params);
+
+    const descending = result.rows || [];
+    const hasMore = descending.length > limit;
+    const pageDescending = descending.slice(0, limit);
+    const nextBeforeMessageId = hasMore && pageDescending.length
+      ? pageDescending[pageDescending.length - 1].message_id
+      : null;
+
+    return {
+      cursorInvalid: false,
+      rows: pageDescending.reverse().map(materializeMessage),
+      hasMore,
+      nextBeforeMessageId,
+    };
+  }
+
+  async function listThread({ workspaceId, conversationId, parentMessageId }) {
+    const parent = await messageDetails({
+      workspaceId,
+      conversationId,
+      messageId: parentMessageId,
+    });
+
+    if (!parent || parent.reply_to_message_id) {
+      return null;
     }
 
     const result = await db.query(`
@@ -694,23 +791,13 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
        AND ss.system_sender_id = m.system_sender_id
       WHERE m.workspace_id = $1
         AND m.conversation_id = $2
-        ${cursorClause}
-      ORDER BY m.created_at DESC, m.message_id DESC
-      LIMIT $3
-    `, params);
-
-    const descending = result.rows || [];
-    const hasMore = descending.length > limit;
-    const pageDescending = descending.slice(0, limit);
-    const nextBeforeMessageId = hasMore && pageDescending.length
-      ? pageDescending[pageDescending.length - 1].message_id
-      : null;
+        AND m.reply_to_message_id = $3
+      ORDER BY m.created_at, m.message_id
+    `, [workspaceId, conversationId, parentMessageId]);
 
     return {
-      cursorInvalid: false,
-      rows: pageDescending.reverse().map(materializeMessage),
-      hasMore,
-      nextBeforeMessageId,
+      parent,
+      replies: (result.rows || []).map(materializeMessage),
     };
   }
 
@@ -1015,6 +1102,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     updateHumanTextMessage,
     softDeleteHumanMessage,
     listMessages,
+    listThread,
     getReadCursor,
     advanceReadCursor,
     getActiveSystemSender,

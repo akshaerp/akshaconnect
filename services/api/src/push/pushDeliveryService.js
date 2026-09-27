@@ -36,6 +36,7 @@ function createPushDeliveryService({
   pushRegistrationRepository,
   pushSender,
   presenceRegistry = null,
+  conversationPreferenceRepository = null,
 } = {}) {
   if (
     !messagingRepository ||
@@ -69,7 +70,7 @@ function createPushDeliveryService({
     );
   }
 
-  function shouldPush({
+  function isActivelyReading({
     workspaceId,
     workspaceMemberId,
     conversationId,
@@ -80,10 +81,10 @@ function createPushDeliveryService({
         .isActivelyReading !==
         'function'
     ) {
-      return true;
+      return false;
     }
 
-    return !presenceRegistry
+    return presenceRegistry
       .isActivelyReading({
         workspaceId,
         workspaceMemberId,
@@ -114,7 +115,7 @@ function createPushDeliveryService({
           conversationId,
         });
 
-    const recipients =
+    let recipients =
       (memberIds || [])
         .filter(
           (memberId) =>
@@ -123,7 +124,7 @@ function createPushDeliveryService({
               memberId !==
                 excludeWorkspaceMemberId
             ) &&
-            shouldPush({
+            !isActivelyReading({
               workspaceId,
               workspaceMemberId:
                 memberId,
@@ -131,10 +132,26 @@ function createPushDeliveryService({
             })
         );
 
+    if (
+      recipients.length > 0 &&
+      conversationPreferenceRepository &&
+      typeof conversationPreferenceRepository
+        .filterPushRecipients === 'function'
+    ) {
+      recipients =
+        await conversationPreferenceRepository
+          .filterPushRecipients({
+            workspaceId,
+            conversationId,
+            workspaceMemberIds:
+              recipients,
+          });
+    }
+
     if (recipients.length === 0) {
       return {
         attempted: 0,
-        suppressed_active_readers: true,
+        suppressed: true,
       };
     }
 

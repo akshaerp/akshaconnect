@@ -91,12 +91,12 @@ test('V4A conversation uses primary blue with green live state', () => {
 
   assert.match(
     conversation,
-    /borderBottomColor:\s*colors\.primary/
+    /header:\s*\{[\s\S]*?backgroundColor:\s*colors\.primary/
   );
 
   assert.match(
     conversation,
-    /backgroundColor:\s*colors\.primary/
+    /barStyle="light-content"/
   );
 
   assert.match(

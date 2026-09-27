@@ -112,6 +112,7 @@ function requestMetadata(req) {
 function createRequestHandler({
   localIdentityService = null,
   collaborationService = null,
+  conversationPlatformService = null,
   messagingService = null,
   attachmentService = null,
   pushRegistrationService = null,
@@ -228,7 +229,6 @@ function createRequestHandler({
           return;
         }
 
-
         if (req.method === 'GET' && url.pathname === '/api/v1/auth/session') {
           const claims = await localIdentityService.verifyAccessToken(bearerToken(req));
           writeJson(res, 200, {
@@ -317,6 +317,305 @@ function createRequestHandler({
           writeJson(res, directMessage.created ? 201 : 200, {
             direct_message: directMessage,
           });
+          return;
+        }
+      }
+
+      const channelMembersRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/channel-members$/.exec(
+          url.pathname
+        );
+      const channelMemberRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/channel-members\/([^/]+)$/.exec(
+          url.pathname
+        );
+
+      if (channelMembersRoute || channelMemberRoute) {
+        if (!localIdentityService) {
+          throw boundaryError(
+            'LOCAL_IDENTITY_NOT_CONFIGURED',
+            'LOCAL identity service is not configured',
+            503
+          );
+        }
+
+        if (!collaborationService) {
+          throw boundaryError(
+            'COLLABORATION_NOT_CONFIGURED',
+            'Collaboration service is not configured',
+            503
+          );
+        }
+
+        const claims =
+          await localIdentityService.verifyAccessToken(
+            bearerToken(req)
+          );
+
+        const conversationId = decodeURIComponent(
+          channelMembersRoute?.[1] ||
+          channelMemberRoute?.[1] ||
+          ''
+        );
+
+        if (
+          channelMembersRoute &&
+          req.method === 'GET'
+        ) {
+          const result =
+            await collaborationService.listChannelMembers(
+              claims,
+              conversationId
+            );
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          channelMembersRoute &&
+          req.method === 'POST'
+        ) {
+          const body = await readJson(req);
+          const result =
+            await collaborationService.addChannelMember(
+              claims,
+              conversationId,
+              body
+            );
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          channelMemberRoute &&
+          req.method === 'DELETE'
+        ) {
+          const workspaceMemberId =
+            decodeURIComponent(
+              channelMemberRoute[2]
+            );
+
+          const result =
+            await collaborationService.removeChannelMember(
+              claims,
+              conversationId,
+              workspaceMemberId
+            );
+          writeJson(res, 200, result);
+          return;
+        }
+      }
+
+      const conversationDetailsRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/details$/.exec(
+          url.pathname
+        );
+      const conversationChannelProfileRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/channel-profile$/.exec(
+          url.pathname
+        );
+      const conversationRulesRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/channel-rules$/.exec(
+          url.pathname
+        );
+      const conversationSharedRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/shared$/.exec(
+          url.pathname
+        );
+      const conversationPinsRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/pins$/.exec(
+          url.pathname
+        );
+      const conversationPinRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/pins\/([^/]+)$/.exec(
+          url.pathname
+        );
+      const conversationSettingRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/settings$/.exec(
+          url.pathname
+        );
+
+      if (
+        conversationDetailsRoute ||
+        conversationChannelProfileRoute ||
+        conversationRulesRoute ||
+        conversationSharedRoute ||
+        conversationPinsRoute ||
+        conversationPinRoute ||
+        conversationSettingRoute
+      ) {
+        if (!localIdentityService) {
+          throw boundaryError(
+            'LOCAL_IDENTITY_NOT_CONFIGURED',
+            'LOCAL identity service is not configured',
+            503
+          );
+        }
+
+        if (!conversationPlatformService) {
+          throw boundaryError(
+            'CONVERSATION_PLATFORM_NOT_CONFIGURED',
+            'Conversation platform service is not configured',
+            503
+          );
+        }
+
+        const claims =
+          await localIdentityService.verifyAccessToken(
+            bearerToken(req)
+          );
+
+        const conversationId =
+          decodeURIComponent(
+            conversationDetailsRoute?.[1] ||
+            conversationChannelProfileRoute?.[1] ||
+            conversationRulesRoute?.[1] ||
+            conversationSharedRoute?.[1] ||
+            conversationPinsRoute?.[1] ||
+            conversationPinRoute?.[1] ||
+            conversationSettingRoute?.[1] ||
+            ''
+          );
+
+        if (
+          conversationDetailsRoute &&
+          req.method === 'GET'
+        ) {
+          const result =
+            await conversationPlatformService.getDetails(
+              claims,
+              conversationId
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          conversationChannelProfileRoute &&
+          req.method === 'PUT'
+        ) {
+          const body = await readJson(req);
+
+          const result =
+            await conversationPlatformService.updateChannelProfile(
+              claims,
+              conversationId,
+              body
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          conversationRulesRoute &&
+          req.method === 'PUT'
+        ) {
+          const body = await readJson(req);
+
+          const result =
+            await conversationPlatformService.replaceChannelRules(
+              claims,
+              conversationId,
+              body
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          conversationSharedRoute &&
+          req.method === 'GET'
+        ) {
+          const result =
+            await conversationPlatformService.listShared(
+              claims,
+              conversationId,
+              url.searchParams.get('kind') || 'MEDIA'
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          conversationPinsRoute &&
+          req.method === 'GET'
+        ) {
+          const result =
+            await conversationPlatformService.listPins(
+              claims,
+              conversationId
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          conversationPinRoute &&
+          req.method === 'PUT'
+        ) {
+          const result =
+            await conversationPlatformService.pinMessage(
+              claims,
+              conversationId,
+              decodeURIComponent(
+                conversationPinRoute[2]
+              )
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          conversationPinRoute &&
+          req.method === 'DELETE'
+        ) {
+          const result =
+            await conversationPlatformService.unpinMessage(
+              claims,
+              conversationId,
+              decodeURIComponent(
+                conversationPinRoute[2]
+              )
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          conversationSettingRoute &&
+          req.method === 'GET'
+        ) {
+          const result =
+            await conversationPlatformService.getSetting(
+              claims,
+              conversationId
+            );
+
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (
+          conversationSettingRoute &&
+          req.method === 'PUT'
+        ) {
+          const body = await readJson(req);
+
+          const result =
+            await conversationPlatformService.updateSetting(
+              claims,
+              conversationId,
+              body
+            );
+
+          writeJson(res, 200, result);
           return;
         }
       }
@@ -437,6 +736,7 @@ function createRequestHandler({
               fileName: decodeFileNameHeader(req.headers['x-akshaconnect-file-name']),
               contentType: req.headers['content-type'],
               clientMessageId: req.headers['x-client-message-id'],
+              replyToMessageId: req.headers['x-reply-to-message-id'],
               data,
             }
           );
@@ -460,12 +760,15 @@ function createRequestHandler({
         /^\/api\/v1\/conversations\/([^/]+)\/messages$/.exec(url.pathname);
       const messageMutationRoute =
         /^\/api\/v1\/conversations\/([^/]+)\/messages\/([^/]+)$/.exec(url.pathname);
+      const messageThreadRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/messages\/([^/]+)\/thread$/.exec(url.pathname);
       const readCursorRoute =
         /^\/api\/v1\/conversations\/([^/]+)\/read-cursor$/.exec(url.pathname);
 
       if (
         messageRoute ||
         messageMutationRoute ||
+        messageThreadRoute ||
         readCursorRoute
       ) {
         if (!localIdentityService) {
@@ -487,6 +790,7 @@ function createRequestHandler({
         const encodedConversationId =
           messageRoute?.[1] ||
           messageMutationRoute?.[1] ||
+          messageThreadRoute?.[1] ||
           readCursorRoute?.[1] ||
           '';
 
@@ -494,6 +798,43 @@ function createRequestHandler({
           decodeURIComponent(
             encodedConversationId
           );
+
+        if (
+          messageThreadRoute &&
+          req.method === 'GET'
+        ) {
+          const parentMessageId =
+            decodeURIComponent(
+              messageThreadRoute[2]
+            );
+
+          let result =
+            await messagingService.listThread(
+              claims,
+              conversationId,
+              parentMessageId
+            );
+
+          if (attachmentService) {
+            const decorated =
+              await attachmentService.decorateMessages(
+                claims,
+                conversationId,
+                [
+                  result.parent,
+                  ...(result.replies || []),
+                ]
+              );
+
+            result = {
+              parent: decorated[0] || result.parent,
+              replies: decorated.slice(1),
+            };
+          }
+
+          writeJson(res, 200, result);
+          return;
+        }
 
         if (
           messageMutationRoute &&

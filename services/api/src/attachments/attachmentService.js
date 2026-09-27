@@ -125,6 +125,8 @@ function sameAttachment(existingMessage, existingAttachment, expected) {
     existingMessage.sender_member_id === expected.senderMemberId &&
     existingMessage.message_type === 'ATTACHMENT' &&
     existingMessage.body_text === expected.fileName &&
+    (existingMessage.reply_to_message_id || null) ===
+      (expected.replyToMessageId || null) &&
     existingAttachment.content_type === expected.contentType &&
     Number(existingAttachment.size_bytes) === expected.sizeBytes &&
     existingAttachment.sha256_hex === expected.sha256Hex
@@ -241,6 +243,28 @@ function createAttachmentService({
     const fileName = validateFileName(input.fileName);
     const contentType = validateContentType(input.contentType);
     const clientMessageId = validateClientMessageId(input.clientMessageId);
+    const replyToMessageId = clean(input.replyToMessageId) || null;
+
+    if (replyToMessageId) {
+      const reply = await messagingRepository.getMessageInConversation({
+        workspaceId: actor.workspaceId,
+        conversationId: allowedConversationId,
+        messageId: replyToMessageId,
+      });
+
+      if (!reply || reply.deleted_at) {
+        throw boundaryError('MESSAGE_REPLY_INVALID', 'Reply target is invalid', 400);
+      }
+
+      if (reply.reply_to_message_id) {
+        throw boundaryError(
+          'MESSAGE_REPLY_NESTED_INVALID',
+          'Replies must target the thread root message',
+          400
+        );
+      }
+    }
+
     const data = Buffer.from(input.data || []);
 
     if (!data.length || data.length > MAX_ATTACHMENT_BYTES) {
@@ -266,6 +290,7 @@ function createAttachmentService({
       contentType,
       sizeBytes: data.length,
       sha256Hex,
+      replyToMessageId,
     };
 
     const existingMessage = await messagingRepository.findHumanMessageByClientId({
@@ -315,6 +340,7 @@ function createAttachmentService({
         conversationId: allowedConversationId,
         senderMemberId: actor.workspaceMemberId,
         clientMessageId,
+        replyToMessageId,
         fileName,
         contentType,
         sizeBytes: data.length,

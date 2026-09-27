@@ -21,6 +21,12 @@ const { createWorkspaceDirectoryHttpHandler } = require('./auth/workspaceDirecto
 const { createTrustedErpBridgeHttpHandler } = require('./auth/trustedErpBridgeHttpHandler');
 const { createCollaborationRepository } = require('./collaboration/collaborationRepository');
 const { createCollaborationService } = require('./collaboration/collaborationService');
+const {
+  createConversationPlatformRepository,
+} = require('./collaboration/conversationPlatformRepository');
+const {
+  createConversationPlatformService,
+} = require('./collaboration/conversationPlatformService');
 const { createMessagingRepository } = require('./messaging/messagingRepository');
 const { createMessagingService } = require('./messaging/messagingService');
 const { createMessageCryptoFromEnv } = require('./messaging/messageCrypto');
@@ -56,16 +62,12 @@ function configuredIdentityProvider() {
 async function start() {
   const identityProvider = configuredIdentityProvider();
 
-  // AkshaConnect owns collaboration state even when a customer delegates human
-  // authentication to AkshaERP or another external identity provider.
   const pool = createPostgresPool(process.env);
   await verifyDatabaseIdentity(
     pool,
     process.env.AKSHACONNECT_DATABASE_EXPECTED_NAME || 'akshaconnect'
   );
 
-  // This repository owns provider-neutral access-session storage as well as the
-  // legacy LOCAL credential path. External providers never receive LOCAL passwords.
   const identityRepository = createLocalIdentityRepository(pool);
   const localIdentityService = createLocalIdentityService(identityRepository, {
     sessionTtlSeconds:
@@ -83,19 +85,43 @@ async function start() {
     workspaceSessionService,
   });
 
+  const messageCrypto = createMessageCryptoFromEnv(process.env);
+
+  // Presence is intentionally ephemeral and shared by collaboration details,
+  // realtime routing, and push suppression.
+  const presenceRegistry = createPresenceRegistry();
+
   const collaborationRepository = createCollaborationRepository(pool);
-  const collaborationService = createCollaborationService(collaborationRepository);
+  const collaborationService = createCollaborationService(
+    collaborationRepository,
+    { presenceRegistry }
+  );
+
+  const conversationPlatformRepository =
+    createConversationPlatformRepository(
+      pool,
+      { messageCrypto }
+    );
+
+  const conversationPlatformService =
+    createConversationPlatformService(
+      conversationPlatformRepository
+    );
 
   const pushRegistrationRepository =
     createPushRegistrationRepository(pool);
+
   const pushRegistrationService =
     createPushRegistrationService({
       identityRepository,
       pushRegistrationRepository,
     });
 
-  const messageCrypto = createMessageCryptoFromEnv(process.env);
-  const messagingRepository = createMessagingRepository(pool, { messageCrypto });
+  const messagingRepository =
+    createMessagingRepository(
+      pool,
+      { messageCrypto }
+    );
 
   const firebasePushSender =
     createFirebasePushSender({
@@ -105,44 +131,53 @@ async function start() {
         process.env.AKSHACONNECT_FIREBASE_PROJECT_ID,
     });
 
-  // Presence is intentionally ephemeral. It is shared by the realtime gateway
-  // and notification router in this API process, and never treated as durable
-  // authentication or database state.
-  const presenceRegistry =
-    createPresenceRegistry();
-
   const pushDeliveryService =
     createPushDeliveryService({
       messagingRepository,
       pushRegistrationRepository,
       pushSender: firebasePushSender,
       presenceRegistry,
+      conversationPreferenceRepository:
+        conversationPlatformRepository,
     });
 
-  const attachmentCrypto = createAttachmentCryptoFromEnv(process.env);
-  const attachmentRepository = createAttachmentRepository(pool, { messageCrypto });
-  const attachmentStorage = createLocalAttachmentStorage({
-    baseDir: process.env.AKSHACONNECT_ATTACHMENT_LOCAL_DIR,
-  });
-  const realtimeEventBus = createRealtimeEventBus();
+  const attachmentCrypto =
+    createAttachmentCryptoFromEnv(process.env);
 
-  const attachmentService = createAttachmentService({
-    messagingRepository,
-    attachmentRepository,
-    attachmentCrypto,
-    storage: attachmentStorage,
-    eventPublisher: realtimeEventBus,
-    pushPublisher: pushDeliveryService,
-  });
+  const attachmentRepository =
+    createAttachmentRepository(
+      pool,
+      { messageCrypto }
+    );
 
-  const messagingService = createMessagingService(
-    messagingRepository,
-    {
+  const attachmentStorage =
+    createLocalAttachmentStorage({
+      baseDir:
+        process.env.AKSHACONNECT_ATTACHMENT_LOCAL_DIR,
+    });
+
+  const realtimeEventBus =
+    createRealtimeEventBus();
+
+  const attachmentService =
+    createAttachmentService({
+      messagingRepository,
+      attachmentRepository,
+      attachmentCrypto,
+      storage: attachmentStorage,
       eventPublisher: realtimeEventBus,
       pushPublisher: pushDeliveryService,
-      attachmentCleanup: attachmentService,
-    }
-  );
+    });
+
+  const messagingService =
+    createMessagingService(
+      messagingRepository,
+      {
+        eventPublisher: realtimeEventBus,
+        pushPublisher: pushDeliveryService,
+        attachmentCleanup: attachmentService,
+      }
+    );
 
   let ssoService = null;
   let ssoRepository = null;
@@ -150,120 +185,196 @@ async function start() {
   let erpDirectoryRepository = null;
 
   if (identityProvider === 'AKSHAERP') {
-    ({ identityGateway } = createAkshaErpHttpAdapters({
-      baseUrl: process.env.AKSHACONNECT_ERP_BASE_URL,
-      apiClientId: process.env.AKSHACONNECT_ERP_API_CLIENT_ID,
-      apiKey: process.env.AKSHACONNECT_ERP_API_KEY,
-      timeoutMs: process.env.AKSHACONNECT_ERP_TIMEOUT_MS || 5000,
-      fetchImpl: global.fetch,
-    }));
+    ({ identityGateway } =
+      createAkshaErpHttpAdapters({
+        baseUrl:
+          process.env.AKSHACONNECT_ERP_BASE_URL,
+        apiClientId:
+          process.env.AKSHACONNECT_ERP_API_CLIENT_ID,
+        apiKey:
+          process.env.AKSHACONNECT_ERP_API_KEY,
+        timeoutMs:
+          process.env.AKSHACONNECT_ERP_TIMEOUT_MS ||
+          5000,
+        fetchImpl: global.fetch,
+      }));
 
-    ssoRepository = createAkshaErpSsoRepository(pool);
-    ssoService = createAkshaErpSsoService({
-      identityGateway,
-      repository: ssoRepository,
-      sessionRepository: identityRepository,
-      sessionTtlSeconds:
-        process.env.AKSHACONNECT_SSO_SESSION_TTL_SECONDS,
-    });
+    ssoRepository =
+      createAkshaErpSsoRepository(pool);
 
-    erpDirectoryRepository = createAkshaErpDirectoryRepository(pool);
+    ssoService =
+      createAkshaErpSsoService({
+        identityGateway,
+        repository: ssoRepository,
+        sessionRepository:
+          identityRepository,
+        sessionTtlSeconds:
+          process.env
+            .AKSHACONNECT_SSO_SESSION_TTL_SECONDS,
+      });
+
+    erpDirectoryRepository =
+      createAkshaErpDirectoryRepository(pool);
   }
 
-  const mobileAuthRepository = createMobileAuthRepository(pool);
-  const mobileAuthService = createMobileAuthService({
-    repository: mobileAuthRepository,
-    identityGateway,
-    ssoRepository,
-    sessionRepository: identityRepository,
-    authRequestTtlSeconds:
-      process.env.AKSHACONNECT_MOBILE_AUTH_REQUEST_TTL_SECONDS,
-    deviceTtlSeconds:
-      process.env.AKSHACONNECT_MOBILE_DEVICE_TTL_SECONDS,
-    accessTtlSeconds:
-      process.env.AKSHACONNECT_SSO_SESSION_TTL_SECONDS ||
-      process.env.AKSHACONNECT_LOCAL_SESSION_TTL_SECONDS,
-  });
-  const mobileAuthHttpHandler = createMobileAuthHttpHandler({
-    mobileAuthService,
-    allowedErpOrigins:
-      process.env.AKSHACONNECT_ERP_ALLOWED_ORIGINS,
-  });
+  const mobileAuthRepository =
+    createMobileAuthRepository(pool);
 
-  const directoryService = createProviderDirectoryService({
-    identityProvider,
-    localIdentityService,
-    identityGateway,
-    erpDirectoryRepository,
-  });
+  const mobileAuthService =
+    createMobileAuthService({
+      repository:
+        mobileAuthRepository,
+      identityGateway,
+      ssoRepository,
+      sessionRepository:
+        identityRepository,
+      authRequestTtlSeconds:
+        process.env
+          .AKSHACONNECT_MOBILE_AUTH_REQUEST_TTL_SECONDS,
+      deviceTtlSeconds:
+        process.env
+          .AKSHACONNECT_MOBILE_DEVICE_TTL_SECONDS,
+      accessTtlSeconds:
+        process.env
+          .AKSHACONNECT_SSO_SESSION_TTL_SECONDS ||
+        process.env
+          .AKSHACONNECT_LOCAL_SESSION_TTL_SECONDS,
+    });
 
-  const workspaceDirectoryHttpHandler = createWorkspaceDirectoryHttpHandler({
-    identityService: localIdentityService,
-    directoryService,
-    collaborationService,
-  });
+  const mobileAuthHttpHandler =
+    createMobileAuthHttpHandler({
+      mobileAuthService,
+      allowedErpOrigins:
+        process.env
+          .AKSHACONNECT_ERP_ALLOWED_ORIGINS,
+    });
 
-  const mobileVersionPolicy = createMobileVersionPolicyFromEnv(process.env);
+  const directoryService =
+    createProviderDirectoryService({
+      identityProvider,
+      localIdentityService,
+      identityGateway,
+      erpDirectoryRepository,
+    });
 
-  const appHandler = createRequestHandler({
-    localIdentityService,
-    collaborationService,
-    messagingService,
-    attachmentService,
-    pushRegistrationService,
-    mobileVersionPolicy,
-  });
+  const workspaceDirectoryHttpHandler =
+    createWorkspaceDirectoryHttpHandler({
+      identityService:
+        localIdentityService,
+      directoryService,
+      collaborationService,
+    });
 
-  const ssoHttpHandler = createAkshaErpSsoHttpHandler({
-    identityProvider,
-    ssoService,
-    allowedOrigins:
-      process.env.AKSHACONNECT_ERP_ALLOWED_ORIGINS,
-  });
+  const mobileVersionPolicy =
+    createMobileVersionPolicyFromEnv(
+      process.env
+    );
 
-  const trustedErpBridgeHttpHandler = createTrustedErpBridgeHttpHandler({
-    identityProvider,
-    ssoService,
-    identityService: localIdentityService,
-    messagingService,
-    allowedOrigins:
-      process.env.AKSHACONNECT_ERP_ALLOWED_ORIGINS,
-  });
+  const appHandler =
+    createRequestHandler({
+      localIdentityService,
+      collaborationService,
+      conversationPlatformService,
+      messagingService,
+      attachmentService,
+      pushRegistrationService,
+      mobileVersionPolicy,
+    });
 
-  const server = http.createServer(async (req, res) => {
-    let handled = await mobileAuthHttpHandler(req, res);
-    if (handled) return;
+  const ssoHttpHandler =
+    createAkshaErpSsoHttpHandler({
+      identityProvider,
+      ssoService,
+      allowedOrigins:
+        process.env
+          .AKSHACONNECT_ERP_ALLOWED_ORIGINS,
+    });
 
-    handled = await trustedErpBridgeHttpHandler(req, res);
-    if (handled) return;
+  const trustedErpBridgeHttpHandler =
+    createTrustedErpBridgeHttpHandler({
+      identityProvider,
+      ssoService,
+      identityService:
+        localIdentityService,
+      messagingService,
+      allowedOrigins:
+        process.env
+          .AKSHACONNECT_ERP_ALLOWED_ORIGINS,
+    });
 
-    handled = await ssoHttpHandler(req, res);
-    if (handled) return;
+  const server =
+    http.createServer(
+      async (req, res) => {
+        let handled =
+          await mobileAuthHttpHandler(
+            req,
+            res
+          );
 
-    handled = await workspaceSessionHttpHandler(req, res);
-    if (handled) return;
+        if (handled) return;
 
-    handled = await workspaceDirectoryHttpHandler(req, res);
-    if (handled) return;
+        handled =
+          await trustedErpBridgeHttpHandler(
+            req,
+            res
+          );
 
-    await appHandler(req, res);
-  });
+        if (handled) return;
 
-  const realtimeGateway = attachRealtimeGateway({
-    server,
-    localIdentityService,
-    messagingRepository,
-    eventBus: realtimeEventBus,
-    presenceRegistry,
-  });
+        handled =
+          await ssoHttpHandler(
+            req,
+            res
+          );
 
-  await new Promise((resolve) => server.listen(port, '0.0.0.0', resolve));
+        if (handled) return;
+
+        handled =
+          await workspaceSessionHttpHandler(
+            req,
+            res
+          );
+
+        if (handled) return;
+
+        handled =
+          await workspaceDirectoryHttpHandler(
+            req,
+            res
+          );
+
+        if (handled) return;
+
+        await appHandler(req, res);
+      }
+    );
+
+  const realtimeGateway =
+    attachRealtimeGateway({
+      server,
+      localIdentityService,
+      messagingRepository,
+      eventBus: realtimeEventBus,
+      presenceRegistry,
+    });
+
+  await new Promise(
+    (resolve) =>
+      server.listen(
+        port,
+        '0.0.0.0',
+        resolve
+      )
+  );
+
   console.log(
     `AkshaConnect API ${VERSION} listening on port ${port} identity_provider=${identityProvider}`
   );
 
   async function shutdown(signal) {
-    console.log(`Received ${signal}; shutting down AkshaConnect API`);
+    console.log(
+      `Received ${signal}; shutting down AkshaConnect API`
+    );
 
     await realtimeGateway.close();
 
@@ -275,21 +386,29 @@ async function start() {
   }
 
   process.on('SIGINT', () => {
-    shutdown('SIGINT').catch((error) => {
-      console.error(error);
-      process.exitCode = 1;
-    });
+    shutdown('SIGINT').catch(
+      (error) => {
+        console.error(error);
+        process.exitCode = 1;
+      }
+    );
   });
 
   process.on('SIGTERM', () => {
-    shutdown('SIGTERM').catch((error) => {
-      console.error(error);
-      process.exitCode = 1;
-    });
+    shutdown('SIGTERM').catch(
+      (error) => {
+        console.error(error);
+        process.exitCode = 1;
+      }
+    );
   });
 }
 
 start().catch((error) => {
-  console.error(`AkshaConnect API startup failed: ${error.code || error.message}`);
+  console.error(
+    `AkshaConnect API startup failed: ${
+      error.code || error.message
+    }`
+  );
   process.exitCode = 1;
 });

@@ -1,4 +1,3 @@
-
 'use strict';
 
 const { randomUUID } = require('node:crypto');
@@ -44,6 +43,7 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
     conversationId,
     senderMemberId,
     clientMessageId,
+    replyToMessageId = null,
     fileName,
     contentType,
     sizeBytes,
@@ -78,9 +78,10 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
           body_auth_tag,
           body_key_id,
           body_encryption_version,
-          client_message_id
+          client_message_id,
+          reply_to_message_id
         )
-        VALUES ($1, $2, $3, 'HUMAN', $4, 'ATTACHMENT', $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, 'HUMAN', $4, 'ATTACHMENT', $5, $6, $7, $8, $9, $10, $11)
       `, [
         messageId,
         workspaceId,
@@ -92,6 +93,7 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
         encryptedName.bodyKeyId,
         encryptedName.bodyEncryptionVersion,
         clientMessageId,
+        replyToMessageId || null,
       ]);
 
       await client.query(`
@@ -179,11 +181,7 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
     return result.rows || [];
   }
 
-  async function findAttachmentByMessageId({
-    workspaceId,
-    conversationId,
-    messageId,
-  }) {
+  async function findAttachmentByMessageId({ workspaceId, conversationId, messageId }) {
     const rows = await attachmentSelect(
       `a.workspace_id = $1
        AND a.conversation_id = $2
@@ -195,11 +193,7 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
     return rows[0] ? publicAttachment(rows[0]) : null;
   }
 
-  async function listAttachmentsForMessages({
-    workspaceId,
-    conversationId,
-    messageIds,
-  }) {
+  async function listAttachmentsForMessages({ workspaceId, conversationId, messageIds }) {
     if (!Array.isArray(messageIds) || messageIds.length === 0) return [];
     const rows = await attachmentSelect(
       `a.workspace_id = $1
@@ -212,11 +206,7 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
     return rows.map(publicAttachment);
   }
 
-  async function getAttachmentForDownload({
-    workspaceId,
-    conversationId,
-    attachmentId,
-  }) {
+  async function getAttachmentForDownload({ workspaceId, conversationId, attachmentId }) {
     const rows = await attachmentSelect(
       `a.workspace_id = $1
        AND a.conversation_id = $2
@@ -237,25 +227,14 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
     });
   }
 
-  async function detachAttachmentByMessageId({
-    workspaceId,
-    conversationId,
-    messageId,
-  }) {
+  async function detachAttachmentByMessageId({ workspaceId, conversationId, messageId }) {
     const result = await db.query(`
       DELETE FROM ac_attachment
       WHERE workspace_id = $1
         AND conversation_id = $2
         AND message_id = $3
-      RETURNING
-        attachment_id,
-        storage_provider,
-        storage_key
-    `, [
-      workspaceId,
-      conversationId,
-      messageId,
-    ]);
+      RETURNING attachment_id, storage_provider, storage_key
+    `, [workspaceId, conversationId, messageId]);
 
     return result.rows?.[0] || null;
   }

@@ -237,6 +237,19 @@ export function listMessages(
   return request(baseUrl, path, { token });
 }
 
+export function listThread(
+  baseUrl,
+  token,
+  conversationId,
+  parentMessageId
+) {
+  return request(baseUrl,
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(parentMessageId)}/thread`,
+    { token }
+  );
+}
+
 export function sendMessage(
   baseUrl,
   token,
@@ -289,7 +302,7 @@ export async function uploadAttachment(
   baseUrl,
   token,
   conversationId,
-  { localPath, fileName, contentType, clientMessageId, onProgress }
+  { localPath, fileName, contentType, clientMessageId, replyToMessageId = null, onProgress }
 ) {
   const root = normalizeBaseUrl(baseUrl);
   const blobUtil = getNativeBlobUtil();
@@ -308,6 +321,7 @@ export async function uploadAttachment(
         'content-type': contentType,
         'x-akshaconnect-file-name': encodeURIComponent(fileName || 'attachment'),
         'x-client-message-id': clientMessageId,
+        ...(replyToMessageId ? { 'x-reply-to-message-id': replyToMessageId } : {}),
       },
       blobUtil.wrap(localPath)
     );
