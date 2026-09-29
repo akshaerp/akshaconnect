@@ -9,6 +9,7 @@ import './threadPanel.css';
 
 const MAX_PENDING_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const THREAD_COMPOSER_EMOJIS = ['😀','😃','😄','😁','😂','😊','😍','👍','👏','🙏','🎉','✅','❤️','🔥','👀','🤝'];
 
 function initials(name = '') {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'AC';
@@ -43,8 +44,20 @@ function mergeById(rows) {
   });
 }
 
-function ThreadMessage({ message, token, conversationId, onApiFailure }) {
+function ThreadMessage({
+  message,
+  token,
+  conversationId,
+  currentMemberId,
+  onApiFailure,
+  parent = false,
+}) {
   const deleted = Boolean(message.deleted_at);
+  const own = message.sender_type === 'HUMAN'
+    && message.sender_member_id === currentMemberId;
+  const displayName = own
+    ? 'You'
+    : message.sender_display_name || (message.sender_type === 'SYSTEM' ? 'System' : 'Member');
 
   async function download(attachment) {
     try {
@@ -63,35 +76,53 @@ function ThreadMessage({ message, token, conversationId, onApiFailure }) {
   }
 
   return (
-    <article className="thread-message" data-thread-message-id={message.message_id}>
-      <span className="thread-avatar">{initials(message.sender_display_name || 'Member')}</span>
-      <div className="thread-message-copy">
+    <article
+      className={`thread-message ${own ? 'thread-message-own' : 'thread-message-other'} ${parent ? 'thread-parent-message' : ''}`}
+      data-thread-message-id={message.message_id}
+    >
+      {!own ? (
+        <span className={`thread-avatar ${message.sender_type === 'SYSTEM' ? 'thread-avatar-system' : ''}`}>
+          {message.sender_type === 'SYSTEM' ? 'S' : initials(message.sender_display_name || 'Member')}
+        </span>
+      ) : null}
+
+      <div className="thread-message-cluster">
         <div className="thread-message-meta">
-          <strong>{message.sender_display_name || 'Member'}</strong>
+          <strong>{displayName}</strong>
           <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
           {message.edited_at && !deleted ? <span>edited</span> : null}
         </div>
-        {deleted ? (
-          <div className="thread-deleted">Message deleted</div>
-        ) : message.message_type !== 'ATTACHMENT' ? (
-          <div className="thread-message-body">{message.body_text || ''}</div>
-        ) : null}
-        {!deleted && Array.isArray(message.attachments) && message.attachments.length ? (
-          <div className="thread-attachments">
-            {message.attachments.map((attachment) => (
-              <button
-                key={attachment.attachment_id}
-                type="button"
-                className="thread-attachment"
-                onClick={() => download(attachment)}
-              >
-                <strong>{attachment.file_name}</strong>
-                <span>{formatFileSize(attachment.size_bytes)} · Download</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
+
+        <div className="thread-message-bubble">
+          {deleted ? (
+            <div className="thread-deleted">Message deleted</div>
+          ) : message.message_type !== 'ATTACHMENT' ? (
+            <div className="thread-message-body">{message.body_text || ''}</div>
+          ) : null}
+
+          {!deleted && Array.isArray(message.attachments) && message.attachments.length ? (
+            <div className="thread-attachments">
+              {message.attachments.map((attachment) => (
+                <button
+                  key={attachment.attachment_id}
+                  type="button"
+                  className="thread-attachment"
+                  onClick={() => download(attachment)}
+                >
+                  <strong>{attachment.file_name}</strong>
+                  <span>{formatFileSize(attachment.size_bytes)} · Download</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
+
+      {own ? (
+        <span className="thread-avatar thread-avatar-own">
+          {initials(message.sender_display_name || 'You')}
+        </span>
+      ) : null}
     </article>
   );
 }
@@ -113,6 +144,7 @@ export default function ThreadPanel({
   const [error, setError] = useState('');
   const [draft, setDraft] = useState('');
   const [pendingFiles, setPendingFiles] = useState([]);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const fileInputRef = useRef(null);
   const bottomRef = useRef(null);
   const onApiFailureRef = useRef(onApiFailure);
@@ -125,6 +157,7 @@ export default function ThreadPanel({
 
   const parentId = parentMessage?.message_id || '';
   const conversationId = conversation?.id || '';
+  const currentMemberId = session?.workspace_member_id || '';
 
   useEffect(() => {
     let cancelled = false;
@@ -134,6 +167,7 @@ export default function ThreadPanel({
     setReplies([]);
     setDraft('');
     setPendingFiles([]);
+    setShowEmojiPicker(false);
 
     if (!token || !conversationId || !parentId) return undefined;
 
@@ -207,12 +241,19 @@ export default function ThreadPanel({
     });
   }
 
+  function insertEmoji(emoji) {
+    const next = `${draft}${emoji}`.slice(0, 8000);
+    setDraft(next);
+    setShowEmojiPicker(false);
+  }
+
   async function submit(event) {
     event.preventDefault();
     const bodyText = draft.trim();
     if (sending || (!bodyText && pendingFiles.length === 0)) return;
     setSending(true);
     setError('');
+    setShowEmojiPicker(false);
 
     try {
       const created = [];
@@ -236,7 +277,7 @@ export default function ThreadPanel({
 
       if (created.length) {
         setReplies((current) => mergeById([...current, ...created]));
-        onThreadActivity?.(created.at(-1)?.message_id);
+        onThreadActivityRef.current?.(created.at(-1)?.message_id);
       }
       setPendingFiles([]);
       window.requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }));
@@ -252,31 +293,69 @@ export default function ThreadPanel({
   return (
     <aside className="thread-panel" aria-label="Message thread">
       <header className="thread-header">
-        <div><strong>{title}</strong><span>{conversation?.title || ''}</span></div>
+        <div>
+          <strong>{title}</strong>
+          <span>{conversation?.title || ''}</span>
+        </div>
         <button type="button" onClick={onClose} aria-label="Close thread">×</button>
       </header>
 
       <div className="thread-history">
-        {parent ? <ThreadMessage message={parent} token={token} conversationId={conversationId} onApiFailure={onApiFailure} /> : null}
-        <div className="thread-separator"><span>Replies</span></div>
+        {parent ? (
+          <ThreadMessage
+            message={parent}
+            token={token}
+            conversationId={conversationId}
+            currentMemberId={currentMemberId}
+            onApiFailure={onApiFailure}
+            parent
+          />
+        ) : null}
+
+        <div className="thread-separator">
+          <span>{replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'Replies'}</span>
+        </div>
+
         {loading ? <div className="thread-state">Loading replies…</div> : null}
         {!loading && replies.length === 0 ? <div className="thread-state">No replies yet.</div> : null}
-        {replies.map((message) => (
-          <ThreadMessage key={message.message_id} message={message} token={token} conversationId={conversationId} onApiFailure={onApiFailure} />
-        ))}
-        <div ref={bottomRef} />
+
+        <div className="thread-replies" aria-live="polite">
+          {replies.map((message) => (
+            <ThreadMessage
+              key={message.message_id}
+              message={message}
+              token={token}
+              conversationId={conversationId}
+              currentMemberId={currentMemberId}
+              onApiFailure={onApiFailure}
+            />
+          ))}
+        </div>
+
+        <div ref={bottomRef} className="thread-bottom-anchor" aria-hidden="true" />
       </div>
 
       <footer className="thread-composer">
         {error ? <div className="thread-error" role="alert">{error}</div> : null}
+
         {pendingFiles.length ? (
           <div className="thread-pending-files">
             {pendingFiles.map((pending) => (
-              <span key={pending.clientMessageId}>{pending.file.name}<button type="button" onClick={() => setPendingFiles((rows) => rows.filter((row) => row.clientMessageId !== pending.clientMessageId))}>×</button></span>
+              <span key={pending.clientMessageId}>
+                {pending.file.name}
+                <button
+                  type="button"
+                  onClick={() => setPendingFiles((rows) => rows.filter((row) => row.clientMessageId !== pending.clientMessageId))}
+                  aria-label={`Remove ${pending.file.name}`}
+                >
+                  ×
+                </button>
+              </span>
             ))}
           </div>
         ) : null}
-        <form onSubmit={submit}>
+
+        <form className="thread-composer-box" onSubmit={submit}>
           <textarea
             rows={3}
             maxLength={8000}
@@ -285,16 +364,69 @@ export default function ThreadPanel({
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
-                if (!sending && (draft.trim() || pendingFiles.length)) event.currentTarget.form?.requestSubmit();
+                if (!sending && (draft.trim() || pendingFiles.length)) {
+                  event.currentTarget.form?.requestSubmit();
+                }
               }
             }}
             placeholder="Reply in thread"
             aria-label="Reply in thread"
           />
-          <input ref={fileInputRef} type="file" multiple className="attachment-file-input" onChange={chooseFiles} tabIndex={-1} aria-hidden="true" />
+
+          {showEmojiPicker ? (
+            <div className="thread-emoji-picker" role="group" aria-label="Thread emoji picker">
+              {THREAD_COMPOSER_EMOJIS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => insertEmoji(emoji)}
+                  aria-label={`Insert ${emoji}`}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="attachment-file-input"
+            onChange={chooseFiles}
+            tabIndex={-1}
+            aria-hidden="true"
+          />
+
           <div className="thread-composer-actions">
-            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={sending || pendingFiles.length >= MAX_PENDING_ATTACHMENTS}>＋ File</button>
-            <button type="submit" disabled={sending || (!draft.trim() && pendingFiles.length === 0)}>{sending ? 'Sending…' : 'Reply'}</button>
+            <div className="thread-composer-tools">
+              <button
+                type="button"
+                className="thread-composer-tool"
+                onClick={() => setShowEmojiPicker((value) => !value)}
+                disabled={sending}
+              >
+                😊 Emoji
+              </button>
+              <button
+                type="button"
+                className="thread-composer-tool"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sending || pendingFiles.length >= MAX_PENDING_ATTACHMENTS}
+              >
+                ＋ File
+              </button>
+            </div>
+
+            <span className="thread-composer-hint">Enter to send · Shift+Enter for new line</span>
+
+            <button
+              type="submit"
+              className="thread-send-button"
+              disabled={sending || (!draft.trim() && pendingFiles.length === 0)}
+            >
+              {sending ? 'Sending…' : 'Reply'}
+            </button>
           </div>
         </form>
       </footer>
