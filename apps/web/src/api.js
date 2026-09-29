@@ -140,10 +140,40 @@ export function listThread(
   );
 }
 
+export function getThreadReadCursor(token, conversationId, parentMessageId) {
+  return request(
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(parentMessageId)}/thread/read-cursor`,
+    { token }
+  );
+}
+
+export function markThreadRead(
+  token,
+  conversationId,
+  parentMessageId,
+  lastReadMessageId
+) {
+  return request(
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(parentMessageId)}/thread/read-cursor`,
+    {
+      token,
+      method: 'PUT',
+      body: { last_read_message_id: lastReadMessageId },
+    }
+  );
+}
+
 export function sendMessage(
   token,
   conversationId,
-  { bodyText, clientMessageId, replyToMessageId = null }
+  {
+    bodyText,
+    clientMessageId,
+    replyToMessageId = null,
+    quoteMessageId = null,
+  }
 ) {
   return request(`/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`, {
     token,
@@ -152,6 +182,7 @@ export function sendMessage(
       body_text: bodyText,
       client_message_id: clientMessageId,
       reply_to_message_id: replyToMessageId,
+      quote_message_id: quoteMessageId,
     },
   });
 }
@@ -199,7 +230,12 @@ export function deleteMessage(
 export async function uploadAttachment(
   token,
   conversationId,
-  { file, clientMessageId, replyToMessageId = null }
+  {
+    file,
+    clientMessageId,
+    replyToMessageId = null,
+    quoteMessageId = null,
+  }
 ) {
   if (!file) throw new TypeError('file is required');
 
@@ -214,6 +250,7 @@ export async function uploadAttachment(
         'x-akshaconnect-file-name': encodeURIComponent(file.name || 'attachment'),
         'x-client-message-id': clientMessageId,
         ...(replyToMessageId ? { 'x-reply-to-message-id': replyToMessageId } : {}),
+        ...(quoteMessageId ? { 'x-quote-message-id': quoteMessageId } : {}),
       },
       body: file,
     }
@@ -260,4 +297,60 @@ export function markRead(token, conversationId, lastReadMessageId) {
 
 export function listUnreadCounts(token) {
   return request('/api/v1/unread-counts', { token });
+}
+
+export function getOwnPresenceProfile(token) {
+  return request('/api/v1/presence/me', { token });
+}
+
+export function updateOwnPresenceProfile(
+  token,
+  { customStatus = '', statusExpiresAt = null } = {}
+) {
+  return request('/api/v1/presence/me', {
+    token,
+    method: 'PUT',
+    body: {
+      custom_status: customStatus || null,
+      status_expires_at: statusExpiresAt || null,
+    },
+  });
+}
+
+export function listPresenceProfiles(token, workspaceMemberIds = []) {
+  const ids = [...new Set((workspaceMemberIds || []).filter(Boolean))];
+  const params = new URLSearchParams();
+  params.set('ids', ids.join(','));
+  return request(`/api/v1/presence/members?${params.toString()}`, { token });
+}
+
+
+export function searchConversationMessages(
+  token,
+  conversationId,
+  { query = '', limit = 50 } = {}
+) {
+  const params = new URLSearchParams();
+  params.set('query', String(query || '').trim());
+  params.set('limit', String(limit));
+  return request(
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}/search?${params.toString()}`,
+    { token }
+  );
+}
+
+export function toggleMessageReaction(token, conversationId, messageId, emoji) {
+  return request(
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}/reactions`,
+    { token, method: 'PUT', body: { emoji } }
+  );
+}
+
+export function listMessageReactionUsers(token, conversationId, messageId) {
+  return request(
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}/reactions`,
+    { token }
+  );
 }

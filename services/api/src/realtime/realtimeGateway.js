@@ -25,16 +25,16 @@ function safeJson(raw) {
   if (Buffer.byteLength(raw) > MAX_CLIENT_PAYLOAD_BYTES) return null;
   try {
     const parsed = JSON.parse(String(raw));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : null;
   } catch {
     return null;
   }
 }
 
 function closeSocket(ws, code, reason) {
-  try {
-    ws.close(code, reason);
-  } catch {
+  try { ws.close(code, reason); } catch {
     try { ws.terminate(); } catch {}
   }
 }
@@ -76,7 +76,6 @@ function attachRealtimeGateway({
   }
 
   const registry = presenceRegistry || createPresenceRegistry();
-
   const websocketModule = wsModule || require('ws');
   const WebSocketServer = websocketModule.WebSocketServer;
   if (typeof WebSocketServer !== 'function') {
@@ -101,11 +100,34 @@ function attachRealtimeGateway({
       type: 'presence.updated',
       workspace_member_id: presence.workspace_member_id,
       status: presence.status || PUBLIC_NOT_AVAILABLE,
+      custom_status: presence.custom_status || null,
+      status_expires_at: presence.status_expires_at || null,
+      last_seen_at: presence.last_seen_at || null,
       server_time: new Date().toISOString(),
     };
 
     for (const connection of workspaceConnections(workspaceId)) {
       jsonSend(connection.ws, payload);
+    }
+  }
+
+  async function loadDurableProfile(connection) {
+    if (!connection.claims || typeof messagingRepository.getMemberPresenceProfile !== 'function') {
+      return null;
+    }
+    try {
+      const profile = await messagingRepository.getMemberPresenceProfile({
+        workspaceId: connection.claims.workspace_id,
+        workspaceMemberId: connection.claims.workspace_member_id,
+      });
+      registry.setMemberProfile?.(
+        connection.claims.workspace_id,
+        connection.claims.workspace_member_id,
+        profile
+      );
+      return profile;
+    } catch {
+      return null;
     }
   }
 
@@ -137,10 +159,7 @@ function attachRealtimeGateway({
     connection.clientType = normalizedClientType;
 
     if (result?.changed) {
-      broadcastPresence(
-        connection.claims.workspace_id,
-        result.presence
-      );
+      broadcastPresence(connection.claims.workspace_id, result.presence);
     }
 
     return result;
@@ -149,22 +168,32 @@ function attachRealtimeGateway({
   function unregisterPresence(connection) {
     if (!connection.presenceRegistered || !connection.claims) return;
 
-    const result = registry.removeConnection(connection.connectionId);
+    const lastSeenAt = new Date().toISOString();
+    const result = registry.removeConnection(connection.connectionId, { lastSeenAt });
     connection.presenceRegistered = false;
 
     if (result?.changed) {
-      broadcastPresence(
-        connection.claims.workspace_id,
-        result.presence
-      );
+      broadcastPresence(connection.claims.workspace_id, result.presence);
+    }
+
+    if (typeof messagingRepository.touchMemberLastSeen === 'function') {
+      messagingRepository.touchMemberLastSeen({
+        workspaceId: connection.claims.workspace_id,
+        workspaceMemberId: connection.claims.workspace_member_id,
+      }).then((profile) => {
+        if (!profile) return;
+        registry.setMemberProfile?.(
+          connection.claims.workspace_id,
+          connection.claims.workspace_member_id,
+          profile
+        );
+      }).catch(() => {});
     }
   }
 
   function handleUpgrade(req, socket, head) {
     let url;
-    try {
-      url = new URL(req.url || '/', 'http://localhost');
-    } catch {
+    try { url = new URL(req.url || '/', 'http://localhost'); } catch {
       socket.destroy();
       return;
     }
@@ -174,8 +203,6 @@ function attachRealtimeGateway({
       return;
     }
 
-    // Authentication is intentionally not accepted from the URL. Browser and
-    // mobile clients send the bearer token in the first WebSocket frame.
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req);
     });
@@ -200,9 +227,7 @@ function attachRealtimeGateway({
     }, authTimeoutMs);
     authTimer.unref?.();
 
-    ws.on('pong', () => {
-      connection.alive = true;
-    });
+    ws.on('pong', () => { connection.alive = true; });
 
     ws.on('message', async (raw) => {
       const message = safeJson(raw);
@@ -223,10 +248,8 @@ function attachRealtimeGateway({
           connection.authenticated = true;
           clearTimeout(authTimer);
 
-          registerPresence(
-            connection,
-            normalizeClientType(message.client_type)
-          );
+          await loadDurableProfile(connection);
+          registerPresence(connection, normalizeClientType(message.client_type));
 
           jsonSend(ws, {
             type: 'ready',
@@ -252,32 +275,17 @@ function attachRealtimeGateway({
         const activeConversationId =
           state === 'ACTIVE'
             ? normalizeConversationId(
-              message.active_conversation_id ??
-              message.activeConversationId
+              message.active_conversation_id ?? message.activeConversationId
             )
             : null;
 
         const wasRegistered = connection.presenceRegistered;
         const result = wasRegistered
-          ? registry.updateConnection(
-            connection.connectionId,
-            {
-              state,
-              activeConversationId,
-            }
-          )
-          : registerPresence(
-            connection,
-            connection.clientType,
-            state,
-            activeConversationId
-          );
+          ? registry.updateConnection(connection.connectionId, { state, activeConversationId })
+          : registerPresence(connection, connection.clientType, state, activeConversationId);
 
         if (wasRegistered && result?.changed) {
-          broadcastPresence(
-            connection.claims.workspace_id,
-            result.presence
-          );
+          broadcastPresence(connection.claims.workspace_id, result.presence);
         }
 
         jsonSend(ws, {
@@ -290,7 +298,6 @@ function attachRealtimeGateway({
 
       if (message.type === 'presence.leave') {
         unregisterPresence(connection);
-
         jsonSend(ws, {
           type: 'presence.ack',
           status: PUBLIC_NOT_AVAILABLE,
@@ -310,9 +317,7 @@ function attachRealtimeGateway({
       connections.delete(connection);
     });
 
-    ws.on('error', () => {
-      // close/error cleanup is handled by the socket lifecycle.
-    });
+    ws.on('error', () => {});
   });
 
   const unsubscribe = eventBus.subscribe(async (event) => {
@@ -355,6 +360,37 @@ function attachRealtimeGateway({
         if (connection.claims.workspace_member_id !== event.workspace_member_id) continue;
         jsonSend(connection.ws, payload);
       }
+      return;
+    }
+
+    if (event.type === 'thread_read_cursor.updated') {
+      const payload = {
+        type: 'thread_read_cursor.updated',
+        conversation_id: event.conversation_id,
+        thread_root_message_id: event.thread_root_message_id,
+        last_read_message_id: event.last_read_message_id,
+        read_at: event.read_at,
+      };
+
+      for (const connection of connections) {
+        if (!connection.authenticated || !connection.claims) continue;
+        if (connection.claims.workspace_id !== event.workspace_id) continue;
+        if (connection.claims.workspace_member_id !== event.workspace_member_id) continue;
+        jsonSend(connection.ws, payload);
+      }
+      return;
+    }
+
+    if (event.type === 'presence.profile.updated') {
+      registry.setMemberProfile?.(
+        event.workspace_id,
+        event.workspace_member_id,
+        event.profile || {}
+      );
+      broadcastPresence(
+        event.workspace_id,
+        registry.getMemberPresence(event.workspace_id, event.workspace_member_id)
+      );
     }
   });
 
@@ -366,9 +402,7 @@ function attachRealtimeGateway({
         !connection.authenticated ||
         !connection.presenceRegistered ||
         connection.clientType !== 'MOBILE'
-      ) {
-        continue;
-      }
+      ) continue;
 
       const row = registry.getConnection(connection.connectionId);
       if (!row) {

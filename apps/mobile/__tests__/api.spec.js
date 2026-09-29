@@ -95,7 +95,7 @@ describe('AkshaConnect mobile durable messaging API', () => {
     expect(body.workspace_id).toBeUndefined();
   });
 
-  test('loads durable unread counts for the authenticated member', async () => {
+  test('loads durable unread counts through the V16 workspace bootstrap', async () => {
     const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
       status: 200,
@@ -117,7 +117,7 @@ describe('AkshaConnect mobile durable messaging API', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe(
-      'https://connect.example.com/api/v1/unread-counts'
+      'https://connect.example.com/api/v1/mobile/workspace-bootstrap'
     );
     expect(fetchMock.mock.calls[0][1].headers.authorization).toBe(
       'Bearer token-1'

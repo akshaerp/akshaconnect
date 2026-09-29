@@ -43,17 +43,8 @@ function mergeById(rows) {
   });
 }
 
-function ThreadMessage({
-  message,
-  token,
-  conversationId,
-  currentMemberId,
-  onApiFailure,
-}) {
+function ThreadMessage({ message, token, conversationId, onApiFailure }) {
   const deleted = Boolean(message.deleted_at);
-  const own =
-    message.sender_type === 'HUMAN' &&
-    message.sender_member_id === currentMemberId;
 
   async function download(attachment) {
     try {
@@ -72,36 +63,26 @@ function ThreadMessage({
   }
 
   return (
-    <article
-      className={`thread-message ${own ? 'thread-message-own' : 'thread-message-other'}`}
-      data-thread-message-id={message.message_id}
-    >
-      {!own ? (
-        <span className="thread-avatar">
-          {initials(message.sender_display_name || 'Member')}
-        </span>
-      ) : null}
-
-      <div className={`thread-message-bubble ${own ? 'thread-bubble-own' : 'thread-bubble-other'}`}>
+    <article className="thread-message" data-thread-message-id={message.message_id}>
+      <span className="thread-avatar">{initials(message.sender_display_name || 'Member')}</span>
+      <div className="thread-message-copy">
         <div className="thread-message-meta">
-          <strong>{own ? 'You' : message.sender_display_name || 'Member'}</strong>
+          <strong>{message.sender_display_name || 'Member'}</strong>
           <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
           {message.edited_at && !deleted ? <span>edited</span> : null}
         </div>
-
         {deleted ? (
           <div className="thread-deleted">Message deleted</div>
         ) : message.message_type !== 'ATTACHMENT' ? (
           <div className="thread-message-body">{message.body_text || ''}</div>
         ) : null}
-
         {!deleted && Array.isArray(message.attachments) && message.attachments.length ? (
           <div className="thread-attachments">
             {message.attachments.map((attachment) => (
               <button
                 key={attachment.attachment_id}
                 type="button"
-                className={`thread-attachment ${own ? 'thread-attachment-own' : ''}`}
+                className="thread-attachment"
                 onClick={() => download(attachment)}
               >
                 <strong>{attachment.file_name}</strong>
@@ -137,7 +118,6 @@ export default function ThreadPanel({
 
   const parentId = parentMessage?.message_id || '';
   const conversationId = conversation?.id || '';
-  const currentMemberId = session?.workspace_member_id || '';
 
   useEffect(() => {
     let cancelled = false;
@@ -270,27 +250,12 @@ export default function ThreadPanel({
       </header>
 
       <div className="thread-history">
-        {parent ? (
-          <ThreadMessage
-            message={parent}
-            token={token}
-            conversationId={conversationId}
-            currentMemberId={currentMemberId}
-            onApiFailure={onApiFailure}
-          />
-        ) : null}
+        {parent ? <ThreadMessage message={parent} token={token} conversationId={conversationId} onApiFailure={onApiFailure} /> : null}
         <div className="thread-separator"><span>Replies</span></div>
         {loading ? <div className="thread-state">Loading replies…</div> : null}
         {!loading && replies.length === 0 ? <div className="thread-state">No replies yet.</div> : null}
         {replies.map((message) => (
-          <ThreadMessage
-            key={message.message_id}
-            message={message}
-            token={token}
-            conversationId={conversationId}
-            currentMemberId={currentMemberId}
-            onApiFailure={onApiFailure}
-          />
+          <ThreadMessage key={message.message_id} message={message} token={token} conversationId={conversationId} onApiFailure={onApiFailure} />
         ))}
         <div ref={bottomRef} />
       </div>

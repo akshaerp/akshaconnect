@@ -127,6 +127,8 @@ function sameAttachment(existingMessage, existingAttachment, expected) {
     existingMessage.body_text === expected.fileName &&
     (existingMessage.reply_to_message_id || null) ===
       (expected.replyToMessageId || null) &&
+    (existingMessage.quote_message_id || null) ===
+      (expected.quoteMessageId || null) &&
     existingAttachment.content_type === expected.contentType &&
     Number(existingAttachment.size_bytes) === expected.sizeBytes &&
     existingAttachment.sha256_hex === expected.sha256Hex
@@ -244,6 +246,15 @@ function createAttachmentService({
     const contentType = validateContentType(input.contentType);
     const clientMessageId = validateClientMessageId(input.clientMessageId);
     const replyToMessageId = clean(input.replyToMessageId) || null;
+    const quoteMessageId = clean(input.quoteMessageId) || null;
+
+    if (replyToMessageId && quoteMessageId) {
+      throw boundaryError(
+        'MESSAGE_REPLY_MODE_CONFLICT',
+        'Use either a thread reply or a quoted reply',
+        400
+      );
+    }
 
     if (replyToMessageId) {
       const reply = await messagingRepository.getMessageInConversation({
@@ -260,6 +271,22 @@ function createAttachmentService({
         throw boundaryError(
           'MESSAGE_REPLY_NESTED_INVALID',
           'Replies must target the thread root message',
+          400
+        );
+      }
+    }
+
+    if (quoteMessageId) {
+      const quote = await messagingRepository.getMessageInConversation({
+        workspaceId: actor.workspaceId,
+        conversationId: allowedConversationId,
+        messageId: quoteMessageId,
+      });
+
+      if (!quote || quote.deleted_at) {
+        throw boundaryError(
+          'MESSAGE_QUOTE_INVALID',
+          'Quoted message is unavailable',
           400
         );
       }
@@ -291,6 +318,7 @@ function createAttachmentService({
       sizeBytes: data.length,
       sha256Hex,
       replyToMessageId,
+      quoteMessageId,
     };
 
     const existingMessage = await messagingRepository.findHumanMessageByClientId({
@@ -341,6 +369,7 @@ function createAttachmentService({
         senderMemberId: actor.workspaceMemberId,
         clientMessageId,
         replyToMessageId,
+        quoteMessageId,
         fileName,
         contentType,
         sizeBytes: data.length,
@@ -382,6 +411,20 @@ function createAttachmentService({
           'MESSAGE_IDEMPOTENCY_CONFLICT',
           'client_message_id is already bound to different attachment content',
           409
+        );
+      }
+      if (error?.code === '23503' && error?.constraint === 'fk_ac_message_quote') {
+        throw boundaryError(
+          'MESSAGE_QUOTE_INVALID',
+          'Quoted message is unavailable',
+          400
+        );
+      }
+      if (error?.code === '23514' && error?.constraint === 'ck_ac_message_quote_not_self') {
+        throw boundaryError(
+          'MESSAGE_QUOTE_INVALID',
+          'A message cannot quote itself',
+          400
         );
       }
       throw error;

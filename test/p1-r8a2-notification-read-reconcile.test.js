@@ -43,9 +43,9 @@ test('R8A.2 FCM has a stable Android tag per conversation', () => {
   assert.match(sender, /notification:\s*androidNotification/);
 });
 
-test('R8A.2 Android internal build advances to v14', () => {
+test('R8A.2 Android internal build uses accepted v15 baseline', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
 
-  assert.match(gradle, /versionCode 14/);
-  assert.match(gradle, /versionName "0\.3\.0-v14"/);
+  assert.match(gradle, /versionCode 15/);
+  assert.match(gradle, /versionName "0\.3\.0-v15"/);
 });

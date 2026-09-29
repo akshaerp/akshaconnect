@@ -44,6 +44,7 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
     senderMemberId,
     clientMessageId,
     replyToMessageId = null,
+    quoteMessageId = null,
     fileName,
     contentType,
     sizeBytes,
@@ -79,9 +80,10 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
           body_key_id,
           body_encryption_version,
           client_message_id,
-          reply_to_message_id
+          reply_to_message_id,
+          quote_message_id
         )
-        VALUES ($1, $2, $3, 'HUMAN', $4, 'ATTACHMENT', $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, 'HUMAN', $4, 'ATTACHMENT', $5, $6, $7, $8, $9, $10, $11, $12)
       `, [
         messageId,
         workspaceId,
@@ -94,6 +96,7 @@ function createAttachmentRepository(db, { messageCrypto } = {}) {
         encryptedName.bodyEncryptionVersion,
         clientMessageId,
         replyToMessageId || null,
+        quoteMessageId || null,
       ]);
 
       await client.query(`

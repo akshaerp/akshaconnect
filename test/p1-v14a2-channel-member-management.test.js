@@ -545,7 +545,7 @@ test(
 );
 
 test(
-  'V14.2 requires no database migration and keeps Android on the accepted V14 development line',
+  'V14.2 requires no database migration and keeps Android on the accepted V15 development line',
   () => {
     const schema = fs.readFileSync(
       path.join(
@@ -585,11 +585,11 @@ test(
     );
     assert.match(
       gradle,
-      /versionCode 14/
+      /versionCode 15/
     );
     assert.match(
       gradle,
-      /versionName "0\.3\.0-v14"/
+      /versionName "0\.3\.0-v15"/
     );
   }
 );

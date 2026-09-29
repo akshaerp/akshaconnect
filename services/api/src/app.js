@@ -255,6 +255,50 @@ function createRequestHandler({
         }
       }
 
+      if (
+        req.method === 'GET' &&
+        url.pathname === '/api/v1/mobile/workspace-bootstrap'
+      ) {
+        if (!localIdentityService) {
+          throw boundaryError(
+            'LOCAL_IDENTITY_NOT_CONFIGURED',
+            'LOCAL identity service is not configured',
+            503
+          );
+        }
+        if (!collaborationService) {
+          throw boundaryError(
+            'COLLABORATION_NOT_CONFIGURED',
+            'Collaboration service is not configured',
+            503
+          );
+        }
+        if (!messagingService) {
+          throw boundaryError(
+            'MESSAGING_NOT_CONFIGURED',
+            'Messaging service is not configured',
+            503
+          );
+        }
+
+        const claims = await localIdentityService.verifyAccessToken(
+          bearerToken(req)
+        );
+
+        const [channels, directMessages, unread] = await Promise.all([
+          collaborationService.listChannels(claims),
+          collaborationService.listDirectMessages(claims),
+          messagingService.listUnreadCounts(claims),
+        ]);
+
+        writeJson(res, 200, {
+          channels: channels || [],
+          direct_messages: directMessages || [],
+          unread_counts: unread?.unread_counts || [],
+        });
+        return;
+      }
+
       const isCollaborationRoute = (
         url.pathname === '/api/v1/workspace/members' ||
         url.pathname === '/api/v1/channels' ||
@@ -675,6 +719,68 @@ function createRequestHandler({
         }
       }
 
+      if (url.pathname === '/api/v1/presence/me') {
+        if (!localIdentityService) {
+          throw boundaryError(
+            'LOCAL_IDENTITY_NOT_CONFIGURED',
+            'LOCAL identity service is not configured',
+            503
+          );
+        }
+        if (!messagingService) {
+          throw boundaryError(
+            'MESSAGING_NOT_CONFIGURED',
+            'Messaging service is not configured',
+            503
+          );
+        }
+
+        const claims = await localIdentityService.verifyAccessToken(bearerToken(req));
+
+        if (req.method === 'GET') {
+          const result = await messagingService.getOwnPresenceProfile(claims);
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (req.method === 'PUT') {
+          const body = await readJson(req);
+          const result = await messagingService.updateOwnPresenceProfile(claims, body);
+          writeJson(res, 200, result);
+          return;
+        }
+      }
+
+      if (url.pathname === '/api/v1/presence/members') {
+        if (!localIdentityService) {
+          throw boundaryError(
+            'LOCAL_IDENTITY_NOT_CONFIGURED',
+            'LOCAL identity service is not configured',
+            503
+          );
+        }
+        if (!messagingService) {
+          throw boundaryError(
+            'MESSAGING_NOT_CONFIGURED',
+            'Messaging service is not configured',
+            503
+          );
+        }
+
+        const claims = await localIdentityService.verifyAccessToken(bearerToken(req));
+        if (req.method === 'GET') {
+          const ids = String(url.searchParams.get('ids') || '')
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean);
+          const result = await messagingService.listPresenceProfiles(claims, {
+            workspace_member_ids: ids,
+          });
+          writeJson(res, 200, result);
+          return;
+        }
+      }
+
       if (url.pathname === '/api/v1/unread-counts') {
         if (!localIdentityService) {
           throw boundaryError(
@@ -737,6 +843,7 @@ function createRequestHandler({
               contentType: req.headers['content-type'],
               clientMessageId: req.headers['x-client-message-id'],
               replyToMessageId: req.headers['x-reply-to-message-id'],
+              quoteMessageId: req.headers['x-quote-message-id'],
               data,
             }
           );
@@ -758,17 +865,26 @@ function createRequestHandler({
 
       const messageRoute =
         /^\/api\/v1\/conversations\/([^/]+)\/messages$/.exec(url.pathname);
+      const messageSearchRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/search$/.exec(url.pathname);
+      const messageReactionRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/messages\/([^/]+)\/reactions$/.exec(url.pathname);
       const messageMutationRoute =
         /^\/api\/v1\/conversations\/([^/]+)\/messages\/([^/]+)$/.exec(url.pathname);
       const messageThreadRoute =
         /^\/api\/v1\/conversations\/([^/]+)\/messages\/([^/]+)\/thread$/.exec(url.pathname);
+      const threadReadCursorRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/messages\/([^/]+)\/thread\/read-cursor$/.exec(url.pathname);
       const readCursorRoute =
         /^\/api\/v1\/conversations\/([^/]+)\/read-cursor$/.exec(url.pathname);
 
       if (
         messageRoute ||
+        messageSearchRoute ||
+        messageReactionRoute ||
         messageMutationRoute ||
         messageThreadRoute ||
+        threadReadCursorRoute ||
         readCursorRoute
       ) {
         if (!localIdentityService) {
@@ -789,8 +905,11 @@ function createRequestHandler({
         const claims = await localIdentityService.verifyAccessToken(bearerToken(req));
         const encodedConversationId =
           messageRoute?.[1] ||
+          messageSearchRoute?.[1] ||
+          messageReactionRoute?.[1] ||
           messageMutationRoute?.[1] ||
           messageThreadRoute?.[1] ||
+          threadReadCursorRoute?.[1] ||
           readCursorRoute?.[1] ||
           '';
 
@@ -798,6 +917,68 @@ function createRequestHandler({
           decodeURIComponent(
             encodedConversationId
           );
+
+
+        if (messageSearchRoute && req.method === 'GET') {
+          const result = await messagingService.searchConversationMessages(
+            claims,
+            conversationId,
+            {
+              query: url.searchParams.get('query') || '',
+              limit: url.searchParams.get('limit') || undefined,
+            }
+          );
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (messageReactionRoute && req.method === 'PUT') {
+          const messageId = decodeURIComponent(messageReactionRoute[2]);
+          const body = await readJson(req);
+          const result = await messagingService.toggleMessageReaction(
+            claims,
+            conversationId,
+            messageId,
+            body
+          );
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (messageReactionRoute && req.method === 'GET') {
+          const messageId = decodeURIComponent(messageReactionRoute[2]);
+          const result = await messagingService.listMessageReactionUsers(
+            claims,
+            conversationId,
+            messageId
+          );
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (threadReadCursorRoute && req.method === 'GET') {
+          const parentMessageId = decodeURIComponent(threadReadCursorRoute[2]);
+          const result = await messagingService.getThreadReadCursor(
+            claims,
+            conversationId,
+            parentMessageId
+          );
+          writeJson(res, 200, result);
+          return;
+        }
+
+        if (threadReadCursorRoute && req.method === 'PUT') {
+          const parentMessageId = decodeURIComponent(threadReadCursorRoute[2]);
+          const body = await readJson(req);
+          const result = await messagingService.advanceThreadReadCursor(
+            claims,
+            conversationId,
+            parentMessageId,
+            body
+          );
+          writeJson(res, 200, result);
+          return;
+        }
 
         if (
           messageThreadRoute &&

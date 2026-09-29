@@ -5,6 +5,8 @@ const { boundaryError } = require('../core/boundaryError');
 const DEFAULT_HISTORY_LIMIT = 50;
 const MAX_HISTORY_LIMIT = 100;
 const MAX_MESSAGE_CHARS = 8000;
+const MAX_CUSTOM_STATUS_CHARS = 120;
+const MAX_PRESENCE_MEMBER_IDS = 100;
 
 function clean(value) {
   if (value === null || value === undefined) return '';
@@ -38,6 +40,7 @@ function validateHumanMessageInput(input = {}) {
   const bodyText = clean(input.body_text ?? input.bodyText);
   const clientMessageId = clean(input.client_message_id ?? input.clientMessageId);
   const replyToMessageId = clean(input.reply_to_message_id ?? input.replyToMessageId) || null;
+  const quoteMessageId = clean(input.quote_message_id ?? input.quoteMessageId) || null;
 
   if (!bodyText || bodyText.length > MAX_MESSAGE_CHARS) {
     throw boundaryError(
@@ -54,7 +57,20 @@ function validateHumanMessageInput(input = {}) {
     );
   }
 
-  return Object.freeze({ bodyText, clientMessageId, replyToMessageId });
+  if (replyToMessageId && quoteMessageId) {
+    throw boundaryError(
+      'MESSAGE_REPLY_MODE_CONFLICT',
+      'Use either reply_to_message_id for a thread reply or quote_message_id for a quoted reply',
+      400
+    );
+  }
+
+  return Object.freeze({
+    bodyText,
+    clientMessageId,
+    replyToMessageId,
+    quoteMessageId,
+  });
 }
 
 function validateSystemMessageInput(input = {}) {
@@ -80,6 +96,59 @@ function validateSystemMessageInput(input = {}) {
   }
 
   return Object.freeze({ bodyText: bodyText || null, sourceEventId, messageType });
+}
+
+
+function normalizeStatusExpiry(value) {
+  const raw = clean(value);
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    throw boundaryError(
+      'PRESENCE_STATUS_EXPIRY_INVALID',
+      'status_expires_at must be a valid date/time',
+      400
+    );
+  }
+  return parsed.toISOString();
+}
+
+function validatePresenceProfileInput(input = {}) {
+  const customStatus = clean(
+    input.custom_status ?? input.customStatus
+  );
+  const statusExpiresAt = normalizeStatusExpiry(
+    input.status_expires_at ?? input.statusExpiresAt
+  );
+
+  if (customStatus.length > MAX_CUSTOM_STATUS_CHARS) {
+    throw boundaryError(
+      'PRESENCE_STATUS_INVALID',
+      `Custom status must not exceed ${MAX_CUSTOM_STATUS_CHARS} characters`,
+      400
+    );
+  }
+
+  if (!customStatus && statusExpiresAt) {
+    throw boundaryError(
+      'PRESENCE_STATUS_EXPIRY_INVALID',
+      'Status expiry requires a custom status',
+      400
+    );
+  }
+
+  if (customStatus && statusExpiresAt && Date.parse(statusExpiresAt) <= Date.now()) {
+    throw boundaryError(
+      'PRESENCE_STATUS_EXPIRY_INVALID',
+      'Status expiry must be in the future',
+      400
+    );
+  }
+
+  return Object.freeze({
+    customStatus: customStatus || null,
+    statusExpiresAt: customStatus ? statusExpiresAt : null,
+  });
 }
 
 function sameNullable(left, right) {
@@ -152,6 +221,7 @@ function createMessagingService(repository, {
     const page = await repository.listMessages({
       workspaceId: actor.workspaceId,
       conversationId: allowed.conversationId,
+      workspaceMemberId: actor.workspaceMemberId,
       limit,
       beforeMessageId,
     });
@@ -167,6 +237,75 @@ function createMessagingService(repository, {
         next_before_message_id: page.nextBeforeMessageId,
       },
     };
+  }
+
+
+
+  async function searchConversationMessages(claims, conversationId, options = {}) {
+    const { actor } = await requireActiveActor(claims);
+    const allowed = await requireConversationAccess(actor, conversationId);
+    const query = clean(options.query);
+    if (!query) {
+      throw boundaryError('MESSAGE_SEARCH_QUERY_REQUIRED', 'Search text is required', 400);
+    }
+    const limit = Math.max(1, Math.min(50, Number(options.limit || 50) || 50));
+    const messages = await repository.searchConversationMessages({
+      workspaceId: actor.workspaceId,
+      conversationId: allowed.conversationId,
+      workspaceMemberId: actor.workspaceMemberId,
+      query,
+      limit,
+    });
+    return { query, messages };
+  }
+
+  async function toggleMessageReaction(claims, conversationId, messageId, input = {}) {
+    const { actor } = await requireActiveActor(claims);
+    const allowed = await requireConversationAccess(actor, conversationId);
+    const cleanMessageId = clean(messageId);
+    const emoji = clean(input.emoji);
+    const allowedEmoji = new Set(['👍', '❤️', '😂', '🎉', '👀', '✅']);
+    if (!cleanMessageId || !allowedEmoji.has(emoji)) {
+      throw boundaryError('MESSAGE_REACTION_INVALID', 'Choose a supported reaction', 400);
+    }
+    const message = await repository.getMessageInConversation({
+      workspaceId: actor.workspaceId,
+      conversationId: allowed.conversationId,
+      messageId: cleanMessageId,
+    });
+    if (!message || message.deleted_at) {
+      throw boundaryError('MESSAGE_NOT_FOUND', 'Message is unavailable', 404);
+    }
+    const reactions = await repository.toggleMessageReaction({
+      workspaceId: actor.workspaceId,
+      conversationId: allowed.conversationId,
+      messageId: cleanMessageId,
+      workspaceMemberId: actor.workspaceMemberId,
+      emoji,
+    });
+    publishRealtime({
+      type: 'message.reaction.updated',
+      workspace_id: actor.workspaceId,
+      conversation_id: allowed.conversationId,
+      message_id: cleanMessageId,
+      reactions,
+    });
+    return { message_id: cleanMessageId, reactions };
+  }
+
+  async function listMessageReactionUsers(claims, conversationId, messageId) {
+    const { actor } = await requireActiveActor(claims);
+    const allowed = await requireConversationAccess(actor, conversationId);
+    const cleanMessageId = clean(messageId);
+    if (!cleanMessageId) {
+      throw boundaryError('MESSAGE_ID_REQUIRED', 'Message id is required', 400);
+    }
+    const reactions = await repository.listMessageReactionUsers({
+      workspaceId: actor.workspaceId,
+      conversationId: allowed.conversationId,
+      messageId: cleanMessageId,
+    });
+    return { message_id: cleanMessageId, reactions };
   }
 
   async function listThread(claims, conversationId, parentMessageId) {
@@ -186,6 +325,7 @@ function createMessagingService(repository, {
       workspaceId: actor.workspaceId,
       conversationId: allowed.conversationId,
       parentMessageId: cleanParentMessageId,
+      workspaceMemberId: actor.workspaceMemberId,
     });
 
     if (!thread) {
@@ -222,6 +362,21 @@ function createMessagingService(repository, {
       }
     }
 
+    if (message.quoteMessageId) {
+      const quote = await repository.getMessageInConversation({
+        workspaceId: actor.workspaceId,
+        conversationId: allowed.conversationId,
+        messageId: message.quoteMessageId,
+      });
+      if (!quote || quote.deleted_at) {
+        throw boundaryError(
+          'MESSAGE_QUOTE_INVALID',
+          'Quoted message is unavailable',
+          400
+        );
+      }
+    }
+
     const existing = await repository.findHumanMessageByClientId({
       workspaceId: actor.workspaceId,
       conversationId: allowed.conversationId,
@@ -233,7 +388,8 @@ function createMessagingService(repository, {
         existing.sender_type !== 'HUMAN' ||
         existing.sender_member_id !== actor.workspaceMemberId ||
         existing.body_text !== message.bodyText ||
-        !sameNullable(existing.reply_to_message_id, message.replyToMessageId)
+        !sameNullable(existing.reply_to_message_id, message.replyToMessageId) ||
+        !sameNullable(existing.quote_message_id, message.quoteMessageId)
       ) {
         throw boundaryError(
           'MESSAGE_IDEMPOTENCY_CONFLICT',
@@ -252,6 +408,7 @@ function createMessagingService(repository, {
         bodyText: message.bodyText,
         clientMessageId: message.clientMessageId,
         replyToMessageId: message.replyToMessageId,
+        quoteMessageId: message.quoteMessageId,
       });
       publishRealtime({
         type: 'message.created',
@@ -279,7 +436,8 @@ function createMessagingService(repository, {
           winner.sender_type === 'HUMAN' &&
           winner.sender_member_id === actor.workspaceMemberId &&
           winner.body_text === message.bodyText &&
-          sameNullable(winner.reply_to_message_id, message.replyToMessageId)
+          sameNullable(winner.reply_to_message_id, message.replyToMessageId) &&
+          sameNullable(winner.quote_message_id, message.quoteMessageId)
         ) {
           return { created: false, message: winner };
         }
@@ -291,6 +449,12 @@ function createMessagingService(repository, {
       }
       if (error?.code === '23503' && error?.constraint === 'fk_ac_message_reply') {
         throw boundaryError('MESSAGE_REPLY_INVALID', 'Reply target is invalid', 400);
+      }
+      if (error?.code === '23503' && error?.constraint === 'fk_ac_message_quote') {
+        throw boundaryError('MESSAGE_QUOTE_INVALID', 'Quoted message is unavailable', 400);
+      }
+      if (error?.code === '23514' && error?.constraint === 'ck_ac_message_quote_not_self') {
+        throw boundaryError('MESSAGE_QUOTE_INVALID', 'A message cannot quote itself', 400);
       }
       throw error;
     }
@@ -505,6 +669,101 @@ function createMessagingService(repository, {
     };
   }
 
+  async function getThreadReadCursor(claims, conversationId, parentMessageId) {
+    const { actor } = await requireActiveActor(claims);
+    const allowed = await requireConversationAccess(actor, conversationId);
+    const cleanParentMessageId = clean(parentMessageId);
+    if (!cleanParentMessageId) {
+      throw boundaryError(
+        'THREAD_PARENT_MESSAGE_REQUIRED',
+        'Thread parent message id is required',
+        400
+      );
+    }
+
+    const parent = await repository.getMessageInConversation({
+      workspaceId: actor.workspaceId,
+      conversationId: allowed.conversationId,
+      messageId: cleanParentMessageId,
+    });
+    if (!parent || parent.reply_to_message_id) {
+      throw boundaryError('THREAD_PARENT_NOT_FOUND', 'Thread parent message is unavailable', 404);
+    }
+
+    const cursor = await repository.getThreadReadCursor({
+      workspaceId: actor.workspaceId,
+      conversationId: allowed.conversationId,
+      parentMessageId: cleanParentMessageId,
+      workspaceMemberId: actor.workspaceMemberId,
+    });
+    return { thread_read_cursor: cursor };
+  }
+
+  async function advanceThreadReadCursor(
+    claims,
+    conversationId,
+    parentMessageId,
+    input = {}
+  ) {
+    const { actor } = await requireActiveActor(claims);
+    const allowed = await requireConversationAccess(actor, conversationId);
+    const cleanParentMessageId = clean(parentMessageId);
+    const lastReadMessageId = clean(
+      input.last_read_message_id ?? input.lastReadMessageId
+    );
+
+    if (!cleanParentMessageId) {
+      throw boundaryError('THREAD_PARENT_MESSAGE_REQUIRED', 'Thread parent message id is required', 400);
+    }
+    if (!lastReadMessageId) {
+      throw boundaryError('THREAD_READ_CURSOR_MESSAGE_REQUIRED', 'last_read_message_id is required', 400);
+    }
+
+    const parent = await repository.getMessageInConversation({
+      workspaceId: actor.workspaceId,
+      conversationId: allowed.conversationId,
+      messageId: cleanParentMessageId,
+    });
+    if (!parent || parent.reply_to_message_id) {
+      throw boundaryError('THREAD_PARENT_NOT_FOUND', 'Thread parent message is unavailable', 404);
+    }
+
+    const reply = await repository.getMessageInConversation({
+      workspaceId: actor.workspaceId,
+      conversationId: allowed.conversationId,
+      messageId: lastReadMessageId,
+    });
+    if (!reply || reply.reply_to_message_id !== cleanParentMessageId) {
+      throw boundaryError(
+        'THREAD_READ_CURSOR_MESSAGE_INVALID',
+        'Thread read cursor message is invalid',
+        400
+      );
+    }
+
+    const cursor = await repository.advanceThreadReadCursor({
+      workspaceId: actor.workspaceId,
+      conversationId: allowed.conversationId,
+      parentMessageId: cleanParentMessageId,
+      workspaceMemberId: actor.workspaceMemberId,
+      lastReadMessageId,
+    });
+
+    if (cursor) {
+      publishRealtime({
+        type: 'thread_read_cursor.updated',
+        workspace_id: actor.workspaceId,
+        workspace_member_id: actor.workspaceMemberId,
+        conversation_id: allowed.conversationId,
+        thread_root_message_id: cleanParentMessageId,
+        last_read_message_id: cursor.last_read_message_id,
+        read_at: cursor.read_at || null,
+      });
+    }
+
+    return { thread_read_cursor: cursor };
+  }
+
   async function getReadCursor(claims, conversationId) {
     const { actor } = await requireActiveActor(claims);
     const allowed = await requireConversationAccess(actor, conversationId);
@@ -531,8 +790,12 @@ function createMessagingService(repository, {
       conversationId: allowed.conversationId,
       messageId: lastReadMessageId,
     });
-    if (!message) {
-      throw boundaryError('READ_CURSOR_MESSAGE_INVALID', 'Read cursor message is invalid', 400);
+    if (!message || message.reply_to_message_id) {
+      throw boundaryError(
+        'READ_CURSOR_MESSAGE_INVALID',
+        'Read cursor message must be a main conversation message',
+        400
+      );
     }
 
     const cursor = await repository.advanceReadCursor({
@@ -565,6 +828,60 @@ function createMessagingService(repository, {
         conversation_id: row.conversation_id,
         unread_count: Number(row.unread_count || 0),
       })),
+    };
+  }
+
+  async function getOwnPresenceProfile(claims) {
+    const { actor } = await requireActiveActor(claims);
+    return {
+      presence_profile: await repository.getMemberPresenceProfile({
+        workspaceId: actor.workspaceId,
+        workspaceMemberId: actor.workspaceMemberId,
+      }),
+    };
+  }
+
+  async function updateOwnPresenceProfile(claims, input = {}) {
+    const { actor } = await requireActiveActor(claims);
+    const profile = validatePresenceProfileInput(input);
+
+    const saved = await repository.updateMemberPresenceProfile({
+      workspaceId: actor.workspaceId,
+      workspaceMemberId: actor.workspaceMemberId,
+      customStatus: profile.customStatus,
+      statusExpiresAt: profile.statusExpiresAt,
+    });
+
+    publishRealtime({
+      type: 'presence.profile.updated',
+      workspace_id: actor.workspaceId,
+      workspace_member_id: actor.workspaceMemberId,
+      profile: saved,
+    });
+
+    return { presence_profile: saved };
+  }
+
+  async function listPresenceProfiles(claims, input = {}) {
+    const { actor } = await requireActiveActor(claims);
+    const source = input.workspace_member_ids ?? input.workspaceMemberIds ?? [];
+    const ids = Array.isArray(source)
+      ? [...new Set(source.map(clean).filter(Boolean))]
+      : clean(source).split(',').map(clean).filter(Boolean);
+
+    if (!ids.length || ids.length > MAX_PRESENCE_MEMBER_IDS) {
+      throw boundaryError(
+        'PRESENCE_MEMBER_IDS_INVALID',
+        `workspace_member_ids must contain 1 to ${MAX_PRESENCE_MEMBER_IDS} members`,
+        400
+      );
+    }
+
+    return {
+      presence_profiles: await repository.listMemberPresenceProfiles({
+        workspaceId: actor.workspaceId,
+        workspaceMemberIds: ids,
+      }),
     };
   }
 
@@ -657,13 +974,21 @@ function createMessagingService(repository, {
 
   return Object.freeze({
     listMessages,
+    searchConversationMessages,
+    toggleMessageReaction,
+    listMessageReactionUsers,
     listThread,
+    getThreadReadCursor,
+    advanceThreadReadCursor,
     sendHumanMessage,
     editHumanMessage,
     deleteHumanMessage,
     getReadCursor,
     advanceReadCursor,
     listUnreadCounts,
+    getOwnPresenceProfile,
+    updateOwnPresenceProfile,
+    listPresenceProfiles,
     publishTrustedSystemMessage,
   });
 }
@@ -672,6 +997,9 @@ module.exports = {
   DEFAULT_HISTORY_LIMIT,
   MAX_HISTORY_LIMIT,
   MAX_MESSAGE_CHARS,
+  MAX_CUSTOM_STATUS_CHARS,
+  MAX_PRESENCE_MEMBER_IDS,
+  validatePresenceProfileInput,
   parseHistoryLimit,
   validateHumanMessageInput,
   validateSystemMessageInput,

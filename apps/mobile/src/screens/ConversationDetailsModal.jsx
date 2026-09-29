@@ -12,6 +12,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -38,6 +39,7 @@ import {
   updateConversationSetting,
 } from '../api/conversationDetails';
 import { colors } from '../theme/colors';
+import { ConversationHeader } from './ConversationChrome.jsx';
 
 const CHANNEL_TABS = [
   'OVERVIEW',
@@ -780,41 +782,21 @@ export default function ConversationDetailsModal({
       <SafeAreaView
         style={styles.screen}
       >
-        <View style={styles.header}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Close conversation details"
-            onPress={onClose}
-            style={styles.closeButton}
-          >
-            <Text
-              style={styles.closeText}
-            >
-              ‹
-            </Text>
-          </Pressable>
-
-          <View
-            style={styles.headerCopy}
-          >
-            <Text
-              style={styles.title}
-              numberOfLines={1}
-            >
-              {isChannel
-                ? `# ${conversation?.title || 'Channel'}`
-                : conversation?.title ||
-                  'Conversation'}
-            </Text>
-
-            <Text
-              style={styles.subtitle}
-              numberOfLines={1}
-            >
-              Conversation details
-            </Text>
-          </View>
-        </View>
+        <StatusBar
+          backgroundColor={colors.primary}
+          barStyle="light-content"
+        />
+        <ConversationHeader
+          title={
+            isChannel
+              ? `# ${conversation?.title || 'Channel'}`
+              : conversation?.title || 'Conversation'
+          }
+          subtitle="Conversation details"
+          onBack={onClose}
+          backAccessibilityLabel="Close conversation details"
+          style={styles.header}
+        />
 
         <ScrollView
           horizontal
@@ -1634,7 +1616,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.navy,
+    backgroundColor: colors.primary,
   },
   closeButton: {
     width: 42,
@@ -1642,7 +1624,7 @@ const styles = StyleSheet.create({
     borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#173A72',
+    backgroundColor: 'rgba(0,0,0,0.12)',
   },
   closeText: {
     color: '#FFFFFF',

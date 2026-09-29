@@ -66,6 +66,36 @@ async function request(baseUrl, path, { token = '', method = 'GET', body, signal
   return parseJsonResponse(response);
 }
 
+
+let workspaceBootstrapInflight = null;
+
+async function loadWorkspaceBootstrap(baseUrl, token) {
+  const root = normalizeBaseUrl(baseUrl);
+  const key = `${root}
+${String(token || '')}`;
+
+  if (workspaceBootstrapInflight?.key === key) {
+    return workspaceBootstrapInflight.promise;
+  }
+
+  const promise = request(root, '/api/v1/mobile/workspace-bootstrap', { token })
+    .catch((error) => {
+      // During a rolling server/app deployment an older API may not expose the
+      // bootstrap endpoint yet. Preserve compatibility by falling back to the
+      // existing individual endpoints instead of blocking startup.
+      if (Number(error?.status) === 404) return null;
+      throw error;
+    })
+    .finally(() => {
+      if (workspaceBootstrapInflight?.promise === promise) {
+        workspaceBootstrapInflight = null;
+      }
+    });
+
+  workspaceBootstrapInflight = { key, promise };
+  return promise;
+}
+
 export function getMobileAppVersionPolicy(baseUrl, platform = 'ANDROID') {
   return request(
     baseUrl,
@@ -200,7 +230,11 @@ export function startDirectMessage(baseUrl, token, targetWorkspaceMemberId) {
   });
 }
 
-export function listChannels(baseUrl, token) {
+export async function listChannels(baseUrl, token) {
+  const bootstrap = await loadWorkspaceBootstrap(baseUrl, token);
+  if (bootstrap) {
+    return { channels: bootstrap.channels || [] };
+  }
   return request(baseUrl, '/api/v1/channels', { token });
 }
 
@@ -219,7 +253,11 @@ export function createChannel(
   });
 }
 
-export function listDirectMessages(baseUrl, token) {
+export async function listDirectMessages(baseUrl, token) {
+  const bootstrap = await loadWorkspaceBootstrap(baseUrl, token);
+  if (bootstrap) {
+    return { direct_messages: bootstrap.direct_messages || [] };
+  }
   return request(baseUrl, '/api/v1/direct-messages', { token });
 }
 
@@ -250,11 +288,49 @@ export function listThread(
   );
 }
 
+export function getThreadReadCursor(
+  baseUrl,
+  token,
+  conversationId,
+  parentMessageId
+) {
+  return request(
+    baseUrl,
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(parentMessageId)}/thread/read-cursor`,
+    { token }
+  );
+}
+
+export function markThreadRead(
+  baseUrl,
+  token,
+  conversationId,
+  parentMessageId,
+  lastReadMessageId
+) {
+  return request(
+    baseUrl,
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(parentMessageId)}/thread/read-cursor`,
+    {
+      token,
+      method: 'PUT',
+      body: { last_read_message_id: lastReadMessageId },
+    }
+  );
+}
+
 export function sendMessage(
   baseUrl,
   token,
   conversationId,
-  { bodyText, clientMessageId, replyToMessageId = null }
+  {
+    bodyText,
+    clientMessageId,
+    replyToMessageId = null,
+    quoteMessageId = null,
+  }
 ) {
   return request(
     baseUrl,
@@ -266,6 +342,7 @@ export function sendMessage(
         body_text: bodyText,
         client_message_id: clientMessageId,
         reply_to_message_id: replyToMessageId,
+        quote_message_id: quoteMessageId,
       },
     }
   );
@@ -302,7 +379,15 @@ export async function uploadAttachment(
   baseUrl,
   token,
   conversationId,
-  { localPath, fileName, contentType, clientMessageId, replyToMessageId = null, onProgress }
+  {
+    localPath,
+    fileName,
+    contentType,
+    clientMessageId,
+    replyToMessageId = null,
+    quoteMessageId = null,
+    onProgress,
+  }
 ) {
   const root = normalizeBaseUrl(baseUrl);
   const blobUtil = getNativeBlobUtil();
@@ -322,6 +407,7 @@ export async function uploadAttachment(
         'x-akshaconnect-file-name': encodeURIComponent(fileName || 'attachment'),
         'x-client-message-id': clientMessageId,
         ...(replyToMessageId ? { 'x-reply-to-message-id': replyToMessageId } : {}),
+        ...(quoteMessageId ? { 'x-quote-message-id': quoteMessageId } : {}),
       },
       blobUtil.wrap(localPath)
     );
@@ -438,7 +524,11 @@ export function deleteMessage(baseUrl, token, conversationId, messageId) {
   );
 }
 
-export function listUnreadCounts(baseUrl, token) {
+export async function listUnreadCounts(baseUrl, token) {
+  const bootstrap = await loadWorkspaceBootstrap(baseUrl, token);
+  if (bootstrap) {
+    return { unread_counts: bootstrap.unread_counts || [] };
+  }
   return request(baseUrl, '/api/v1/unread-counts', { token });
 }
 
@@ -485,4 +575,72 @@ export function unregisterPush(
       push_token: pushToken || undefined,
     },
   });
+}
+
+export function getOwnPresenceProfile(baseUrl, token) {
+  return request(baseUrl, '/api/v1/presence/me', { token });
+}
+
+export function updateOwnPresenceProfile(
+  baseUrl,
+  token,
+  { customStatus = '', statusExpiresAt = null } = {}
+) {
+  return request(baseUrl, '/api/v1/presence/me', {
+    token,
+    method: 'PUT',
+    body: {
+      custom_status: customStatus || null,
+      status_expires_at: statusExpiresAt || null,
+    },
+  });
+}
+
+export function listPresenceProfiles(baseUrl, token, workspaceMemberIds = []) {
+  const ids = [...new Set((workspaceMemberIds || []).filter(Boolean))];
+  const path = `/api/v1/presence/members?ids=${encodeURIComponent(ids.join(','))}`;
+  return request(baseUrl, path, { token });
+}
+
+
+export function searchConversationMessages(
+  baseUrl,
+  token,
+  conversationId,
+  { query = '', limit = 50 } = {}
+) {
+  const path =
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+    `/search?query=${encodeURIComponent(String(query || '').trim())}` +
+    `&limit=${encodeURIComponent(String(limit))}`;
+  return request(baseUrl, path, { token });
+}
+
+export function toggleMessageReaction(
+  baseUrl,
+  token,
+  conversationId,
+  messageId,
+  emoji
+) {
+  return request(
+    baseUrl,
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}/reactions`,
+    { token, method: 'PUT', body: { emoji } }
+  );
+}
+
+export function listMessageReactionUsers(
+  baseUrl,
+  token,
+  conversationId,
+  messageId
+) {
+  return request(
+    baseUrl,
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}/reactions`,
+    { token }
+  );
 }

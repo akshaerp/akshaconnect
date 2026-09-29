@@ -148,8 +148,8 @@ test('R8B.3 Android native app-info bridge returns actual package version', () =
   assert.match(pkg, /AkshaConnectAppInfoModule\(reactContext\)/);
 });
 
-test('R8B.3 accepted release advances to V14 for Play Internal Testing', () => {
+test('R8B.3 accepted release advances to V15 accepted baseline during V16 physical testing', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
-  assert.match(gradle, /versionCode 14/);
-  assert.match(gradle, /versionName "0\.3\.0-v14"/);
+  assert.match(gradle, /versionCode 15/);
+  assert.match(gradle, /versionName "0\.3\.0-v15"/);
 });

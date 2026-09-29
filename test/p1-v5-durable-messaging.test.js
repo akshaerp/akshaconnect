@@ -81,6 +81,7 @@ test('human message input requires body and client id and never accepts sender a
     bodyText: 'hello',
     clientMessageId: 'client-1',
     replyToMessageId: null,
+    quoteMessageId: null,
   });
   assert.throws(() => validateHumanMessageInput({ body_text: ' ', client_message_id: 'x' }), /Message body/);
 });

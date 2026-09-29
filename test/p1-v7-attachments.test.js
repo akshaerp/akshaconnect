@@ -168,7 +168,7 @@ test('P1-V7 V2 web composer uses stable per-file client ids for retry safety', (
   assert.match(app, /MAX_PENDING_ATTACHMENTS = 4/);
   assert.match(app, /clientMessageId: makeClientMessageId\(\)/);
   assert.match(app, /pendingFiles/);
-  assert.match(app, /uploadAttachment\(token, selected\.id, pending\)/);
+  assert.match(app, /uploadAttachment\([\s\S]*token,[\s\S]*selected\.id,[\s\S]*\.\.\.pending,[\s\S]*quoteMessageId:/);
   assert.match(app, /attachment-card/);
   assert.match(app, /downloadAttachment/);
   assert.match(api, /x-akshaconnect-file-name/);

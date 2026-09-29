@@ -4,12 +4,16 @@ import {
   changePassword,
   createChannel,
   inspectSession,
+  getOwnPresenceProfile,
+  updateOwnPresenceProfile,
+  listPresenceProfiles,
   listChannels,
   listDirectMessages,
   listMembers,
   listMessages,
   listUnreadCounts,
   markRead,
+  markThreadRead,
   loginLocal,
   logout,
   sendMessage,
@@ -18,6 +22,9 @@ import {
   downloadAttachment,
   editMessage,
   deleteMessage,
+  searchConversationMessages,
+  toggleMessageReaction,
+  listMessageReactionUsers,
 } from './api.js';
 import {
   addChannelMember,
@@ -48,6 +55,9 @@ import {
   PRESENCE_AWAY,
 } from './realtime.js';
 
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
+const COMPOSER_EMOJIS = ['😀','😃','😄','😁','😂','😊','😍','👍','👏','🙏','🎉','✅','❤️','🔥','👀','🤝'];
+
 function initials(name = '') {
   return name
     .split(/\s+/)
@@ -55,6 +65,23 @@ function initials(name = '') {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join('') || 'AC';
+}
+
+function formatLastSeen(value) {
+  const parsed = new Date(value || '');
+  if (Number.isNaN(parsed.getTime())) return '';
+  const delta = Date.now() - parsed.getTime();
+  if (delta < 60 * 1000) return 'Last seen just now';
+  if (delta < 60 * 60 * 1000) return `Last seen ${Math.max(1, Math.floor(delta / 60000))}m ago`;
+  const now = new Date();
+  if (parsed.toDateString() === now.toDateString()) {
+    return `Last seen ${parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  }
+  return `Last seen ${parsed.toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+}
+
+function statusExpiry(hours) {
+  return hours ? new Date(Date.now() + hours * 60 * 60 * 1000).toISOString() : null;
 }
 
 function sessionFromLogin(login) {
@@ -168,6 +195,44 @@ function AccountSettingsPanel({ token, session, onClose, onApiFailure }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [customStatus, setCustomStatus] = useState('');
+  const [customStatusExpiry, setCustomStatusExpiry] = useState(null);
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    getOwnPresenceProfile(token)
+      .then((result) => {
+        if (cancelled) return;
+        const profile = result?.presence_profile || {};
+        setCustomStatus(profile.custom_status || '');
+        setCustomStatusExpiry(profile.status_expires_at || null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [token]);
+
+  async function saveStatus() {
+    setStatusBusy(true);
+    setStatusMessage('');
+    try {
+      const result = await updateOwnPresenceProfile(token, {
+        customStatus: customStatus.trim(),
+        statusExpiresAt: customStatus.trim() ? customStatusExpiry : null,
+      });
+      const profile = result?.presence_profile || {};
+      setCustomStatus(profile.custom_status || '');
+      setCustomStatusExpiry(profile.status_expires_at || null);
+      setStatusMessage('Status updated');
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) {
+        setStatusMessage(requestError.message || 'Could not update status');
+      }
+    } finally {
+      setStatusBusy(false);
+    }
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -234,6 +299,37 @@ function AccountSettingsPanel({ token, session, onClose, onApiFailure }) {
           <div>
             <strong>{session.display_name}</strong>
             <span>{session.workspace_name} · {session.member_role}</span>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-section-heading">
+            <strong>Your status</strong>
+            <span>Share what you are working on and optionally clear it automatically.</span>
+          </div>
+          <div className="presence-status-editor">
+            <input
+              value={customStatus}
+              onChange={(event) => setCustomStatus(event.target.value)}
+              maxLength={120}
+              placeholder="What are you working on?"
+            />
+            <div className="presence-expiry-options">
+              <button type="button" onClick={() => setCustomStatusExpiry(statusExpiry(1))}>1 hour</button>
+              <button type="button" onClick={() => setCustomStatusExpiry(statusExpiry(4))}>4 hours</button>
+              <button type="button" onClick={() => setCustomStatusExpiry(statusExpiry(24))}>1 day</button>
+              <button type="button" onClick={() => setCustomStatusExpiry(null)}>No expiry</button>
+            </div>
+            <span className="settings-password-help">
+              {customStatusExpiry ? `Clears ${new Date(customStatusExpiry).toLocaleString()}` : 'No automatic expiry'}
+            </span>
+            {statusMessage ? <div className="form-success" role="status">{statusMessage}</div> : null}
+            <div className="settings-actions">
+              <button type="button" className="secondary-button" onClick={() => { setCustomStatus(''); setCustomStatusExpiry(null); }}>Clear</button>
+              <button type="button" className="primary-button" disabled={statusBusy} onClick={saveStatus}>
+                {statusBusy ? 'Saving…' : 'Save status'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -461,6 +557,41 @@ function DirectMessagePicker({ token, currentMemberId, onCancel, onStart }) {
   );
 }
 
+async function copyTextToClipboard(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  return copied;
+}
+
+function copyableWebMessageText(message) {
+  const body = String(message?.body_text || '').trim();
+  if (body) return body;
+
+  if (Array.isArray(message?.attachments)) {
+    return message.attachments
+      .map((item) => String(item?.file_name || '').trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  return '';
+}
+
 function makeClientMessageId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -596,7 +727,28 @@ function ChannelPeopleDialog({
           selected.id
         );
 
-      setMembers(payload?.members || []);
+      const rows = payload?.members || [];
+      let profilesByMember = {};
+      try {
+        const profilePayload = await listPresenceProfiles(
+          token,
+          rows.map((item) => item?.workspace_member_id).filter(Boolean)
+        );
+        profilesByMember = Object.fromEntries(
+          (profilePayload?.presence_profiles || []).map((profile) => [
+            profile.workspace_member_id,
+            profile,
+          ])
+        );
+      } catch {}
+
+      setMembers(
+        rows.map((member) => ({
+          ...member,
+          presence_profile:
+            profilesByMember[member.workspace_member_id] || null,
+        }))
+      );
       setCanManage(
         Boolean(
           payload?.can_manage_members
@@ -861,6 +1013,16 @@ function ChannelPeopleDialog({
                       ? ` · ${member.primary_email}`
                       : ''}
                   </span>
+                  <span>
+                    {member.presence_profile?.custom_status ||
+                      (member.presence_status === 'LIVE'
+                        ? 'Live'
+                        : member.presence_status === 'AWAY'
+                          ? 'Away'
+                          : formatLastSeen(
+                              member.presence_profile?.last_seen_at
+                            ) || 'Offline')}
+                  </span>
                 </div>
 
                 {canManage &&
@@ -962,6 +1124,7 @@ function ConversationView({
   onReadConversation,
   onViewportState,
   onOpenSidebar,
+  onNavigateConversation,
 }) {
   const [messages, setMessages] = useState([]);
   const [page, setPage] = useState({ has_more: false, next_before_message_id: null });
@@ -976,6 +1139,7 @@ function ConversationView({
   const [previewingAttachmentId, setPreviewingAttachmentId] = useState('');
   const [attachmentPreview, setAttachmentPreview] = useState(null);
   const [editingMessageId, setEditingMessageId] = useState('');
+  const [quoteReplyMessage, setQuoteReplyMessage] = useState(null);
   const [editDraft, setEditDraft] = useState('');
   const [mutatingMessageId, setMutatingMessageId] = useState('');
   const [unreadDividerMessageId, setUnreadDividerMessageId] = useState(null);
@@ -983,7 +1147,33 @@ function ConversationView({
   const [showNewMessageJump, setShowNewMessageJump] = useState(false);
   const [showChannelPeople, setShowChannelPeople] = useState(false);
   const [threadParent, setThreadParent] = useState(null);
+  const [peerPresenceProfile, setPeerPresenceProfile] = useState(null);
+  const [showMessageSearch, setShowMessageSearch] = useState(false);
+  const [messageSearchQuery, setMessageSearchQuery] = useState('');
+  const [messageSearchResults, setMessageSearchResults] = useState([]);
+  const [messageSearchLoading, setMessageSearchLoading] = useState(false);
+  const [messageSearchError, setMessageSearchError] = useState('');
+  const [highlightMessageId, setHighlightMessageId] = useState('');
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [recentEmojis, setRecentEmojis] = useState(() => {
+    try { return JSON.parse(window.localStorage.getItem('akshaconnect.recent-emojis') || '[]'); } catch { return []; }
+  });
   const historyRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const memberId = selected?.kind === 'dm' ? selected?.otherWorkspaceMemberId : '';
+    if (!memberId || !token) {
+      setPeerPresenceProfile(null);
+      return undefined;
+    }
+    listPresenceProfiles(token, [memberId])
+      .then((result) => {
+        if (!cancelled) setPeerPresenceProfile(result?.presence_profiles?.[0] || null);
+      })
+      .catch(() => { if (!cancelled) setPeerPresenceProfile(null); });
+    return () => { cancelled = true; };
+  }, [selected?.kind, selected?.otherWorkspaceMemberId, token]);
   const bottomRef = useRef(null);
   const nearBottomRef = useRef(true);
   const lastMarkedReadMessageIdRef = useRef(null);
@@ -991,6 +1181,7 @@ function ConversationView({
   useEffect(() => {
     setShowChannelPeople(false);
     setThreadParent(null);
+    setQuoteReplyMessage(null);
   }, [selected?.id]);
 
   const draftScope = useMemo(() => ({
@@ -1126,6 +1317,14 @@ function ConversationView({
 
   useEffect(() => {
     const event = realtimeMessage;
+    if (event?.type === 'message.reaction.updated' && event.conversation_id === selected?.id) {
+      setMessages((current) => current.map((item) =>
+        item.message_id === event.message_id
+          ? { ...item, reactions: event.reactions || [] }
+          : item
+      ));
+      return;
+    }
     if (!event?.message || event.conversation_id !== selected?.id) return;
 
     if (
@@ -1297,6 +1496,17 @@ function ConversationView({
     );
   }
 
+  async function handleCopyMessage(message) {
+    const value = copyableWebMessageText(message);
+    if (!value) return;
+
+    try {
+      await copyTextToClipboard(value);
+    } catch (copyError) {
+      console.error('Could not copy AkshaConnect message', copyError);
+    }
+  }
+
   function beginEditingMessage(
     message
   ) {
@@ -1308,6 +1518,7 @@ function ConversationView({
       return;
     }
 
+    setQuoteReplyMessage(null);
     setEditingMessageId(
       message.message_id
     );
@@ -1315,6 +1526,19 @@ function ConversationView({
       String(message.body_text || '')
     );
     setError('');
+  }
+
+  function beginQuoteReply(message) {
+    if (!message || message.deleted_at) {
+      return;
+    }
+
+    setQuoteReplyMessage(message);
+    setError('');
+  }
+
+  function cancelQuoteReply() {
+    setQuoteReplyMessage(null);
   }
 
   function cancelEditingMessage() {
@@ -1542,6 +1766,10 @@ function ConversationView({
   async function submit(event) {
     event.preventDefault();
     const bodyText = draft.trim();
+    const quoteMessageId =
+      quoteReplyMessage?.message_id || null;
+    let quoteConsumed = false;
+
     if ((!bodyText && pendingFiles.length === 0) || sending || !selected?.id) return;
     setSending(true);
     setError('');
@@ -1553,7 +1781,11 @@ function ConversationView({
         const result = await sendMessage(token, selected.id, {
           bodyText,
           clientMessageId: makeClientMessageId(),
+          quoteMessageId,
         });
+        if (quoteMessageId) {
+          quoteConsumed = true;
+        }
         if (result.message) createdMessages.push(result.message);
 
         // Text was durably acknowledged. Clear its draft now so a later
@@ -1563,8 +1795,28 @@ function ConversationView({
       }
 
       for (const pending of pendingFiles) {
-        const result = await uploadAttachment(token, selected.id, pending);
+        const result = await uploadAttachment(
+          token,
+          selected.id,
+          {
+            ...pending,
+            quoteMessageId:
+              !quoteConsumed
+                ? quoteMessageId
+                : null,
+          }
+        );
         if (result.message) createdMessages.push(result.message);
+        if (
+          quoteMessageId &&
+          !quoteConsumed
+        ) {
+          quoteConsumed = true;
+        }
+      }
+
+      if (quoteConsumed) {
+        setQuoteReplyMessage(null);
       }
 
       setMessages((current) => {
@@ -1596,6 +1848,98 @@ function ConversationView({
     }
   }
 
+  async function jumpToMessage(messageId) {
+    const targetId = String(messageId || '').trim();
+    if (!targetId) return;
+    let working = messages;
+    let workingPage = page;
+    let guard = 0;
+    while (!working.some((item) => item.message_id === targetId) &&
+           workingPage?.has_more && workingPage?.next_before_message_id && guard < 40) {
+      guard += 1;
+      const result = await listMessages(token, selected.id, {
+        limit: 50,
+        before: workingPage.next_before_message_id,
+      });
+      working = [...(result.messages || []), ...working];
+      const dedup = new Map();
+      for (const row of working) dedup.set(row.message_id, row);
+      working = [...dedup.values()].sort((a,b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+      workingPage = result.page || { has_more: false, next_before_message_id: null };
+      setMessages(working);
+      setPage(workingPage);
+    }
+    const target = window.document.querySelector(`[data-message-id="${targetId}"]`);
+    if (!target) {
+      window.alert('The original message could not be found.');
+      return;
+    }
+    setHighlightMessageId(targetId);
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    window.setTimeout(() => setHighlightMessageId(''), 2200);
+  }
+
+  async function runMessageSearch() {
+    const query = messageSearchQuery.trim();
+    if (!query || messageSearchLoading) return;
+    setMessageSearchLoading(true);
+    setMessageSearchError('');
+    try {
+      const result = await searchConversationMessages(token, selected.id, { query, limit: 50 });
+      setMessageSearchResults(result?.messages || []);
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) setMessageSearchError(requestError.message || 'Could not search messages');
+    } finally {
+      setMessageSearchLoading(false);
+    }
+  }
+
+  async function openSearchResult(message) {
+    setShowMessageSearch(false);
+    if (message?.reply_to_message_id) {
+      let parent = messages.find((item) => item.message_id === message.reply_to_message_id);
+      if (!parent) {
+        await jumpToMessage(message.reply_to_message_id);
+        parent = messages.find((item) => item.message_id === message.reply_to_message_id);
+      }
+      if (parent) setThreadParent(parent);
+      return;
+    }
+    await jumpToMessage(message?.message_id);
+  }
+
+  function insertEmoji(emoji) {
+    const value = String(emoji || '');
+    if (!value) return;
+    updateDraft(`${draft}${value}`.slice(0, 8000));
+    const next = [value, ...recentEmojis.filter((item) => item !== value)].slice(0, 8);
+    setRecentEmojis(next);
+    try { window.localStorage.setItem('akshaconnect.recent-emojis', JSON.stringify(next)); } catch {}
+    setShowEmojiPicker(false);
+  }
+
+  async function reactToMessage(message, emoji) {
+    if (!message?.message_id || message.deleted_at) return;
+    try {
+      const result = await toggleMessageReaction(token, selected.id, message.message_id, emoji);
+      setMessages((current) => current.map((item) =>
+        item.message_id === message.message_id ? { ...item, reactions: result?.reactions || [] } : item
+      ));
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) setError(requestError.message || 'Could not react to message');
+    }
+  }
+
+  async function showReactionUsers(message) {
+    try {
+      const result = await listMessageReactionUsers(token, selected.id, message.message_id);
+      const lines = (result?.reactions || []).map((item) => `${item.emoji} ${item.display_name || 'Member'}`);
+      window.alert(lines.length ? lines.join('\n') : 'No reactions yet');
+    } catch (requestError) {
+      if (!onApiFailure(requestError)) setError(requestError.message || 'Could not load reactions');
+    }
+  }
+
   if (!selected) {
     return (
       <div className="conversation-empty">
@@ -1617,7 +1961,11 @@ function ConversationView({
       : `connection-${realtimeStatus}`;
   const statusText =
     selected.kind === 'dm'
-      ? presenceLabel(peerPresence)
+      ? (peerPresenceProfile?.custom_status ||
+          (peerPresence === 'NOT_AVAILABLE'
+            ? formatLastSeen(peerPresenceProfile?.last_seen_at)
+            : '') ||
+          presenceLabel(peerPresence))
       : connectionLabel(realtimeStatus);
 
   return (
@@ -1634,6 +1982,16 @@ function ConversationView({
           </div>
         </div>
         <div className="conversation-header-actions">
+          <button
+            type="button"
+            className="channel-people-button"
+            onClick={() => { setShowMessageSearch(true); setMessageSearchQuery(''); setMessageSearchResults([]); setMessageSearchError(''); }}
+            aria-label="Search messages"
+            title="Search messages"
+          >
+            <span aria-hidden="true">⌕</span>
+            <span>Search</span>
+          </button>
           <button
             type="button"
             className="channel-people-button"
@@ -1738,11 +2096,11 @@ function ConversationView({
                 ) : null}
                 {message.message_id === unreadDividerMessageId ? (
                   <div className="new-messages-divider" role="separator">
-                    <span>New messages</span>
+                    <span>Unread messages</span>
                   </div>
                 ) : null}
                 <article
-                  className={`message-row ${own ? 'own-message' : ''} ${grouped ? 'grouped-message' : ''}`}
+                  className={`message-row ${own ? 'own-message' : ''} ${grouped ? 'grouped-message' : ''} ${highlightMessageId === message.message_id ? 'highlighted-message' : ''}`}
                   data-message-id={message.message_id}
                 >
                   {grouped ? (
@@ -1762,6 +2120,29 @@ function ConversationView({
                         {message.sender_type === 'SYSTEM' ? <span className="system-message-badge">SYSTEM</span> : null}
                       </div>
                     ) : null}
+                    {!deleted && message.quoted_message ? (
+                      <button
+                        type="button"
+                        className="quoted-message quoted-message-button"
+                        onClick={() => jumpToMessage(message.quote_message_id)}
+                        aria-label="Jump to quoted message"
+                      >
+                        <span className="quoted-message-accent" aria-hidden="true" />
+                        <span className="quoted-message-copy">
+                          <strong>
+                            {message.quoted_message.sender_display_name || 'Message'}
+                          </strong>
+                          <span>
+                            {message.quoted_message.deleted_at
+                              ? 'Message deleted'
+                              : message.quoted_message.message_type === 'ATTACHMENT'
+                                ? `Attachment: ${message.quoted_message.body_text || 'file'}`
+                                : message.quoted_message.body_text || ''}
+                          </span>
+                        </span>
+                      </button>
+                    ) : null}
+
                     {deleted ? (
                       <div className="message-text deleted-message-text">
                         Message deleted
@@ -1896,6 +2277,27 @@ function ConversationView({
                       </div>
                     ) : null}
 
+                    {own && !deleted && Number(message.read_by_count || 0) > 0 ? (
+                      <div className="message-read-receipt">
+                        ✓✓ Read by {Number(message.read_by_count)}
+                      </div>
+                    ) : null}
+
+                    {!deleted && Array.isArray(message.reactions) && message.reactions.length ? (
+                      <div className="message-reactions">
+                        {message.reactions.map((reaction) => (
+                          <button
+                            key={reaction.emoji}
+                            type="button"
+                            className={`reaction-chip ${reaction.reacted_by_me ? 'reaction-chip-mine' : ''}`}
+                            onClick={() => showReactionUsers(message)}
+                          >
+                            {reaction.emoji} {Number(reaction.count || 0)}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+
                     {!deleted && Number(message.thread_reply_count || 0) > 0 ? (
                       <button
                         type="button"
@@ -1903,12 +2305,43 @@ function ConversationView({
                         onClick={() => setThreadParent(message)}
                       >
                         {Number(message.thread_reply_count)} {Number(message.thread_reply_count) === 1 ? 'reply' : 'replies'}
+                        {Number(message.thread_unread_count || 0) > 0 ? ` · ${Number(message.thread_unread_count)} unread` : ''}
                         {message.thread_last_reply_at ? ` · last ${formatMessageTime(message.thread_last_reply_at)}` : ''}
                       </button>
                     ) : null}
 
                     {!deleted ? (
                       <div className="message-own-actions">
+                        {QUICK_REACTIONS.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            onClick={() => reactToMessage(message, emoji)}
+                            aria-label={`React ${emoji}`}
+                            title={`React ${emoji}`}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                        {copyableWebMessageText(message) ? (
+                          <button
+                            type="button"
+                            onClick={() => handleCopyMessage(message)}
+                            aria-label="Copy message"
+                            title="Copy message"
+                          >
+                            ⧉
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="message-quote-action"
+                          onClick={() => beginQuoteReply(message)}
+                          aria-label="Reply"
+                          title="Reply"
+                        >
+                          ↪
+                        </button>
                         <button
                           type="button"
                           className="message-thread-action"
@@ -1989,9 +2422,54 @@ function ConversationView({
           onClose={() => setThreadParent(null)}
           onApiFailure={onApiFailure}
           onThreadActivity={(messageId) => {
-            if (messageId) markMessageRead(messageId);
+            const parentId = threadParent?.message_id || '';
+            const conversationId = selected?.id || '';
+            if (!messageId || !parentId || !conversationId) return;
+
+            markThreadRead(token, conversationId, parentId, messageId)
+              .catch((requestError) => onApiFailure(requestError));
+
+            setMessages((current) =>
+              current.map((item) =>
+                item.message_id === parentId
+                  ? { ...item, thread_unread_count: 0 }
+                  : item
+              )
+            );
           }}
         />
+      ) : null}
+
+      {showMessageSearch ? (
+        <div className="message-search-overlay" role="presentation" onMouseDown={() => setShowMessageSearch(false)}>
+          <section className="message-search-panel" role="dialog" aria-modal="true" aria-label="Search in conversation" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <strong>Search in conversation</strong>
+              <button type="button" onClick={() => setShowMessageSearch(false)} aria-label="Close search">×</button>
+            </header>
+            <div className="message-search-form">
+              <input
+                value={messageSearchQuery}
+                onChange={(event) => setMessageSearchQuery(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); runMessageSearch(); } }}
+                placeholder="Search message text"
+              />
+              <button type="button" onClick={runMessageSearch} disabled={messageSearchLoading}>
+                {messageSearchLoading ? 'Searching…' : 'Search'}
+              </button>
+            </div>
+            {messageSearchError ? <div className="composer-error">{messageSearchError}</div> : null}
+            <div className="message-search-results">
+              {messageSearchResults.map((item) => (
+                <button key={item.message_id} type="button" className="message-search-result" onClick={() => openSearchResult(item)}>
+                  <strong>{item.sender_display_name || 'Member'}</strong>
+                  <span>{item.body_text || (item.message_type === 'ATTACHMENT' ? 'Attachment' : '')}</span>
+                  <small>{item.reply_to_message_id ? 'Thread reply · ' : ''}{formatMessageTime(item.created_at)}</small>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {attachmentPreview ? (
@@ -2089,6 +2567,36 @@ function ConversationView({
       <footer className="composer-shell">
         {error ? <div className="composer-error" role="alert">{error}</div> : null}
         <form className="composer-box active-composer" onSubmit={submit}>
+          {quoteReplyMessage ? (
+            <div className="composer-quoted-reply">
+              <span className="composer-quoted-accent" aria-hidden="true" />
+              <span className="composer-quoted-copy">
+                <strong>
+                  Replying to{' '}
+                  {quoteReplyMessage.sender_member_id === session.workspace_member_id
+                    ? 'your message'
+                    : quoteReplyMessage.sender_display_name || 'message'}
+                </strong>
+                <span>
+                  {quoteReplyMessage.deleted_at
+                    ? 'Message deleted'
+                    : quoteReplyMessage.message_type === 'ATTACHMENT'
+                      ? `Attachment: ${quoteReplyMessage.body_text || 'file'}`
+                      : quoteReplyMessage.body_text || ''}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={cancelQuoteReply}
+                disabled={sending}
+                aria-label="Cancel reply"
+                title="Cancel reply"
+              >
+                ×
+              </button>
+            </div>
+          ) : null}
+
           {pendingFiles.length ? (
             <div className="pending-attachments" aria-label="Attachments ready to send">
               {pendingFiles.map((pending) => (
@@ -2109,6 +2617,14 @@ function ConversationView({
                     ×
                   </button>
                 </div>
+              ))}
+            </div>
+          ) : null}
+
+          {showEmojiPicker ? (
+            <div className="emoji-picker" role="dialog" aria-label="Emoji picker">
+              {(recentEmojis.length ? recentEmojis : COMPOSER_EMOJIS).map((emoji) => (
+                <button key={emoji} type="button" onClick={() => insertEmoji(emoji)}>{emoji}</button>
               ))}
             </div>
           ) : null}
@@ -2147,6 +2663,15 @@ function ConversationView({
 
           <div className="composer-actions">
             <div className="composer-left-actions">
+              <button
+                type="button"
+                className="attach-button"
+                onClick={() => setShowEmojiPicker((current) => !current)}
+                aria-label="Choose emoji"
+                title="Choose emoji"
+              >
+                😊 Emoji
+              </button>
               <button
                 type="button"
                 className="attach-button"
@@ -2939,6 +3464,7 @@ export default function App() {
           onReadConversation={handleReadConversation}
           onViewportState={handleConversationViewportState}
           onOpenSidebar={() => setMobileSidebarOpen(true)}
+          onNavigateConversation={(selection) => setSelected(selection)}
         />
       </main>
 

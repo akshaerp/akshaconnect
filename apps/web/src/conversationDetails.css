@@ -19,7 +19,7 @@
   align-items: center;
   gap: 12px;
   color: #fff;
-  background: #082a61;
+  background: #0879e7;
 }
 
 .conversation-details-header > div {
@@ -41,7 +41,7 @@
 
 .conversation-details-header span {
   margin-top: 3px;
-  color: #bed0e8;
+  color: rgba(255,255,255,.82);
   font-size: 11px;
 }
 

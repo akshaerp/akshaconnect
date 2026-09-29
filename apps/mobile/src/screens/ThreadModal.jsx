@@ -9,7 +9,6 @@ import {
   StatusBar,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,6 +25,11 @@ import {
   uploadAttachment,
 } from '../api/client';
 import { colors } from '../theme/colors';
+import {
+  ConversationComposer,
+  ConversationHeader,
+  JumpToLatestButton,
+} from './ConversationChrome.jsx';
 
 const MAX_PENDING_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -85,47 +89,117 @@ async function prepareLocalCopy(item) {
   return localPathFromUri(copy.localUri);
 }
 
-function ThreadMessage({ message, currentMemberId, onOpenAttachment }) {
+function sameIdentityValue(left, right) {
+  const normalizedLeft = String(left || '').trim().toLowerCase();
+  const normalizedRight = String(right || '').trim().toLowerCase();
+
+  return Boolean(
+    normalizedLeft &&
+    normalizedRight &&
+    normalizedLeft === normalizedRight
+  );
+}
+
+function ThreadMessage({
+  message,
+  currentMemberId,
+  currentPrimaryEmail,
+  onOpenAttachment,
+}) {
   const deleted = Boolean(message.deleted_at);
   const own =
     message.sender_type === 'HUMAN' &&
-    message.sender_member_id === currentMemberId;
+    (
+      sameIdentityValue(
+        message.sender_member_id,
+        currentMemberId
+      ) ||
+      sameIdentityValue(
+        message.sender_primary_email,
+        currentPrimaryEmail
+      )
+    );
 
   return (
-    <View style={[styles.messageRow, own ? styles.messageRowOwn : null]}>
+    <View
+      style={[
+        styles.v16oMessageRow,
+        own ? styles.v16oMessageRowOwn : styles.v16oMessageRowOther,
+      ]}
+    >
       {!own ? (
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {String(message.sender_display_name || 'M').slice(0, 1).toUpperCase()}
+        <View style={styles.v16oAvatar}>
+          <Text style={styles.v16oAvatarText}>
+            {String(message.sender_display_name || 'M')
+              .slice(0, 1)
+              .toUpperCase()}
           </Text>
         </View>
       ) : null}
 
-      <View style={[styles.messageBubble, own ? styles.messageBubbleOwn : styles.messageBubbleOther]}>
-        <View style={styles.metaRow}>
-          <Text style={[styles.sender, own ? styles.senderOwn : null]}>
+      <View
+        style={[
+          styles.v16oMessageBubble,
+          own
+            ? styles.v16oMessageBubbleOwn
+            : styles.v16oMessageBubbleOther,
+        ]}
+      >
+        <View style={styles.v16oMetaRow}>
+          <Text
+            style={[
+              styles.v16oSender,
+              own ? styles.v16oSenderOwn : null,
+            ]}
+          >
             {own ? 'You' : message.sender_display_name || 'Member'}
           </Text>
-          <Text style={styles.time}>{formatTime(message.created_at)}</Text>
-          {message.edited_at && !deleted ? <Text style={styles.edited}>edited</Text> : null}
+
+          <Text style={styles.v16oTime}>
+            {formatTime(message.created_at)}
+          </Text>
+
+          {message.edited_at && !deleted ? (
+            <Text style={styles.v16oEdited}>edited</Text>
+          ) : null}
         </View>
 
         {deleted ? (
-          <Text style={styles.deleted}>Message deleted</Text>
+          <Text style={styles.v16oDeleted}>Message deleted</Text>
         ) : message.message_type !== 'ATTACHMENT' ? (
-          <Text style={styles.body}>{message.body_text || ''}</Text>
+          <Text style={styles.v16oBody}>
+            {message.body_text || ''}
+          </Text>
         ) : null}
 
-        {!deleted && Array.isArray(message.attachments) ? message.attachments.map((attachment) => (
-          <Pressable
-            key={attachment.attachment_id}
-            style={[styles.attachment, own ? styles.attachmentOwn : null]}
-            onPress={() => onOpenAttachment(attachment)}
-          >
-            <Text style={styles.attachmentName} numberOfLines={1}>{attachment.file_name}</Text>
-            <Text style={styles.attachmentMeta}>{formatSize(attachment.size_bytes)} · Open</Text>
-          </Pressable>
-        )) : null}
+        {!deleted && Array.isArray(message.attachments)
+          ? message.attachments.map((attachment) => (
+              <Pressable
+                key={attachment.attachment_id}
+                style={[
+                  styles.v16oAttachment,
+                  own ? styles.v16oAttachmentOwn : null,
+                ]}
+                onPress={() => onOpenAttachment(attachment)}
+              >
+                <Text
+                  style={styles.v16oAttachmentName}
+                  numberOfLines={1}
+                >
+                  {attachment.file_name}
+                </Text>
+                <Text style={styles.v16oAttachmentMeta}>
+                  {formatSize(attachment.size_bytes)} · Open
+                </Text>
+              </Pressable>
+            ))
+          : null}
+
+        {own && Number(message.read_by_count || 0) > 0 ? (
+          <Text style={styles.v16oReadReceipt}>
+            ✓✓ Read by {Number(message.read_by_count || 0)}
+          </Text>
+        ) : null}
       </View>
     </View>
   );
@@ -139,6 +213,7 @@ export default function ThreadModal({
   parentMessage,
   realtimeEvents,
   currentMemberId,
+  currentPrimaryEmail,
   onClose,
   onRead,
 }) {
@@ -149,9 +224,19 @@ export default function ThreadModal({
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [pending, setPending] = useState([]);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const lastSequenceRef = useRef(0);
   const scrollRef = useRef(null);
+  const nearBottomRef = useRef(true);
   const parentId = parentMessage?.message_id || '';
+
+  function scrollToLatest(animated = true) {
+    nearBottomRef.current = true;
+    setShowJumpToLatest(false);
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollToEnd({ animated });
+    });
+  }
 
   useEffect(() => {
     if (!visible || !parentId || !conversationId || !token) return;
@@ -162,6 +247,8 @@ export default function ThreadModal({
     setReplies([]);
     setDraft('');
     setPending([]);
+    nearBottomRef.current = true;
+    setShowJumpToLatest(false);
     listThread(serverUrl, token, conversationId, parentId)
       .then((result) => {
         if (cancelled) return;
@@ -169,6 +256,9 @@ export default function ThreadModal({
         setReplies(result.replies || []);
         const latest = (result.replies || []).at(-1);
         if (latest?.message_id) onRead?.(latest.message_id);
+        requestAnimationFrame(() => {
+          scrollRef.current?.scrollToEnd({ animated: false });
+        });
       })
       .catch((requestError) => { if (!cancelled) setError(requestError?.message || 'Could not load thread'); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -191,6 +281,13 @@ export default function ThreadModal({
       if (payload.type === 'message.created') {
         setReplies((current) => mergeById([...current, message]));
         onRead?.(message.message_id);
+        if (nearBottomRef.current) {
+          requestAnimationFrame(() => {
+            scrollRef.current?.scrollToEnd({ animated: true });
+          });
+        } else {
+          setShowJumpToLatest(true);
+        }
       } else if (payload.type === 'message.updated' || payload.type === 'message.deleted') {
         setReplies((current) => current.map((item) => item.message_id === message.message_id ? message : item));
       }
@@ -273,7 +370,7 @@ export default function ThreadModal({
         onRead?.(created.at(-1)?.message_id);
       }
       setPending([]);
-      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+      scrollToLatest(true);
     } catch (requestError) {
       setError(requestError?.message || 'Could not send thread reply');
     } finally {
@@ -302,60 +399,141 @@ export default function ThreadModal({
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={0}
         >
-          <View style={styles.header}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Close thread"
-              onPress={onClose}
-              style={styles.headerButton}
+          <ConversationHeader
+            title="Thread"
+            subtitle={title}
+            onBack={onClose}
+            backAccessibilityLabel="Close thread"
+            style={styles.header}
+          />
+
+          <View style={styles.history}>
+            <ScrollView
+              ref={scrollRef}
+              style={styles.historyScroll}
+              contentContainerStyle={styles.historyContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={
+                Platform.OS === 'ios' ? 'interactive' : 'on-drag'
+              }
+              onScroll={(event) => {
+                const {
+                  contentOffset,
+                  contentSize,
+                  layoutMeasurement,
+                } = event.nativeEvent;
+                const distanceFromBottom =
+                  contentSize.height -
+                  contentOffset.y -
+                  layoutMeasurement.height;
+                const nowNearBottom = distanceFromBottom < 48;
+                nearBottomRef.current = nowNearBottom;
+                setShowJumpToLatest(distanceFromBottom > 160);
+              }}
+              scrollEventThrottle={32}
+              onContentSizeChange={() => {
+                if (nearBottomRef.current) {
+                  scrollRef.current?.scrollToEnd({ animated: false });
+                }
+              }}
             >
-              <Text style={styles.headerButtonText}>‹</Text>
-            </Pressable>
-            <View style={styles.headerCopy}>
-              <Text style={styles.headerTitle}>Thread</Text>
-              <Text style={styles.headerSubtitle}>{title}</Text>
+              {parent ? (
+                <ThreadMessage
+                  message={parent}
+                  currentMemberId={currentMemberId}
+                  currentPrimaryEmail={currentPrimaryEmail}
+                  onOpenAttachment={openAttachment}
+                />
+              ) : null}
+
+              <View style={styles.separator}>
+                <View style={styles.line} />
+                <Text style={styles.separatorText}>Replies</Text>
+                <View style={styles.line} />
+              </View>
+
+              {loading ? (
+                <ActivityIndicator color={colors.accent} />
+              ) : null}
+
+              {!loading && replies.length === 0 ? (
+                <Text style={styles.empty}>No replies yet.</Text>
+              ) : null}
+
+              {replies.map((message) => (
+                <ThreadMessage
+                  key={message.message_id}
+                  message={message}
+                  currentMemberId={currentMemberId}
+                  currentPrimaryEmail={currentPrimaryEmail}
+                  onOpenAttachment={openAttachment}
+                />
+              ))}
+            </ScrollView>
+
+            <JumpToLatestButton
+              visible={showJumpToLatest}
+              onPress={() => scrollToLatest(true)}
+            />
+          </View>
+
+          {error ? (
+            <View style={styles.error}>
+              <Text style={styles.errorText}>{error}</Text>
             </View>
-            <View style={styles.headerSpacer} />
-          </View>
+          ) : null}
 
-          <ScrollView
-            ref={scrollRef}
-            style={styles.history}
-            contentContainerStyle={styles.historyContent}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-          >
-          {parent ? <ThreadMessage message={parent} currentMemberId={currentMemberId} onOpenAttachment={openAttachment} /> : null}
-          <View style={styles.separator}><View style={styles.line}/><Text style={styles.separatorText}>Replies</Text><View style={styles.line}/></View>
-          {loading ? <ActivityIndicator color={colors.accent} /> : null}
-          {!loading && replies.length === 0 ? <Text style={styles.empty}>No replies yet.</Text> : null}
-          {replies.map((message) => (
-            <ThreadMessage
-              key={message.message_id}
-              message={message}
-              currentMemberId={currentMemberId}
-              onOpenAttachment={openAttachment}
-            />
-          ))}
-        </ScrollView>
+          {pending.length ? (
+            <View style={styles.pending}>
+              {pending.map((item) => (
+                <View
+                  key={item.clientMessageId}
+                  style={styles.pendingItem}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={styles.pendingName}
+                  >
+                    {item.name}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove ${item.name}`}
+                    onPress={() =>
+                      setPending((rows) =>
+                        rows.filter(
+                          (row) =>
+                            row.clientMessageId !==
+                            item.clientMessageId
+                        )
+                      )
+                    }
+                  >
+                    <Text style={styles.pendingRemove}>×</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          ) : null}
 
-        {error ? <View style={styles.error}><Text style={styles.errorText}>{error}</Text></View> : null}
-        {pending.length ? <View style={styles.pending}>{pending.map((item) => <View key={item.clientMessageId} style={styles.pendingItem}><Text numberOfLines={1} style={styles.pendingName}>{item.name}</Text><Pressable onPress={() => setPending((rows) => rows.filter((row) => row.clientMessageId !== item.clientMessageId))}><Text style={styles.pendingRemove}>×</Text></Pressable></View>)}</View> : null}
-          <View style={styles.composer}>
-            <Pressable onPress={chooseAttachments} disabled={sending || pending.length >= MAX_PENDING_ATTACHMENTS} style={styles.attachButton}><Text style={styles.attachText}>＋</Text></Pressable>
-            <TextInput
-              style={styles.input}
-              value={draft}
-              onChangeText={setDraft}
-              placeholder="Reply in thread"
-              placeholderTextColor="#7b8595"
-              multiline
-              maxLength={8000}
-              textAlignVertical="top"
-              onFocus={() => requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }))}
-            />
-            <Pressable onPress={submit} disabled={sending || (!draft.trim() && pending.length === 0)} style={styles.sendButton}><Text style={styles.sendText}>{sending ? '…' : 'Send'}</Text></Pressable>
-          </View>
+          <ConversationComposer
+            value={draft}
+            onChangeText={setDraft}
+            onFocus={() => scrollToLatest(false)}
+            placeholder="Reply in thread"
+            maxLength={8000}
+            editable={!sending}
+            onAttach={chooseAttachments}
+            attachmentDisabled={
+              sending || pending.length >= MAX_PENDING_ATTACHMENTS
+            }
+            onSend={submit}
+            sendDisabled={
+              sending || (!draft.trim() && pending.length === 0)
+            }
+            sending={sending}
+            sendLabel="Send"
+          />
         </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
@@ -363,56 +541,201 @@ export default function ThreadModal({
 }
 
 const styles = StyleSheet.create({
-  safeArea:{flex:1,backgroundColor:colors.primary},
-  flex:{flex:1,backgroundColor:'#F6F9FC'},
-  header:{minHeight:72,paddingHorizontal:12,flexDirection:'row',alignItems:'center',backgroundColor:colors.primary,borderBottomWidth:StyleSheet.hairlineWidth,borderBottomColor:'rgba(255,255,255,.22)'},
-  headerButton:{width:42,height:42,borderRadius:21,alignItems:'center',justifyContent:'center',backgroundColor:'rgba(0,0,0,.12)'},
-  headerButtonText:{marginTop:-3,fontSize:34,lineHeight:38,color:'#fff'},
-  headerCopy:{flex:1,marginHorizontal:12},
-  headerTitle:{fontSize:18,fontWeight:'900',color:'#fff'},
-  headerSubtitle:{marginTop:1,fontSize:12,fontWeight:'600',color:'rgba(255,255,255,.82)'},
-  headerSpacer:{width:42},
+  // V16-O: keep thread sender ownership visually consistent with main chat.
+  v16oMessageRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingVertical: 5,
+  },
+  v16oMessageRowOwn: {
+    justifyContent: 'flex-end',
+  },
+  v16oMessageRowOther: {
+    justifyContent: 'flex-start',
+  },
+  v16oAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: '#E8EEF5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+    marginBottom: 2,
+  },
+  v16oAvatarText: {
+    fontWeight: '800',
+    color: '#31506F',
+  },
+  v16oMessageBubble: {
+    maxWidth: '82%',
+    paddingHorizontal: 13,
+    paddingTop: 9,
+    paddingBottom: 9,
+    borderRadius: 17,
+    borderWidth: 1,
+    shadowColor: '#0F2742',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  v16oMessageBubbleOther: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DCE5ED',
+    borderBottomLeftRadius: 5,
+  },
+  v16oMessageBubbleOwn: {
+    backgroundColor: '#EAF4FF',
+    borderColor: '#C9E1FA',
+    borderBottomRightRadius: 5,
+  },
+  v16oMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  v16oSender: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#243B53',
+  },
+  v16oSenderOwn: {
+    color: '#1769AA',
+  },
+  v16oTime: {
+    marginLeft: 7,
+    fontSize: 10,
+    color: '#7B8998',
+  },
+  v16oEdited: {
+    marginLeft: 7,
+    fontSize: 9,
+    color: '#8896A5',
+  },
+  v16oBody: {
+    marginTop: 4,
+    color: '#18324A',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  v16oDeleted: {
+    marginTop: 4,
+    color: '#7B8998',
+    fontStyle: 'italic',
+  },
+  v16oAttachment: {
+    marginTop: 7,
+    borderWidth: 1,
+    borderColor: '#DCE5ED',
+    borderRadius: 10,
+    padding: 9,
+    backgroundColor: '#F8FAFC',
+  },
+  v16oAttachmentOwn: {
+    backgroundColor: '#F3F8FE',
+    borderColor: '#C9E1FA',
+  },
+  v16oAttachmentName: {
+    fontWeight: '700',
+    color: '#20384F',
+  },
+  v16oAttachmentMeta: {
+    fontSize: 10,
+    color: '#687B8E',
+    marginTop: 2,
+  },
+  v16oReadReceipt: {
+    marginTop: 6,
+    alignSelf: 'flex-end',
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#5D7790',
+  },
 
-  history:{flex:1,backgroundColor:'#F6F9FC'},
-  historyContent:{paddingHorizontal:14,paddingTop:14,paddingBottom:28},
-
-  messageRow:{width:'100%',flexDirection:'row',alignItems:'flex-end',gap:9,paddingVertical:5,justifyContent:'flex-start'},
-  messageRowOwn:{justifyContent:'flex-end'},
-  avatar:{width:32,height:32,borderRadius:10,backgroundColor:'#E8EEF5',alignItems:'center',justifyContent:'center',marginBottom:2},
-  avatarText:{fontWeight:'800',color:'#31506F'},
-  messageBubble:{maxWidth:'82%',paddingHorizontal:13,paddingTop:9,paddingBottom:9,borderRadius:17,borderWidth:1,shadowColor:'#0F2742',shadowOffset:{width:0,height:1},shadowOpacity:.03,shadowRadius:2,elevation:1},
-  messageBubbleOther:{backgroundColor:'#FFFFFF',borderColor:'#DCE5ED',borderBottomLeftRadius:5},
-  messageBubbleOwn:{backgroundColor:'#EAF4FF',borderColor:'#C9E1FA',borderBottomRightRadius:5},
-
-  metaRow:{flexDirection:'row',alignItems:'center',gap:7},
-  sender:{fontSize:11,fontWeight:'900',color:'#243B53'},
-  senderOwn:{color:'#1769AA'},
-  time:{fontSize:10,color:'#7B8998'},
-  edited:{fontSize:9,color:'#8896A5'},
-  body:{marginTop:4,color:'#18324A',fontSize:14,lineHeight:20},
-  deleted:{marginTop:4,color:'#7B8998',fontStyle:'italic'},
-
-  separator:{flexDirection:'row',alignItems:'center',gap:9,marginVertical:13},
-  line:{height:StyleSheet.hairlineWidth,backgroundColor:'#D7E1EA',flex:1},
-  separatorText:{fontSize:10,fontWeight:'800',color:'#8493A2',textTransform:'uppercase',letterSpacing:.45},
-  empty:{textAlign:'center',color:'#7B8998',padding:18},
-
-  attachment:{marginTop:7,borderWidth:1,borderColor:'#DCE5ED',borderRadius:10,padding:9,backgroundColor:'#F8FAFC'},
-  attachmentOwn:{backgroundColor:'#F3F8FE',borderColor:'#C9E1FA'},
-  attachmentName:{fontWeight:'700',color:'#20384F'},
-  attachmentMeta:{fontSize:10,color:'#687B8E',marginTop:2},
-
-  error:{paddingHorizontal:12,paddingVertical:7,backgroundColor:'#FFF0F0'},
-  errorText:{color:'#A22727'},
-  pending:{paddingHorizontal:12,paddingTop:7,gap:5,backgroundColor:'#FFFFFF'},
-  pendingItem:{flexDirection:'row',alignItems:'center',backgroundColor:'#EEF3F8',borderRadius:9,paddingHorizontal:9,paddingVertical:6},
-  pendingName:{flex:1,fontSize:12,color:'#283F56'},
-  pendingRemove:{fontSize:20,paddingHorizontal:7,color:'#5F7081'},
-
-  composer:{borderTopWidth:1,borderTopColor:'#DCE5ED',paddingHorizontal:10,paddingVertical:8,flexDirection:'row',alignItems:'flex-end',gap:8,backgroundColor:'#FFFFFF'},
-  attachButton:{width:46,height:46,borderRadius:15,backgroundColor:'#EFF6FD',borderWidth:1,borderColor:'#D6E8FA',alignItems:'center',justifyContent:'center'},
-  attachText:{fontSize:28,lineHeight:30,color:colors.primary},
-  input:{flex:1,minHeight:46,maxHeight:120,borderWidth:1,borderColor:'#CAD6E2',borderRadius:18,paddingHorizontal:14,paddingTop:11,paddingBottom:11,color:'#18324A',backgroundColor:'#FFFFFF',fontSize:14},
-  sendButton:{minWidth:66,height:46,borderRadius:15,backgroundColor:colors.primary,alignItems:'center',justifyContent:'center',paddingHorizontal:10},
-  sendText:{color:'#FFFFFF',fontWeight:'900'}
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.primary,
+  },
+  flex: {
+    flex: 1,
+    backgroundColor: '#F6F9FC',
+  },
+  // Compatibility alias retained for existing V16 brand-regression checks.
+  // The visible header is rendered by ConversationHeader.
+  header: {
+    backgroundColor: colors.primary,
+  },
+  history: {
+    flex: 1,
+    position: 'relative',
+    backgroundColor: '#F6F9FC',
+  },
+  historyScroll: {
+    flex: 1,
+  },
+  historyContent: {
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 28,
+  },
+  separator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 13,
+  },
+  line: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#D7E1EA',
+    flex: 1,
+  },
+  separatorText: {
+    marginHorizontal: 9,
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#8493A2',
+    textTransform: 'uppercase',
+    letterSpacing: 0.45,
+  },
+  empty: {
+    textAlign: 'center',
+    color: colors.textMuted,
+    padding: 18,
+  },
+  error: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: '#FFF0F0',
+  },
+  errorText: {
+    color: '#A22727',
+  },
+  pending: {
+    paddingHorizontal: 12,
+    paddingTop: 7,
+    paddingBottom: 4,
+    backgroundColor: colors.surface,
+  },
+  pendingItem: {
+    minHeight: 42,
+    marginBottom: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F7FBFF',
+  },
+  pendingName: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.textPrimary,
+  },
+  pendingRemove: {
+    fontSize: 20,
+    paddingHorizontal: 7,
+    color: colors.textMuted,
+  },
 });

@@ -13,6 +13,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Modal,
+  NativeModules,
   Platform,
   Pressable,
   RefreshControl,
@@ -37,11 +38,18 @@ import {
   deleteMessage,
   downloadAttachmentToCache,
   editMessage,
+  listChannels,
+  listDirectMessages,
   listMessages,
+  listPresenceProfiles,
   listWorkspaceMembers,
   markRead,
+  markThreadRead,
   sendMessage,
   uploadAttachment,
+  searchConversationMessages,
+  toggleMessageReaction,
+  listMessageReactionUsers,
 } from '../api/client';
 import {
   addChannelMember,
@@ -54,12 +62,37 @@ import {
   saveConversationDraft,
 } from '../drafts/draftStore';
 import { colors } from '../theme/colors';
+import { loadRecentEmojis, saveRecentEmojis } from '../emoji/recentEmojiStore';
 import ThreadModal from './ThreadModal.jsx';
 import ConversationDetailsModal from './ConversationDetailsModal';
+import MessageActionSheet from './MessageActionSheet.jsx';
+import {
+  ConversationComposer,
+  ConversationHeader,
+  JumpToLatestButton,
+} from './ConversationChrome.jsx';
+
+function copyableMessageText(message) {
+  if (!message || message.deleted_at) return '';
+
+  const body = String(message.body_text || '').trim();
+  if (body) return body;
+
+  if (Array.isArray(message.attachments)) {
+    return message.attachments
+      .map((item) => String(item?.file_name || '').trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  return '';
+}
 
 const MAX_MESSAGE_CHARS = 8000;
 const MAX_PENDING_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
+const COMPOSER_EMOJIS = ['😀','😃','😄','😁','😂','😊','😍','👍','👏','🙏','🎉','✅','❤️','🔥','👀','🤝'];
 
 const ALLOWED_ATTACHMENT_TYPES = new Set([
   'image/jpeg',
@@ -328,7 +361,30 @@ function realtimeLabel(status) {
 function presenceLabel(status) {
   if (status === 'LIVE') return 'Live';
   if (status === 'AWAY') return 'Away';
-  return 'Not available';
+  return 'Offline';
+}
+
+function formatLastSeen(value) {
+  const parsed = new Date(value || '');
+  if (Number.isNaN(parsed.getTime())) return '';
+
+  const deltaMs = Date.now() - parsed.getTime();
+  if (deltaMs < 60 * 1000) return 'Last seen just now';
+  if (deltaMs < 60 * 60 * 1000) {
+    const minutes = Math.max(1, Math.floor(deltaMs / (60 * 1000)));
+    return `Last seen ${minutes}m ago`;
+  }
+
+  const today = new Date();
+  if (
+    parsed.getFullYear() === today.getFullYear() &&
+    parsed.getMonth() === today.getMonth() &&
+    parsed.getDate() === today.getDate()
+  ) {
+    return `Last seen ${parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  }
+
+  return `Last seen ${parsed.toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
 }
 
 function findUnreadDivider(rows, unreadCount, currentMemberId) {
@@ -356,7 +412,7 @@ function findUnreadDivider(rows, unreadCount, currentMemberId) {
 export default function ConversationScreen({
   session,
   serverUrl,
-  conversation,
+  conversation: initialConversation,
   realtimeStatus,
   realtimeEvents,
   reconcileEpoch,
@@ -366,6 +422,12 @@ export default function ConversationScreen({
   onBack,
 }) {
   const token = session?.access_token || '';
+  const [conversation, setConversation] = useState(initialConversation);
+
+  useEffect(() => {
+    setConversation(initialConversation);
+  }, [initialConversation?.conversationId]);
+
   const currentMemberId =
     session?.membership?.workspace_member_id || '';
 
@@ -381,6 +443,9 @@ export default function ConversationScreen({
   const draftHydratedScopeRef = useRef('');
   const draftUserChangedScopeRef = useRef('');
   const editingMessageRef = useRef(null);
+  const composerInputRef = useRef(null);
+  const messageLayoutYRef = useRef(new Map());
+  const highlightTimerRef = useRef(null);
 
   const [messages, setMessages] = useState([]);
   const [page, setPage] = useState({
@@ -419,6 +484,10 @@ export default function ConversationScreen({
     setEditingMessage,
   ] = useState(null);
   const [
+    quoteReplyMessage,
+    setQuoteReplyMessage,
+  ] = useState(null);
+  const [
     messageMutationId,
     setMessageMutationId,
   ] = useState('');
@@ -427,6 +496,48 @@ export default function ConversationScreen({
   const [newMessageDividerId, setNewMessageDividerId] =
     useState(null);
   const [threadParent, setThreadParent] = useState(null);
+  const [messageActionTarget, setMessageActionTarget] =
+    useState(null);
+  const [forwardMessage, setForwardMessage] =
+    useState(null);
+  const [forwardTargets, setForwardTargets] =
+    useState([]);
+  const [forwardQuery, setForwardQuery] =
+    useState('');
+  const [forwardLoading, setForwardLoading] =
+    useState(false);
+  const [forwardBusyConversationId, setForwardBusyConversationId] =
+    useState('');
+  const [forwardError, setForwardError] =
+    useState('');
+  const [showMessageSearch, setShowMessageSearch] = useState(false);
+  const [messageSearchQuery, setMessageSearchQuery] = useState('');
+  const [messageSearchResults, setMessageSearchResults] = useState([]);
+  const [messageSearchLoading, setMessageSearchLoading] = useState(false);
+  const [messageSearchError, setMessageSearchError] = useState('');
+  const [highlightMessageId, setHighlightMessageId] = useState('');
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [recentEmojis, setRecentEmojis] = useState([]);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    loadRecentEmojis().then((items) => { if (mounted) setRecentEmojis(items || []); });
+    return () => { mounted = false; };
+  }, []);
+
+  const filteredForwardTargets = useMemo(() => {
+    const query = String(forwardQuery || '').trim().toLowerCase();
+    if (!query) return forwardTargets;
+
+    return forwardTargets.filter((target) =>
+      [target.title, target.subtitle, target.kind]
+        .filter(Boolean)
+        .some((value) =>
+          String(value).toLowerCase().includes(query)
+        )
+    );
+  }, [forwardQuery, forwardTargets]);
   const [
     showConversationDetails,
     setShowConversationDetails,
@@ -459,6 +570,39 @@ export default function ConversationScreen({
     channelPeopleError,
     setChannelPeopleError,
   ] = useState('');
+  const [peerPresenceProfile, setPeerPresenceProfile] =
+    useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const memberId =
+      conversation?.kind === 'dm'
+        ? String(conversation?.otherWorkspaceMemberId || '').trim()
+        : '';
+
+    if (!memberId || !serverUrl || !token) {
+      setPeerPresenceProfile(null);
+      return undefined;
+    }
+
+    listPresenceProfiles(serverUrl, token, [memberId])
+      .then((result) => {
+        if (cancelled) return;
+        setPeerPresenceProfile(
+          result?.presence_profiles?.[0] || null
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setPeerPresenceProfile(null);
+      });
+
+    return () => { cancelled = true; };
+  }, [
+    conversation?.kind,
+    conversation?.otherWorkspaceMemberId,
+    serverUrl,
+    token,
+  ]);
 
   const draftScope = useMemo(
     () => ({
@@ -488,6 +632,31 @@ export default function ConversationScreen({
     draftScope.conversationId,
   ].join('|');
 
+  const conversationImageAttachments = useMemo(
+    () =>
+      messages.flatMap((message) => {
+        if (
+          !message ||
+          message.deleted_at ||
+          message.message_type !== 'ATTACHMENT'
+        ) {
+          return [];
+        }
+
+        return (message.attachments || [])
+          .filter((attachment) =>
+            attachmentIsImage(
+              attachment?.content_type
+            )
+          )
+          .map((attachment) => ({
+            ...attachment,
+            message_id: message.message_id,
+          }));
+      }),
+    [messages]
+  );
+
   const updateDraft = useCallback((value) => {
     const next = String(value ?? '');
     draftRef.current = next;
@@ -504,6 +673,7 @@ export default function ConversationScreen({
   }, [editingMessage]);
 
   const scrollToBottom = useCallback((animated = true) => {
+    setShowJumpToLatest(false);
     setTimeout(() => {
       scrollRef.current?.scrollToEnd({ animated });
     }, 30);
@@ -559,6 +729,48 @@ export default function ConversationScreen({
       conversation?.conversationId,
       onConversationRead,
       serverUrl,
+      token,
+    ]
+  );
+
+  const handleThreadRead = useCallback(
+    (messageId) => {
+      const parentId = threadParent?.message_id || '';
+      const conversationId = conversation?.conversationId || '';
+
+      if (!messageId || !parentId || !conversationId) {
+        return;
+      }
+
+      markThreadRead(
+        serverUrl,
+        token,
+        conversationId,
+        parentId,
+        messageId
+      ).catch(() => {});
+
+      setMessages((current) =>
+        current.map((item) => {
+          if (item.message_id !== parentId) {
+            return item;
+          }
+
+          if (Number(item.thread_unread_count || 0) === 0) {
+            return item;
+          }
+
+          return {
+            ...item,
+            thread_unread_count: 0,
+          };
+        })
+      );
+    },
+    [
+      conversation?.conversationId,
+      serverUrl,
+      threadParent?.message_id,
       token,
     ]
   );
@@ -663,9 +875,11 @@ export default function ConversationScreen({
     setExpandedAttachmentId('');
     setSavedAttachments({});
     setEditingMessage(null);
+    setQuoteReplyMessage(null);
     setMessageMutationId('');
     setError('');
     setNewMessageDividerId(null);
+    setShowJumpToLatest(false);
 
     arrivalDividerReadyRef.current = false;
     initialUnreadPositionedRef.current = false;
@@ -1080,7 +1294,7 @@ export default function ConversationScreen({
 
     if (availableSlots <= 0) {
       setError(
-        `You can attach up to ${MAX_PENDING_ATTACHMENTS} files.`
+        `Maximum ${MAX_PENDING_ATTACHMENTS} attachments can be sent at a time.`
       );
       return;
     }
@@ -1181,7 +1395,7 @@ export default function ConversationScreen({
 
       if (picked.length > availableSlots) {
         rejected.push(
-          `You can attach up to ${MAX_PENDING_ATTACHMENTS} files.`
+          `Maximum ${MAX_PENDING_ATTACHMENTS} attachments can be sent at a time.`
         );
       }
 
@@ -1246,6 +1460,82 @@ export default function ConversationScreen({
     }
   }
 
+  async function openImagePreviewAtIndex(
+    requestedIndex
+  ) {
+    if (
+      attachmentAction.attachmentId ||
+      conversationImageAttachments.length === 0
+    ) {
+      return;
+    }
+
+    const total =
+      conversationImageAttachments.length;
+    const normalizedIndex =
+      ((Number(requestedIndex || 0) % total) + total) %
+      total;
+    const attachment =
+      conversationImageAttachments[
+        normalizedIndex
+      ];
+
+    if (!attachment?.attachment_id) {
+      return;
+    }
+
+    setAttachmentAction({
+      attachmentId:
+        attachment.attachment_id,
+      mode: 'preview',
+    });
+    setError('');
+
+    let priorPath = '';
+
+    try {
+      priorPath =
+        previewAttachment?.localPath ||
+        '';
+
+      const downloaded =
+        await downloadAttachmentToCache(
+          serverUrl,
+          token,
+          conversation.conversationId,
+          attachment
+        );
+
+      setPreviewAttachment({
+        ...downloaded,
+        attachment,
+        galleryIndex:
+          normalizedIndex,
+        galleryTotal:
+          total,
+      });
+
+      if (
+        priorPath &&
+        priorPath !== downloaded.localPath
+      ) {
+        await removeAttachmentLocalCopy(
+          priorPath
+        );
+      }
+    } catch (requestError) {
+      setError(
+        requestError?.message ||
+          'Could not preview attachment'
+      );
+    } finally {
+      setAttachmentAction({
+        attachmentId: '',
+        mode: '',
+      });
+    }
+  }
+
   async function handlePreviewAttachment(
     attachment
   ) {
@@ -1253,6 +1543,27 @@ export default function ConversationScreen({
       !attachment?.attachment_id ||
       attachmentAction.attachmentId
     ) {
+      return;
+    }
+
+    if (
+      attachmentIsImage(
+        attachment?.content_type
+      )
+    ) {
+      const galleryIndex =
+        conversationImageAttachments
+          .findIndex(
+            (item) =>
+              item.attachment_id ===
+              attachment.attachment_id
+          );
+
+      await openImagePreviewAtIndex(
+        galleryIndex >= 0
+          ? galleryIndex
+          : 0
+      );
       return;
     }
 
@@ -1272,22 +1583,7 @@ export default function ConversationScreen({
           attachment
         );
 
-      if (
-        attachmentIsImage(
-          downloaded.contentType
-        )
-      ) {
-        setPreviewAttachment({
-          ...downloaded,
-          attachment,
-        });
-        return;
-      }
-
       if (Platform.OS === 'android') {
-        // Do not wrap this in Android's chooser intent. In this app context
-        // the chooser path can lose FLAG_ACTIVITY_NEW_TASK and fail to open
-        // PDFs/documents. actionViewIntent itself grants read access.
         await ReactNativeBlobUtil.android
           .actionViewIntent(
             downloaded.localPath,
@@ -1514,12 +1810,35 @@ export default function ConversationScreen({
       return;
     }
 
+    setQuoteReplyMessage(null);
     setEditingMessage(message);
     updateDraft(
       String(message.body_text || '')
     );
     setError('');
     scrollToBottom(false);
+  }
+
+  function beginQuoteReply(message) {
+    if (!message || message.deleted_at) {
+      return;
+    }
+
+    if (editingMessage) {
+      setEditingMessage(null);
+      updateDraft('');
+    }
+
+    setQuoteReplyMessage(message);
+    setError('');
+
+    requestAnimationFrame(() => {
+      composerInputRef.current?.focus?.();
+    });
+  }
+
+  function cancelQuoteReply() {
+    setQuoteReplyMessage(null);
   }
 
   function cancelEditingMessage() {
@@ -1615,6 +1934,294 @@ export default function ConversationScreen({
     }
   }
 
+  function closeMessageActions() {
+    setMessageActionTarget(null);
+  }
+
+  async function openForwardMessage(message) {
+    if (!message || message.deleted_at) {
+      return;
+    }
+
+    closeMessageActions();
+    setForwardMessage(message);
+    setForwardTargets([]);
+    setForwardQuery('');
+    setForwardError('');
+    setForwardLoading(true);
+
+    try {
+      const [channelPayload, dmPayload] =
+        await Promise.all([
+          listChannels(
+            serverUrl,
+            token
+          ),
+          listDirectMessages(
+            serverUrl,
+            token
+          ),
+        ]);
+
+      const targets = [
+        ...(dmPayload?.direct_messages || [])
+          .map((dm) => ({
+            kind: 'dm',
+            conversationId:
+              dm.conversation_id,
+            title:
+              dm.other_display_name ||
+              'Member',
+            subtitle:
+              dm.other_primary_email ||
+              'Direct message',
+            otherWorkspaceMemberId:
+              dm.other_workspace_member_id || '',
+          })),
+        ...(channelPayload?.channels || [])
+          .map((channel) => ({
+            kind: 'channel',
+            conversationId:
+              channel.conversation_id,
+            title:
+              channel.channel_name ||
+              'Channel',
+            subtitle:
+              channel.visibility ===
+              'PRIVATE'
+                ? 'Private channel'
+                : 'Public channel',
+          })),
+      ]
+        .filter(
+          (target) =>
+            target.conversationId &&
+            target.conversationId !==
+              conversation.conversationId
+        )
+        .sort((left, right) =>
+          String(left.title || '')
+            .localeCompare(
+              String(right.title || ''),
+              undefined,
+              { sensitivity: 'base' }
+            )
+        );
+
+      setForwardTargets(targets);
+    } catch (requestError) {
+      setForwardError(
+        requestError?.message ||
+          'Could not load conversations.'
+      );
+    } finally {
+      setForwardLoading(false);
+    }
+  }
+
+  function closeForwardMessage() {
+    if (forwardBusyConversationId) {
+      return;
+    }
+
+    setForwardMessage(null);
+    setForwardTargets([]);
+    setForwardQuery('');
+    setForwardError('');
+  }
+
+  async function forwardMessageToTarget(
+    target
+  ) {
+    if (
+      !forwardMessage ||
+      !target?.conversationId ||
+      forwardBusyConversationId
+    ) {
+      return;
+    }
+
+    setForwardBusyConversationId(
+      target.conversationId
+    );
+    setForwardError('');
+
+    const localPaths = [];
+
+    try {
+      const bodyText =
+        String(
+          forwardMessage.body_text || ''
+        ).trim();
+
+      if (bodyText) {
+        await sendMessage(
+          serverUrl,
+          token,
+          target.conversationId,
+          {
+            bodyText,
+            clientMessageId:
+              makeClientMessageId(),
+          }
+        );
+      }
+
+      for (
+        const attachment
+        of forwardMessage.attachments || []
+      ) {
+        const downloaded =
+          await downloadAttachmentToCache(
+            serverUrl,
+            token,
+            conversation.conversationId,
+            attachment
+          );
+
+        localPaths.push(
+          downloaded.localPath
+        );
+
+        await uploadAttachment(
+          serverUrl,
+          token,
+          target.conversationId,
+          {
+            localPath:
+              downloaded.localPath,
+            fileName:
+              downloaded.fileName,
+            contentType:
+              downloaded.contentType,
+            clientMessageId:
+              makeClientMessageId(),
+          }
+        );
+      }
+
+      if (
+        !bodyText &&
+        !(forwardMessage.attachments || [])
+          .length
+      ) {
+        throw new Error(
+          'This message has no content to forward.'
+        );
+      }
+
+      setForwardMessage(null);
+      setForwardTargets([]);
+      setForwardQuery('');
+      setConversation({
+        ...target,
+        unreadAtOpen: 0,
+      });
+    } catch (requestError) {
+      setForwardError(
+        requestError?.message ||
+          'Could not forward the message.'
+      );
+    } finally {
+      for (const localPath of localPaths) {
+        await removeAttachmentLocalCopy(
+          localPath
+        );
+      }
+
+      setForwardBusyConversationId('');
+    }
+  }
+
+  async function copyMessage(message) {
+    const clipboard =
+      NativeModules.AkshaConnectClipboard;
+
+    const imageAttachment =
+      message?.message_type === 'ATTACHMENT' &&
+      Array.isArray(message.attachments)
+        ? message.attachments.find((item) =>
+            attachmentIsImage(item?.content_type)
+          )
+        : null;
+
+    if (imageAttachment) {
+      let localPath = '';
+
+      try {
+        if (!clipboard?.setImage) {
+          throw new Error(
+            'Image clipboard service is unavailable'
+          );
+        }
+
+        const downloaded =
+          await downloadAttachmentToCache(
+            serverUrl,
+            token,
+            conversation.conversationId,
+            imageAttachment
+          );
+
+        localPath = downloaded.localPath;
+
+        await clipboard.setImage(
+          downloaded.localPath,
+          downloaded.contentType,
+          downloaded.fileName
+        );
+
+        closeMessageActions();
+        Alert.alert(
+          'Image copied',
+          'The image is ready to paste into Android apps that accept image clipboard content.'
+        );
+      } catch (copyError) {
+        closeMessageActions();
+        Alert.alert(
+          'Could not copy image',
+          copyError?.message ||
+            'Image clipboard service is unavailable.'
+        );
+      } finally {
+        await removeAttachmentLocalCopy(
+          localPath
+        );
+      }
+
+      return;
+    }
+
+    const value = copyableMessageText(message);
+
+    if (!value) {
+      closeMessageActions();
+      Alert.alert(
+        'Nothing to copy',
+        'This message does not contain copyable text.'
+      );
+      return;
+    }
+
+    try {
+      if (!clipboard?.setText) {
+        throw new Error(
+          'Clipboard service is unavailable'
+        );
+      }
+
+      clipboard.setText(value);
+      closeMessageActions();
+    } catch (copyError) {
+      closeMessageActions();
+      Alert.alert(
+        'Could not copy message',
+        copyError?.message ||
+          'Clipboard service is unavailable.'
+      );
+    }
+  }
+
   function manageOwnMessage(
     message,
     onReplyInThread
@@ -1626,27 +2233,84 @@ export default function ConversationScreen({
       return;
     }
 
-    const actions = [];
+    setMessageActionTarget({
+      message,
+      onReplyInThread,
+    });
+  }
 
-    if (!message.reply_to_message_id) {
-      actions.push({
-        text: 'Reply in thread',
-        onPress: () => onReplyInThread?.(),
-      });
-    }
+  function messageActionItems() {
+    const message =
+      messageActionTarget?.message;
+
+    if (!message) return [];
+
+    const actions = [];
 
     const own =
       message.sender_type === 'HUMAN' &&
       message.sender_member_id === currentMemberId;
+
+    actions.push({
+      key: 'reply',
+      icon: '↩',
+      label: 'Reply',
+      onPress: () => {
+        closeMessageActions();
+        beginQuoteReply(message);
+      },
+    });
+
+    if (!message.reply_to_message_id) {
+      actions.push({
+        key: 'thread',
+        icon: '↪',
+        label: 'Reply in thread',
+        onPress: () => {
+          const openThread =
+            messageActionTarget?.onReplyInThread;
+          closeMessageActions();
+          openThread?.();
+        },
+      });
+    }
+
+    if (copyableMessageText(message)) {
+      actions.push({
+        key: 'copy',
+        icon: '⧉',
+        label:
+          message.message_type === 'ATTACHMENT'
+            ? (message.attachments || []).some((item) =>
+                attachmentIsImage(item?.content_type)
+              )
+              ? 'Copy image'
+              : 'Copy file name'
+            : 'Copy',
+        onPress: () => copyMessage(message),
+      });
+    }
+
+    actions.push({
+      key: 'forward',
+      icon: '➜',
+      label: 'Forward',
+      onPress: () =>
+        openForwardMessage(message),
+    });
 
     if (
       own &&
       message.message_type === 'TEXT'
     ) {
       actions.push({
-        text: 'Edit',
-        onPress: () =>
-          beginEditMessage(message),
+        key: 'edit',
+        icon: '✎',
+        label: 'Edit',
+        onPress: () => {
+          closeMessageActions();
+          beginEditMessage(message);
+        },
       });
     }
 
@@ -1659,13 +2323,16 @@ export default function ConversationScreen({
       )
     ) {
       actions.push({
-        text:
+        key: 'delete',
+        icon: '⌫',
+        label:
           message.message_type ===
             'ATTACHMENT'
             ? 'Delete file'
             : 'Delete message',
-        style: 'destructive',
+        destructive: true,
         onPress: () => {
+          closeMessageActions();
           Alert.alert(
             'Confirm delete',
             message.message_type ===
@@ -1692,19 +2359,7 @@ export default function ConversationScreen({
       });
     }
 
-    actions.push({
-      text: 'Cancel',
-      style: 'cancel',
-    });
-
-    Alert.alert(
-      'Message actions',
-      message.message_type ===
-        'ATTACHMENT'
-        ? 'File options'
-        : 'Choose an action',
-      actions
-    );
+    return actions;
   }
 
   async function submitMessage() {
@@ -1713,6 +2368,9 @@ export default function ConversationScreen({
       pendingAttachments.map((item) => ({
         ...item,
       }));
+    const quoteMessageId =
+      quoteReplyMessage?.message_id || null;
+    let quoteConsumed = false;
 
     if (editingMessage) {
       if (
@@ -1779,8 +2437,13 @@ export default function ConversationScreen({
             bodyText,
             clientMessageId:
               makeClientMessageId(),
+            quoteMessageId,
           }
         );
+
+        if (quoteMessageId) {
+          quoteConsumed = true;
+        }
 
         if (result?.message) {
           latestCreatedMessage = result.message;
@@ -1828,6 +2491,10 @@ export default function ConversationScreen({
                 contentType: pending.contentType,
                 clientMessageId:
                   pending.clientMessageId,
+                quoteMessageId:
+                  !quoteConsumed
+                    ? quoteMessageId
+                    : null,
                 onProgress: (progress) => {
                   updatePendingAttachment(
                     pending.clientMessageId,
@@ -1848,6 +2515,13 @@ export default function ConversationScreen({
                 result.message,
               ])
             );
+          }
+
+          if (
+            quoteMessageId &&
+            !quoteConsumed
+          ) {
+            quoteConsumed = true;
           }
 
           // Remove only the file durably acknowledged by the server.
@@ -1877,6 +2551,10 @@ export default function ConversationScreen({
       }
 
       setNewMessageDividerId(null);
+
+      if (quoteConsumed) {
+        setQuoteReplyMessage(null);
+      }
 
       if (latestCreatedMessage?.message_id) {
         markMessageRead(
@@ -1916,8 +2594,30 @@ export default function ConversationScreen({
             conversation.conversationId
           );
 
+        const members = payload?.members || [];
+        let profilesByMember = {};
+        try {
+          const profilePayload = await listPresenceProfiles(
+            serverUrl,
+            token,
+            members
+              .map((member) => member?.workspace_member_id)
+              .filter(Boolean)
+          );
+          profilesByMember = Object.fromEntries(
+            (profilePayload?.presence_profiles || []).map((profile) => [
+              profile.workspace_member_id,
+              profile,
+            ])
+          );
+        } catch {}
+
         setChannelPeople(
-          payload?.members || []
+          members.map((member) => ({
+            ...member,
+            presence_profile:
+              profilesByMember[member.workspace_member_id] || null,
+          }))
         );
         setCanManageChannelPeople(
           Boolean(
@@ -2146,6 +2846,141 @@ export default function ConversationScreen({
     setCanManageChannelPeople(false);
   }, [conversation?.conversationId]);
 
+  async function jumpToMessage(messageId) {
+    const targetId = String(messageId || '').trim();
+    if (!targetId) return;
+
+    let working = messages;
+    let workingPage = page;
+    let guard = 0;
+
+    while (!working.some((item) => item.message_id === targetId) &&
+           workingPage?.has_more && workingPage?.next_before_message_id && guard < 40) {
+      guard += 1;
+      const result = await listMessages(
+        serverUrl,
+        token,
+        conversation.conversationId,
+        { limit: 50, before: workingPage.next_before_message_id }
+      );
+      working = mergeMessages([...(result.messages || []), ...working]);
+      workingPage = result.page || { has_more: false, next_before_message_id: null };
+      setMessages(working);
+      setPage(workingPage);
+    }
+
+    if (!working.some((item) => item.message_id === targetId)) {
+      Alert.alert('Message unavailable', 'The original message could not be found.');
+      return;
+    }
+
+    setHighlightMessageId(targetId);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => setHighlightMessageId(''), 2200);
+
+    requestAnimationFrame(() => {
+      const y = messageLayoutYRef.current.get(targetId);
+      if (Number.isFinite(y)) {
+        scrollRef.current?.scrollTo({ y: Math.max(0, y - 16), animated: true });
+      }
+    });
+  }
+
+  async function runMessageSearch() {
+    const query = messageSearchQuery.trim();
+    if (!query || messageSearchLoading) return;
+    setMessageSearchLoading(true);
+    setMessageSearchError('');
+    try {
+      const result = await searchConversationMessages(
+        serverUrl,
+        token,
+        conversation.conversationId,
+        { query, limit: 50 }
+      );
+      setMessageSearchResults(result?.messages || []);
+    } catch (requestError) {
+      setMessageSearchError(requestError?.message || 'Could not search messages');
+    } finally {
+      setMessageSearchLoading(false);
+    }
+  }
+
+  async function openSearchResult(message) {
+    setShowMessageSearch(false);
+    if (message?.reply_to_message_id) {
+      const parent = messages.find((item) => item.message_id === message.reply_to_message_id);
+      if (parent) {
+        setThreadParent(parent);
+        return;
+      }
+      await jumpToMessage(message.reply_to_message_id);
+      const found = messages.find((item) => item.message_id === message.reply_to_message_id);
+      if (found) setThreadParent(found);
+      return;
+    }
+    await jumpToMessage(message?.message_id);
+  }
+
+  function insertEmoji(emoji) {
+    const value = String(emoji || '');
+    if (!value) return;
+    const next = `${draft}${value}`.slice(0, MAX_MESSAGE_CHARS);
+    handleDraftChange(next);
+    setRecentEmojis((current) => {
+      const next = [value, ...current.filter((item) => item !== value)].slice(0, 8);
+      saveRecentEmojis(next);
+      return next;
+    });
+    setShowEmojiPicker(false);
+    requestAnimationFrame(() => composerInputRef.current?.focus?.());
+  }
+
+  async function reactToMessage(message, emoji) {
+    if (!message?.message_id || message.deleted_at) return;
+    try {
+      const result = await toggleMessageReaction(
+        serverUrl,
+        token,
+        conversation.conversationId,
+        message.message_id,
+        emoji
+      );
+      setMessages((current) => current.map((item) =>
+        item.message_id === message.message_id
+          ? { ...item, reactions: result?.reactions || [] }
+          : item
+      ));
+      closeMessageActions();
+    } catch (requestError) {
+      const status = Number(requestError?.status || 0);
+      Alert.alert(
+        'Could not react',
+        status === 404
+          ? 'This AkshaConnect server has not been upgraded to the V16 reaction API yet. Apply the V16 server update and reaction migration, then retry.'
+          : requestError?.message || 'Reaction failed'
+      );
+    }
+  }
+
+  async function showReactionUsers(message) {
+    if (!message?.message_id) return;
+    try {
+      const result = await listMessageReactionUsers(
+        serverUrl,
+        token,
+        conversation.conversationId,
+        message.message_id
+      );
+      const lines = (result?.reactions || []).map((item) =>
+        `${item.emoji} ${item.display_name || 'Member'}`
+      );
+      Alert.alert('Reactions', lines.length ? lines.join('\n') : 'No reactions yet');
+    } catch (requestError) {
+      Alert.alert('Could not load reactions', requestError?.message || 'Please try again');
+    }
+  }
+
   const canSend =
     editingMessage
       ? draft.trim().length > 0 &&
@@ -2171,9 +3006,15 @@ export default function ConversationScreen({
   const statusAway =
     showPeerPresence &&
     normalizedPeerPresence === 'AWAY';
+  const peerLastSeenLabel =
+    showPeerPresence && normalizedPeerPresence === 'NOT_AVAILABLE'
+      ? formatLastSeen(peerPresenceProfile?.last_seen_at)
+      : '';
   const statusLabel =
     showPeerPresence
-      ? presenceLabel(normalizedPeerPresence)
+      ? (peerPresenceProfile?.custom_status ||
+          peerLastSeenLabel ||
+          presenceLabel(normalizedPeerPresence))
       : realtimeLabel(realtimeStatus);
 
   return (
@@ -2194,92 +3035,57 @@ export default function ConversationScreen({
         }
         keyboardVerticalOffset={0}
       >
-        <View style={styles.header}>
-          <Pressable
-            accessibilityRole="button"
-            onPress={onBack}
-            style={({ pressed }) => [
-              styles.backButton,
-              pressed ? styles.pressed : null,
-            ]}
-          >
-            <Text style={styles.backText}>‹</Text>
-          </Pressable>
-
-          <View style={styles.headerCopy}>
-            <Text
-              style={styles.title}
-              numberOfLines={1}
-            >
-              {conversation.kind === 'channel'
-                ? `# ${conversation.title}`
-                : conversation.title}
-            </Text>
-
-            <View style={styles.subtitleRow}>
-              <Text
-                style={styles.subtitle}
-                numberOfLines={1}
-              >
-                {conversation.subtitle}
-              </Text>
-
-              <View
-                style={[
-                  styles.realtimePill,
-                  statusLive
-                    ? styles.realtimePillConnected
-                    : statusAway
-                      ? styles.realtimePillAway
-                      : styles.realtimePillOffline,
+        <ConversationHeader
+          title={
+            conversation.kind === 'channel'
+              ? `# ${conversation.title}`
+              : conversation.title
+          }
+          subtitle={conversation.subtitle}
+          onBack={onBack}
+          backAccessibilityLabel="Back to conversations"
+          statusLabel={statusLabel}
+          statusTone={
+            statusLive
+              ? 'connected'
+              : statusAway
+                ? 'away'
+                : 'offline'
+          }
+          style={styles.header}
+          rightAccessory={(
+            <View style={styles.headerActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Search messages"
+                onPress={() => {
+                  setShowMessageSearch(true);
+                  setMessageSearchQuery('');
+                  setMessageSearchResults([]);
+                  setMessageSearchError('');
+                }}
+                style={({ pressed }) => [
+                  styles.peopleButton,
+                  pressed ? styles.pressed : null,
                 ]}
               >
-                <View
-                  style={[
-                    styles.realtimeDot,
-                    statusLive
-                      ? styles.realtimeDotConnected
-                      : statusAway
-                        ? styles.realtimeDotAway
-                        : styles.realtimeDotOffline,
-                  ]}
-                />
-                <Text
-                  style={[
-                    styles.realtimeText,
-                    statusLive
-                      ? styles.realtimeTextConnected
-                      : statusAway
-                        ? styles.realtimeTextAway
-                        : styles.realtimeTextOffline,
-                  ]}
-                >
-                  {statusLabel}
-                </Text>
-              </View>
-            </View>
-          </View>
+                <Text style={styles.detailsButtonText}>⌕</Text>
+              </Pressable>
 
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Conversation details"
-            onPress={() =>
-              setShowConversationDetails(true)
-            }
-            style={({ pressed }) => [
-              styles.peopleButton,
-              pressed
-                ? styles.pressed
-                : null,
-            ]}
-          >
-            <Text
-              style={styles.detailsButtonText}
-            >
-              ⋮
-            </Text>
-          </Pressable>
-        </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Conversation details"
+                onPress={() => setShowConversationDetails(true)}
+                style={({ pressed }) => [
+                  styles.peopleButton,
+                  pressed ? styles.pressed : null,
+                ]}
+              >
+                <Text style={styles.detailsButtonText}>⋮</Text>
+              </Pressable>
+            </View>
+          )}
+        />
 
         <View style={styles.history}>
           {loading ? (
@@ -2312,6 +3118,9 @@ export default function ConversationScreen({
 
                 nearBottomRef.current =
                   nowNearBottom;
+                setShowJumpToLatest(
+                  distanceFromBottom > 160
+                );
 
                 if (
                   nowNearBottom &&
@@ -2329,6 +3138,7 @@ export default function ConversationScreen({
                   }
 
                   setNewMessageDividerId(null);
+                  setShowJumpToLatest(false);
                 }
               }}
               scrollEventThrottle={32}
@@ -2360,7 +3170,10 @@ export default function ConversationScreen({
                   return;
                 }
 
-                if (messages.length <= 50) {
+                if (
+                  messages.length <= 50 &&
+                  nearBottomRef.current
+                ) {
                   scrollRef.current?.scrollToEnd({
                     animated: false,
                   });
@@ -2507,7 +3320,7 @@ export default function ConversationScreen({
                                 styles.newMessagesText
                               }
                             >
-                              New messages
+                              Unread messages
                             </Text>
 
                             <View
@@ -2518,6 +3331,19 @@ export default function ConversationScreen({
                           </View>
                         ) : null}
 
+                        <View
+                          onLayout={(event) => {
+                            messageLayoutYRef.current.set(
+                              message.message_id,
+                              Number(event.nativeEvent?.layout?.y || 0)
+                            );
+                          }}
+                          style={
+                            highlightMessageId === message.message_id
+                              ? styles.highlightedMessage
+                              : null
+                          }
+                        >
                         <MessageBubble
                           message={message}
                           own={own}
@@ -2552,7 +3378,15 @@ export default function ConversationScreen({
                           onDownloadAttachment={
                             handleDownloadAttachment
                           }
+                          serverUrl={serverUrl}
+                          token={token}
+                          conversationId={
+                            conversation.conversationId
+                          }
+                          onJumpToMessage={jumpToMessage}
+                          onShowReactionUsers={showReactionUsers}
                         />
+                        </View>
                       </React.Fragment>
                     );
                   }
@@ -2560,6 +3394,18 @@ export default function ConversationScreen({
               )}
             </ScrollView>
           )}
+
+          <JumpToLatestButton
+            visible={showJumpToLatest}
+            onPress={() => {
+              scrollToBottom(true);
+              const latest = messages[messages.length - 1];
+              if (latest?.message_id) {
+                markMessageRead(latest.message_id);
+              }
+              setNewMessageDividerId(null);
+            }}
+          />
         </View>
 
         {error ? (
@@ -2567,6 +3413,51 @@ export default function ConversationScreen({
             <Text style={styles.errorText}>
               {error}
             </Text>
+          </View>
+        ) : null}
+
+        {quoteReplyMessage ? (
+          <View style={styles.quoteReplyBanner}>
+            <View style={styles.quoteReplyAccent} />
+            <View style={styles.quoteReplyBannerCopy}>
+              <Text style={styles.quoteReplyBannerTitle}>
+                Replying to{' '}
+                {quoteReplyMessage.sender_member_id ===
+                currentMemberId
+                  ? 'your message'
+                  : quoteReplyMessage.sender_display_name ||
+                    'message'}
+              </Text>
+              <Text
+                style={styles.quoteReplyBannerPreview}
+                numberOfLines={2}
+              >
+                {quoteReplyMessage.deleted_at
+                  ? 'Message deleted'
+                  : quoteReplyMessage.message_type ===
+                      'ATTACHMENT'
+                    ? `Attachment: ${
+                        quoteReplyMessage.body_text ||
+                        'file'
+                      }`
+                    : quoteReplyMessage.body_text ||
+                      ''}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel reply"
+              onPress={cancelQuoteReply}
+              disabled={sending}
+              style={({ pressed }) => [
+                styles.quoteReplyCancelButton,
+                pressed ? styles.pressed : null,
+              ]}
+            >
+              <Text style={styles.quoteReplyCancelText}>
+                ×
+              </Text>
+            </Pressable>
           </View>
         ) : null}
 
@@ -2611,8 +3502,10 @@ export default function ConversationScreen({
                 Attachments
               </Text>
               <Text style={styles.attachmentTrayCount}>
-                {pendingAttachments.length}/
-                {MAX_PENDING_ATTACHMENTS}
+                {pendingAttachments.length}{' '}
+                {pendingAttachments.length === 1
+                  ? 'attachment'
+                  : 'attachments'}
               </Text>
             </View>
 
@@ -2706,98 +3599,60 @@ export default function ConversationScreen({
           </View>
         ) : null}
 
-        <View style={styles.composer}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Attach files"
-            onPress={chooseAttachments}
-            disabled={
-              Boolean(editingMessage) ||
-              sending ||
-              pickingAttachments ||
-              pendingAttachments.length >=
-                MAX_PENDING_ATTACHMENTS
-            }
-            style={({ pressed }) => [
-              styles.attachButton,
-              pendingAttachments.length >=
-              MAX_PENDING_ATTACHMENTS
-                ? styles.attachButtonDisabled
-                : null,
-              pressed &&
-              !sending &&
-              !pickingAttachments
-                ? styles.pressed
-                : null,
-            ]}
-          >
-            {pickingAttachments ? (
-              <ActivityIndicator
-                size="small"
-                color={colors.primary}
-              />
-            ) : (
-              <Text
-                style={styles.attachButtonIcon}
+        {showEmojiPicker ? (
+          <View style={styles.emojiPicker}>
+            {(recentEmojis.length ? recentEmojis : COMPOSER_EMOJIS).map((emoji) => (
+              <Pressable
+                key={emoji}
+                accessibilityRole="button"
+                accessibilityLabel={`Insert ${emoji}`}
+                onPress={() => insertEmoji(emoji)}
+                style={styles.emojiChoice}
               >
-                ＋
-              </Text>
-            )}
-          </Pressable>
+                <Text style={styles.emojiChoiceText}>{emoji}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
 
-          <TextInput
-            value={draft}
-            onChangeText={(value) => {
-              onUserActivity?.();
-              handleDraftChange(value);
-            }}
-            onFocus={() => {
-              onUserActivity?.();
-              scrollToBottom(false);
-            }}
-            placeholder={
-              editingMessage
-                ? 'Edit message'
+        <ConversationComposer
+          inputRef={composerInputRef}
+          value={draft}
+          onChangeText={(value) => {
+            onUserActivity?.();
+            handleDraftChange(value);
+          }}
+          onFocus={() => {
+            onUserActivity?.();
+            scrollToBottom(false);
+          }}
+          placeholder={
+            editingMessage
+              ? 'Edit message'
+              : quoteReplyMessage
+                ? 'Reply'
                 : 'Message'
-            }
-            placeholderTextColor={
-              colors.textMuted
-            }
-            style={styles.input}
-            multiline
-            maxLength={MAX_MESSAGE_CHARS}
-            editable={!sending}
-          />
-
-          <Pressable
-            accessibilityRole="button"
-            onPress={submitMessage}
-            disabled={!canSend}
-            style={({ pressed }) => [
-              styles.sendButton,
-              !canSend
-                ? styles.sendButtonDisabled
-                : null,
-              pressed && canSend
-                ? styles.sendButtonPressed
-                : null,
-            ]}
-          >
-            {sending ? (
-              <ActivityIndicator
-                color="#FFFFFF"
-              />
-            ) : editingMessage ? (
-              <Text style={styles.sendText}>
-                Save
-              </Text>
-            ) : (
-              <Text style={styles.sendText}>
-                Send
-              </Text>
-            )}
-          </Pressable>
-        </View>
+          }
+          maxLength={MAX_MESSAGE_CHARS}
+          editable={!sending}
+          onAttach={chooseAttachments}
+          attachmentDisabled={
+            Boolean(editingMessage) ||
+            sending ||
+            pickingAttachments ||
+            pendingAttachments.length >=
+              MAX_PENDING_ATTACHMENTS
+          }
+          attaching={pickingAttachments}
+          onEmojiPress={() =>
+            setShowEmojiPicker((current) => !current)
+          }
+          emojiOpen={showEmojiPicker}
+          onSend={submitMessage}
+          sendDisabled={!canSend}
+          sending={sending}
+          sendLabel={editingMessage ? 'Save' : 'Send'}
+        />
 
         {draft.length >=
         MAX_MESSAGE_CHARS - 500 ? (
@@ -2807,6 +3662,262 @@ export default function ConversationScreen({
             {draft.length}/{MAX_MESSAGE_CHARS}
           </Text>
         ) : null}
+
+        <Modal
+          visible={showMessageSearch}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowMessageSearch(false)}
+        >
+          <Pressable
+            style={styles.searchOverlay}
+            onPress={() => setShowMessageSearch(false)}
+          >
+            <Pressable style={styles.searchPanel} onPress={() => {}}>
+              <View style={styles.searchHeader}>
+                <Text style={styles.searchTitle}>Search in conversation</Text>
+                <Pressable onPress={() => setShowMessageSearch(false)}>
+                  <Text style={styles.searchClose}>×</Text>
+                </Pressable>
+              </View>
+              <View style={styles.searchRow}>
+                <TextInput
+                  value={messageSearchQuery}
+                  onChangeText={setMessageSearchQuery}
+                  placeholder="Search message text"
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.searchInput}
+                  returnKeyType="search"
+                  onSubmitEditing={runMessageSearch}
+                />
+                <Pressable onPress={runMessageSearch} style={styles.searchButton}>
+                  <Text style={styles.searchButtonText}>Search</Text>
+                </Pressable>
+              </View>
+              {messageSearchError ? <Text style={styles.searchError}>{messageSearchError}</Text> : null}
+              {messageSearchLoading ? <ActivityIndicator color={colors.primary} /> : null}
+              <ScrollView style={styles.searchResults}>
+                {messageSearchResults.map((item) => (
+                  <Pressable
+                    key={item.message_id}
+                    onPress={() => openSearchResult(item)}
+                    style={styles.searchResultRow}
+                  >
+                    <Text style={styles.searchResultSender} numberOfLines={1}>
+                      {item.sender_display_name || 'Member'}
+                    </Text>
+                    <Text style={styles.searchResultBody} numberOfLines={2}>
+                      {item.body_text || (item.message_type === 'ATTACHMENT' ? 'Attachment' : '')}
+                    </Text>
+                    <Text style={styles.searchResultMeta}>
+                      {item.reply_to_message_id ? 'Thread reply · ' : ''}{formatMessageTime(item.created_at)}
+                    </Text>
+                  </Pressable>
+                ))}
+                {!messageSearchLoading && messageSearchQuery.trim() && messageSearchResults.length === 0 ? (
+                  <Text style={styles.searchEmpty}>No matching messages.</Text>
+                ) : null}
+              </ScrollView>
+            </Pressable>
+          </Pressable>
+        </Modal>
+
+        <MessageActionSheet
+          visible={Boolean(messageActionTarget)}
+          title={
+            messageActionTarget?.message?.message_type ===
+            'ATTACHMENT'
+              ? 'File actions'
+              : 'Message actions'
+          }
+          reactions={QUICK_REACTIONS.map((emoji) => ({
+            key: `reaction-${emoji}`,
+            emoji,
+            selected: Boolean(
+              (messageActionTarget?.message?.reactions || []).find(
+                (item) =>
+                  item.emoji === emoji &&
+                  item.reacted_by_me
+              )
+            ),
+            onPress: () =>
+              reactToMessage(
+                messageActionTarget?.message,
+                emoji
+              ),
+          }))}
+          actions={messageActionItems()}
+          onClose={closeMessageActions}
+        />
+
+        <Modal
+          visible={Boolean(forwardMessage)}
+          transparent
+          animationType="fade"
+          onRequestClose={closeForwardMessage}
+        >
+          <Pressable
+            style={styles.forwardOverlay}
+            onPress={closeForwardMessage}
+          >
+            <Pressable
+              style={styles.forwardPanel}
+              onPress={() => {}}
+            >
+              <View style={styles.forwardHeader}>
+                <View style={styles.forwardHeaderCopy}>
+                  <Text style={styles.forwardTitle}>
+                    Forward message
+                  </Text>
+                  <Text style={styles.forwardSubtitle}>
+                    Choose a chat or channel
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Close forward message"
+                  onPress={closeForwardMessage}
+                  disabled={Boolean(
+                    forwardBusyConversationId
+                  )}
+                  style={({ pressed }) => [
+                    styles.forwardCloseButton,
+                    pressed
+                      ? styles.pressed
+                      : null,
+                  ]}
+                >
+                  <Text style={styles.forwardCloseText}>
+                    ×
+                  </Text>
+                </Pressable>
+              </View>
+
+              <TextInput
+                value={forwardQuery}
+                onChangeText={setForwardQuery}
+                placeholder="Search people or channels"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={styles.forwardSearchInput}
+              />
+
+              {forwardError ? (
+                <Text style={styles.forwardError}>
+                  {forwardError}
+                </Text>
+              ) : null}
+
+              {forwardLoading ? (
+                <View style={styles.forwardLoading}>
+                  <ActivityIndicator
+                    color={colors.primary}
+                  />
+                  <Text style={styles.forwardLoadingText}>
+                    Loading conversations…
+                  </Text>
+                </View>
+              ) : (
+                <ScrollView
+                  style={styles.forwardList}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                >
+                  {filteredForwardTargets.length === 0 ? (
+                    <Text style={styles.forwardEmpty}>
+                      {forwardQuery.trim()
+                        ? 'No matching people or channels.'
+                        : 'No other conversations are available.'}
+                    </Text>
+                  ) : (
+                    filteredForwardTargets.map((target) => {
+                      const busy =
+                        forwardBusyConversationId ===
+                        target.conversationId;
+
+                      return (
+                        <Pressable
+                          key={
+                            target.conversationId
+                          }
+                          accessibilityRole="button"
+                          disabled={Boolean(
+                            forwardBusyConversationId
+                          )}
+                          onPress={() =>
+                            forwardMessageToTarget(
+                              target
+                            )
+                          }
+                          style={({ pressed }) => [
+                            styles.forwardRow,
+                            pressed
+                              ? styles.rowPressed
+                              : null,
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.forwardAvatar,
+                              target.kind === 'channel'
+                                ? styles.forwardChannelAvatar
+                                : null,
+                            ]}
+                          >
+                            <Text
+                              style={
+                                styles.forwardAvatarText
+                              }
+                            >
+                              {target.kind === 'channel'
+                                ? '#'
+                                : String(
+                                  target.title || 'M'
+                                )
+                                  .slice(0, 1)
+                                  .toUpperCase()}
+                            </Text>
+                          </View>
+                          <View
+                            style={styles.forwardRowCopy}
+                          >
+                            <Text
+                              style={styles.forwardRowTitle}
+                              numberOfLines={1}
+                            >
+                              {target.kind === 'channel'
+                                ? `# ${target.title}`
+                                : target.title}
+                            </Text>
+                            <Text
+                              style={styles.forwardRowSubtitle}
+                              numberOfLines={1}
+                            >
+                              {target.subtitle}
+                            </Text>
+                          </View>
+                          {busy ? (
+                            <ActivityIndicator
+                              size="small"
+                              color={colors.primary}
+                            />
+                          ) : (
+                            <Text
+                              style={styles.forwardAction}
+                            >
+                              Forward
+                            </Text>
+                          )}
+                        </Pressable>
+                      );
+                    })
+                  )}
+                </ScrollView>
+              )}
+            </Pressable>
+          </Pressable>
+        </Modal>
 
         <ConversationDetailsModal
           visible={showConversationDetails}
@@ -3124,6 +4235,23 @@ export default function ConversationScreen({
                                 {member.primary_email ||
                                   'Workspace member'}
                               </Text>
+                              {member.presence_profile?.custom_status ||
+                              member.presence_status ||
+                              member.presence_profile?.last_seen_at ? (
+                                <Text
+                                  style={styles.peopleMeta}
+                                  numberOfLines={1}
+                                >
+                                  {member.presence_profile?.custom_status ||
+                                    (member.presence_status === 'LIVE'
+                                      ? 'Live'
+                                      : member.presence_status === 'AWAY'
+                                        ? 'Away'
+                                        : formatLastSeen(
+                                            member.presence_profile?.last_seen_at
+                                          ) || 'Offline')}
+                                </Text>
+                              ) : null}
                             </View>
 
                             <Pressable
@@ -3174,13 +4302,9 @@ export default function ConversationScreen({
           parentMessage={threadParent}
           realtimeEvents={realtimeEvents}
           currentMemberId={currentMemberId}
+          currentPrimaryEmail={session?.identity?.primary_email || ''}
           onClose={() => setThreadParent(null)}
-          onRead={(messageId) => {
-            if (messageId) {
-              markMessageRead(messageId);
-              setNewMessageDividerId(null);
-            }
-          }}
+          onRead={handleThreadRead}
         />
 
         <Modal
@@ -3205,8 +4329,21 @@ export default function ConversationScreen({
                   <Text
                     style={styles.previewMeta}
                   >
-                    {previewAttachment?.contentType ||
-                      ''}
+                    {previewAttachment?.galleryTotal
+                      ? `${
+                        previewAttachment.galleryTotal
+                      } ${
+                        Number(
+                          previewAttachment.galleryTotal
+                        ) === 1
+                          ? 'image'
+                          : 'images'
+                      } · ${
+                        previewAttachment?.contentType ||
+                        ''
+                      }`
+                      : previewAttachment?.contentType ||
+                        ''}
                   </Text>
                 </View>
 
@@ -3234,15 +4371,85 @@ export default function ConversationScreen({
               </View>
 
               {previewAttachment?.localPath ? (
-                <Image
-                  resizeMode="contain"
-                  style={styles.previewImage}
-                  source={{
-                    uri: attachmentFileUri(
-                      previewAttachment.localPath
-                    ),
-                  }}
-                />
+                <View style={styles.previewImageStage}>
+                  {Number(
+                    previewAttachment?.galleryTotal ||
+                    0
+                  ) > 1 ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Previous image"
+                      disabled={Boolean(
+                        attachmentAction.attachmentId
+                      )}
+                      onPress={() =>
+                        openImagePreviewAtIndex(
+                          Number(
+                            previewAttachment.galleryIndex ||
+                            0
+                          ) - 1
+                        )
+                      }
+                      style={({ pressed }) => [
+                        styles.previewNavButton,
+                        styles.previewNavPrevious,
+                        pressed
+                          ? styles.pressed
+                          : null,
+                      ]}
+                    >
+                      <Text
+                        style={styles.previewNavText}
+                      >
+                        ‹
+                      </Text>
+                    </Pressable>
+                  ) : null}
+
+                  <Image
+                    resizeMode="contain"
+                    style={styles.previewImage}
+                    source={{
+                      uri: attachmentFileUri(
+                        previewAttachment.localPath
+                      ),
+                    }}
+                  />
+
+                  {Number(
+                    previewAttachment?.galleryTotal ||
+                    0
+                  ) > 1 ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Next image"
+                      disabled={Boolean(
+                        attachmentAction.attachmentId
+                      )}
+                      onPress={() =>
+                        openImagePreviewAtIndex(
+                          Number(
+                            previewAttachment.galleryIndex ||
+                            0
+                          ) + 1
+                        )
+                      }
+                      style={({ pressed }) => [
+                        styles.previewNavButton,
+                        styles.previewNavNext,
+                        pressed
+                          ? styles.pressed
+                          : null,
+                      ]}
+                    >
+                      <Text
+                        style={styles.previewNavText}
+                      >
+                        ›
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
               ) : null}
             </View>
           </View>
@@ -3266,6 +4473,11 @@ function MessageBubble({
   onPreviewAttachment,
   onOpenAttachment,
   onDownloadAttachment,
+  serverUrl,
+  token,
+  conversationId,
+  onJumpToMessage,
+  onShowReactionUsers,
 }) {
   if (system) {
     return (
@@ -3313,6 +4525,35 @@ function MessageBubble({
     messageMutationId ===
     message.message_id;
 
+  const attachmentRows =
+    attachment &&
+    Array.isArray(message.attachments)
+      ? message.attachments
+      : [];
+
+  const imageAttachments =
+    attachmentRows.filter((item) =>
+      attachmentIsImage(item?.content_type)
+    );
+
+  const fileAttachments =
+    attachmentRows.filter((item) =>
+      !attachmentIsImage(item?.content_type)
+    );
+
+  const remoteImageSource = (item) => ({
+    uri:
+      `${String(serverUrl || '').replace(/\/+$/, '')}` +
+      `/api/v1/conversations/${encodeURIComponent(
+        conversationId || ''
+      )}/attachments/${encodeURIComponent(
+        item?.attachment_id || ''
+      )}/content`,
+    headers: token
+      ? { Authorization: `Bearer ${token}` }
+      : undefined,
+  });
+
   return (
     <Pressable
       disabled={(!manageable && !replyable) || mutating}
@@ -3354,6 +4595,58 @@ function MessageBubble({
               'Member'}
         </Text>
 
+        {!deleted && message.quoted_message ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Jump to quoted message"
+            onPress={() => onJumpToMessage?.(message.quote_message_id)}
+            style={[
+              styles.quotedMessage,
+              own
+                ? styles.quotedMessageOwn
+                : null,
+            ]}
+          >
+            <View style={styles.quotedMessageAccent} />
+            <View style={styles.quotedMessageCopy}>
+              <Text
+                style={[
+                  styles.quotedMessageSender,
+                  own
+                    ? styles.quotedMessageSenderOwn
+                    : null,
+                ]}
+                numberOfLines={1}
+              >
+                {message.quoted_message
+                  .sender_display_name ||
+                  'Message'}
+              </Text>
+              <Text
+                style={[
+                  styles.quotedMessageBody,
+                  own
+                    ? styles.quotedMessageBodyOwn
+                    : null,
+                ]}
+                numberOfLines={2}
+              >
+                {message.quoted_message.deleted_at
+                  ? 'Message deleted'
+                  : message.quoted_message
+                        .message_type ===
+                      'ATTACHMENT'
+                    ? `Attachment: ${
+                        message.quoted_message
+                          .body_text || 'file'
+                      }`
+                    : message.quoted_message
+                        .body_text || ''}
+              </Text>
+            </View>
+          </Pressable>
+        ) : null}
+
         {deleted ? (
           <Text
             style={[
@@ -3370,7 +4663,55 @@ function MessageBubble({
           Array.isArray(message.attachments) &&
           message.attachments.length > 0 ? (
           <View style={styles.messageAttachments}>
-            {message.attachments.map(
+            {imageAttachments.length > 0 ? (
+              <View
+                style={[
+                  styles.messageImageGrid,
+                  imageAttachments.length === 1
+                    ? styles.messageImageGridSingle
+                    : null,
+                ]}
+              >
+                {imageAttachments.map((item) => (
+                  <Pressable
+                    key={item.attachment_id}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      `Image ${attachmentFileName(item)}. Tap to preview. Long press for message actions.`
+                    }
+                    onPress={(event) => {
+                      event.stopPropagation?.();
+                      onPreviewAttachment?.(item);
+                    }}
+                    delayLongPress={350}
+                    onLongPress={(event) => {
+                      event.stopPropagation?.();
+                      onManageMessage?.(
+                        message,
+                        onReplyInThread
+                      );
+                    }}
+                    style={({ pressed }) => [
+                      styles.messageImageTile,
+                      imageAttachments.length === 1
+                        ? styles.messageImageTileSingle
+                        : styles.messageImageTileMultiple,
+                      pressed
+                        ? styles.messageImageTilePressed
+                        : null,
+                    ]}
+                  >
+                    <Image
+                      source={remoteImageSource(item)}
+                      resizeMode="cover"
+                      style={styles.messageImageThumbnail}
+                    />
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+
+            {fileAttachments.map(
               (item) => {
                 const busy =
                   attachmentAction
@@ -3394,6 +4735,13 @@ function MessageBubble({
                     onPress={() =>
                       onToggleAttachmentActions?.(
                         item.attachment_id
+                      )
+                    }
+                    delayLongPress={350}
+                    onLongPress={() =>
+                      onManageMessage?.(
+                        message,
+                        onReplyInThread
                       )
                     }
                     style={({ pressed }) => [
@@ -3621,6 +4969,31 @@ function MessageBubble({
           </Text>
         ) : null}
 
+        {own && !deleted && Number(message.read_by_count || 0) > 0 ? (
+          <Text style={styles.readReceipt}>
+            ✓✓ Read by {Number(message.read_by_count)}
+          </Text>
+        ) : null}
+
+        {!deleted && Array.isArray(message.reactions) && message.reactions.length ? (
+          <View style={styles.reactionRow}>
+            {message.reactions.map((reaction) => (
+              <Pressable
+                key={reaction.emoji}
+                onPress={() => onShowReactionUsers?.(message)}
+                style={[
+                  styles.reactionChip,
+                  reaction.reacted_by_me ? styles.reactionChipMine : null,
+                ]}
+              >
+                <Text style={styles.reactionText}>
+                  {reaction.emoji} {Number(reaction.count || 0)}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+
         {replyable && Number(message.thread_reply_count || 0) > 0 ? (
           <Pressable
             accessibilityRole="button"
@@ -3628,11 +5001,15 @@ function MessageBubble({
             onPress={onReplyInThread}
             style={({ pressed }) => [
               styles.threadSummary,
+              Number(message.thread_unread_count || 0) > 0 ? styles.threadSummaryUnread : null,
               pressed ? styles.pressed : null,
             ]}
           >
             <Text style={styles.threadSummaryText}>
               {Number(message.thread_reply_count)} {Number(message.thread_reply_count) === 1 ? 'reply' : 'replies'}
+              {Number(message.thread_unread_count || 0) > 0
+                ? ` · ${Number(message.thread_unread_count)} unread`
+                : ''}
               {message.thread_last_reply_at
                 ? ` · last ${formatMessageTime(message.thread_last_reply_at)}`
                 : ''}
@@ -3660,6 +5037,13 @@ function MessageBubble({
 }
 
 const styles = StyleSheet.create({
+  readReceipt: {
+    marginTop: 3,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#5E7892',
+    alignSelf: 'flex-end',
+  },
   threadSummary: {
     marginTop: 7,
     alignSelf: 'flex-start',
@@ -3673,6 +5057,42 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  highlightedMessage: {
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 193, 7, 0.18)',
+  },
+  emojiButton: {
+    width: 42, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#F4F8FC', borderWidth: 1, borderColor: '#DCE5ED',
+  },
+  emojiButtonText: { fontSize: 20 },
+  emojiPicker: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 12, paddingVertical: 8,
+    backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E4EBF2',
+  },
+  emojiChoice: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: '#F4F8FC' },
+  emojiChoiceText: { fontSize: 20 },
+  reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 6 },
+  reactionChip: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 12, backgroundColor: '#F0F4F8', borderWidth: 1, borderColor: '#D9E3EC' },
+  reactionChipMine: { backgroundColor: '#E6F2FF', borderColor: '#7FB7EE' },
+  reactionText: { fontSize: 11, color: '#24415E', fontWeight: '700' },
+  threadSummaryUnread: { backgroundColor: 'rgba(8,121,231,0.16)', borderWidth: 1, borderColor: 'rgba(8,121,231,0.28)' },
+  searchOverlay: { flex: 1, justifyContent: 'flex-start', paddingTop: 70, paddingHorizontal: 14, backgroundColor: 'rgba(7,19,46,0.55)' },
+  searchPanel: { maxHeight: '78%', borderRadius: 18, backgroundColor: '#FFFFFF', padding: 14 },
+  searchHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  searchTitle: { color: '#0E2455', fontSize: 18, fontWeight: '900' },
+  searchClose: { color: '#4F6B88', fontSize: 26, paddingHorizontal: 8 },
+  searchRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  searchInput: { flex: 1, minHeight: 44, borderWidth: 1, borderColor: '#D3DFEA', borderRadius: 12, paddingHorizontal: 12, color: '#18324A' },
+  searchButton: { minWidth: 72, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0879E7' },
+  searchButtonText: { color: '#FFFFFF', fontWeight: '900' },
+  searchError: { color: '#A22727', marginTop: 8 },
+  searchResults: { marginTop: 10 },
+  searchResultRow: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#E6EDF3' },
+  searchResultSender: { color: '#0E2455', fontSize: 12, fontWeight: '900' },
+  searchResultBody: { color: '#24415E', marginTop: 3, fontSize: 13, lineHeight: 18 },
+  searchResultMeta: { color: '#7890A6', marginTop: 4, fontSize: 10 },
+  searchEmpty: { textAlign: 'center', color: '#7890A6', paddingVertical: 18 },
   flex: {
     flex: 1,
   },
@@ -3767,6 +5187,10 @@ const styles = StyleSheet.create({
   realtimeTextOffline: {
     color: '#D7E0EA',
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   peopleButton: {
     width: 40,
     height: 40,
@@ -3804,21 +5228,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E4EBF3',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.22)',
+    backgroundColor: colors.primary,
   },
   peopleHeaderCopy: {
     flex: 1,
     marginRight: 10,
   },
   peopleTitle: {
-    color: colors.navy,
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '900',
   },
   peopleSubtitle: {
     marginTop: 3,
-    color: colors.textMuted,
+    color: 'rgba(255,255,255,0.82)',
     fontSize: 11,
   },
   peopleCloseButton: {
@@ -3827,10 +5252,10 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EEF4FA',
+    backgroundColor: 'rgba(0,0,0,0.12)',
   },
   peopleCloseText: {
-    color: colors.navy,
+    color: '#FFFFFF',
     fontSize: 24,
     lineHeight: 26,
   },
@@ -3988,6 +5413,7 @@ const styles = StyleSheet.create({
   },
   history: {
     flex: 1,
+    position: 'relative',
     backgroundColor: '#F6F9FC',
   },
   messageList: {
@@ -4099,6 +5525,43 @@ const styles = StyleSheet.create({
   ownSender: {
     color: '#1769AA',
   },
+  quotedMessage: {
+    flexDirection: 'row',
+    marginTop: 6,
+    marginBottom: 6,
+    borderRadius: 10,
+    backgroundColor: '#F3F7FA',
+    overflow: 'hidden',
+  },
+  quotedMessageOwn: {
+    backgroundColor: '#DDEEFF',
+  },
+  quotedMessageAccent: {
+    width: 3,
+    backgroundColor: colors.primary,
+  },
+  quotedMessageCopy: {
+    flex: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  quotedMessageSender: {
+    color: colors.primary,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  quotedMessageSenderOwn: {
+    color: '#125D94',
+  },
+  quotedMessageBody: {
+    marginTop: 1,
+    color: '#506477',
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  quotedMessageBodyOwn: {
+    color: '#385A75',
+  },
   body: {
     color: '#243B53',
     fontSize: 14,
@@ -4187,6 +5650,40 @@ const styles = StyleSheet.create({
   messageAttachments: {
     marginTop: 5,
   },
+  messageImageGrid: {
+    width: 265,
+    maxWidth: '100%',
+    marginBottom: 6,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    overflow: 'hidden',
+    borderRadius: 14,
+  },
+  messageImageGridSingle: {
+    height: 178,
+  },
+  messageImageTile: {
+    overflow: 'hidden',
+    borderRadius: 11,
+    backgroundColor: '#E9F0F6',
+  },
+  messageImageTileSingle: {
+    width: '100%',
+    height: 178,
+  },
+  messageImageTileMultiple: {
+    width: 130,
+    height: 112,
+  },
+  messageImageTilePressed: {
+    opacity: 0.82,
+  },
+  messageImageThumbnail: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#E9F0F6',
+  },
   messageAttachmentCard: {
     width: 265,
     maxWidth: '100%',
@@ -4253,6 +5750,160 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     fontWeight: '800',
   },
+  forwardOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(7, 19, 46, 0.48)',
+  },
+  forwardPanel: {
+    maxHeight: '78%',
+    padding: 18,
+    paddingBottom: 26,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: '#FFFFFF',
+  },
+  forwardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  forwardHeaderCopy: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  forwardTitle: {
+    color: colors.navy,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  forwardSubtitle: {
+    marginTop: 3,
+    color: colors.textSecondary,
+    fontSize: 12,
+  },
+  forwardCloseButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EFF5FB',
+  },
+  forwardCloseText: {
+    color: colors.navy,
+    fontSize: 25,
+    lineHeight: 27,
+  },
+  forwardSearchInput: {
+    height: 44,
+    marginTop: 12,
+    paddingHorizontal: 13,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#F8FBFF',
+    color: colors.navy,
+    fontSize: 13,
+  },
+  forwardError: {
+    marginBottom: 10,
+    color: '#B42318',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  forwardLoading: {
+    minHeight: 130,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  forwardLoadingText: {
+    marginTop: 8,
+    color: colors.textSecondary,
+    fontSize: 12,
+  },
+  forwardList: {
+    maxHeight: 470,
+  },
+  forwardEmpty: {
+    paddingVertical: 28,
+    color: colors.textMuted,
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  forwardRow: {
+    minHeight: 66,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  forwardAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EAF3FF',
+  },
+  forwardChannelAvatar: {
+    backgroundColor: colors.primary,
+  },
+  forwardAvatarText: {
+    color: colors.navy,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  forwardRowCopy: {
+    flex: 1,
+    marginLeft: 11,
+  },
+  forwardRowTitle: {
+    color: colors.navy,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  forwardRowSubtitle: {
+    marginTop: 2,
+    color: colors.textSecondary,
+    fontSize: 11,
+  },
+  forwardAction: {
+    marginLeft: 9,
+    color: colors.primary,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  previewImageStage: {
+    position: 'relative',
+    minHeight: 280,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewNavButton: {
+    position: 'absolute',
+    zIndex: 3,
+    top: '45%',
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(14, 36, 85, 0.72)',
+  },
+  previewNavPrevious: {
+    left: 8,
+  },
+  previewNavNext: {
+    right: 8,
+  },
+  previewNavText: {
+    color: '#FFFFFF',
+    fontSize: 32,
+    lineHeight: 34,
+    fontWeight: '700',
+  },
   previewOverlay: {
     flex: 1,
     padding: 16,
@@ -4309,6 +5960,47 @@ const styles = StyleSheet.create({
     marginTop: 8,
     borderRadius: 12,
     backgroundColor: '#F1F5F9',
+  },
+  quoteReplyBanner: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    marginHorizontal: 12,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#CFE0F1',
+    borderRadius: 12,
+    backgroundColor: '#F7FBFF',
+    overflow: 'hidden',
+  },
+  quoteReplyAccent: {
+    width: 4,
+    backgroundColor: colors.primary,
+  },
+  quoteReplyBannerCopy: {
+    flex: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  quoteReplyBannerTitle: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  quoteReplyBannerPreview: {
+    marginTop: 2,
+    color: '#526779',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  quoteReplyCancelButton: {
+    width: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quoteReplyCancelText: {
+    color: '#65798A',
+    fontSize: 24,
+    lineHeight: 28,
   },
   editingBanner: {
     marginHorizontal: 10,
@@ -4435,9 +6127,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   composer: {
-    minHeight: 66,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    minHeight: 60,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
     flexDirection: 'row',
     alignItems: 'flex-end',
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -4445,10 +6137,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   attachButton: {
-    width: 46,
-    height: 46,
-    marginRight: 8,
-    borderRadius: 15,
+    width: 42,
+    height: 42,
+    marginRight: 7,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -4465,26 +6157,47 @@ const styles = StyleSheet.create({
     lineHeight: 30,
     fontWeight: '500',
   },
+  composerInputShell: {
+    flex: 1,
+    minHeight: 42,
+    maxHeight: 120,
+    position: 'relative',
+    justifyContent: 'center',
+  },
   input: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 42,
     maxHeight: 120,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.input,
-    paddingHorizontal: 14,
-    paddingTop: 11,
-    paddingBottom: 11,
+    paddingLeft: 13,
+    paddingRight: 42,
+    paddingTop: 9,
+    paddingBottom: 9,
     color: colors.navy,
     fontSize: 14,
     textAlignVertical: 'top',
   },
+  inlineEmojiButton: {
+    position: 'absolute',
+    right: 5,
+    bottom: 5,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inlineEmojiButtonText: {
+    fontSize: 19,
+  },
   sendButton: {
-    minWidth: 66,
-    height: 46,
-    marginLeft: 8,
-    borderRadius: 15,
+    minWidth: 54,
+    height: 42,
+    marginLeft: 7,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.primary,

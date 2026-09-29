@@ -166,6 +166,16 @@ test(
 
     assert.match(
       screen,
+      /MessageActionSheet/
+    );
+
+    assert.match(
+      screen,
+      /setMessageActionTarget/
+    );
+
+    assert.doesNotMatch(
+      screen,
       /Alert\.alert\(\s*'Message actions'/
     );
 

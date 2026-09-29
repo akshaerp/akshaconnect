@@ -1,8 +1,8 @@
 'use strict';
 
-const DEFAULT_ANDROID_LATEST_VERSION_CODE = 12;
-const DEFAULT_ANDROID_MINIMUM_VERSION_CODE = 12;
-const DEFAULT_ANDROID_VERSION_NAME = '0.3.0-v12';
+const DEFAULT_ANDROID_LATEST_VERSION_CODE = 14;
+const DEFAULT_ANDROID_MINIMUM_VERSION_CODE = 13;
+const DEFAULT_ANDROID_VERSION_NAME = '0.3.0-v14';
 const DEFAULT_ANDROID_UPDATE_URL =
   'https://play.google.com/store/apps/details?id=com.akshaerp.akshaconnect';
 

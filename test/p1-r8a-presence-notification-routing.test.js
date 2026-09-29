@@ -489,14 +489,14 @@ test('R8A mobile DM UI uses peer presence instead of calling local transport Liv
   const conversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
 
   assert.match(home, /presenceByMember/);
-  assert.match(home, /Not available/);
+  assert.match(home, /Offline/);
   assert.match(home, /Away/);
   assert.match(home, /otherWorkspaceMemberId/);
   assert.match(home, /if \(status === 'connected'\) return 'Connected'/);
 
   assert.match(conversation, /peerPresenceStatus/);
   assert.match(conversation, /presenceLabel/);
-  assert.match(conversation, /Not available/);
+  assert.match(conversation, /Offline/);
   assert.match(conversation, /onUserActivity/);
 });
 
@@ -552,8 +552,8 @@ test('R8A.3 web DM navigation shows explicit status text with a standalone ringl
   assert.doesNotMatch(styles, /\.dm-avatar-presence\s*\{/);
 });
 
-test('R8A.2 Android release advances to versionCode 14', () => {
+test('R8A.2 Android release advances to versionCode 15', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
-  assert.match(gradle, /versionCode 14/);
-  assert.match(gradle, /versionName "0\.3\.0-v14"/);
+  assert.match(gradle, /versionCode 15/);
+  assert.match(gradle, /versionName "0\.3\.0-v15"/);
 });
