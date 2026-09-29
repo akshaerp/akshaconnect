@@ -120,7 +120,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
 
   async function getMessageInConversation({ workspaceId, conversationId, messageId }) {
     const result = await db.query(`
-      SELECT message_id, conversation_id, reply_to_message_id, created_at, deleted_at
+      SELECT message_id, conversation_id, reply_to_message_id, quote_message_id, created_at, deleted_at
       FROM ac_message
       WHERE workspace_id = $1
         AND conversation_id = $2
@@ -128,6 +128,114 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
       LIMIT 1
     `, [workspaceId, conversationId, messageId]);
     return result.rows?.[0] || null;
+  }
+
+  async function getMessagePreviews({
+    workspaceId,
+    conversationId,
+    messageIds,
+  }) {
+    const ids = [...new Set(
+      (messageIds || [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    )];
+
+    if (!ids.length) return [];
+
+    const result = await db.query(`
+      SELECT
+        m.workspace_id,
+        m.message_id,
+        m.conversation_id,
+        m.sender_type,
+        m.sender_member_id,
+        m.system_sender_id,
+        m.message_type,
+        m.body_ciphertext,
+        m.body_nonce,
+        m.body_auth_tag,
+        m.body_key_id,
+        m.body_encryption_version,
+        m.client_message_id,
+        m.source_event_id,
+        m.reply_to_message_id,
+        m.quote_message_id,
+        m.created_at,
+        m.edited_at,
+        m.deleted_at,
+        CASE
+          WHEN m.sender_type = 'HUMAN'
+            THEN COALESCE(wm.display_name_override, i.display_name)
+          ELSE ss.display_name
+        END AS sender_display_name,
+        CASE
+          WHEN m.sender_type = 'HUMAN' THEN i.primary_email
+          ELSE NULL
+        END AS sender_primary_email
+      FROM ac_message m
+      LEFT JOIN ac_workspace_member wm
+        ON wm.workspace_id = m.workspace_id
+       AND wm.workspace_member_id = m.sender_member_id
+      LEFT JOIN ac_identity i ON i.identity_id = wm.identity_id
+      LEFT JOIN ac_system_sender ss
+        ON ss.workspace_id = m.workspace_id
+       AND ss.system_sender_id = m.system_sender_id
+      WHERE m.workspace_id = $1
+        AND m.conversation_id = $2
+        AND m.message_id = ANY($3::uuid[])
+    `, [workspaceId, conversationId, ids]);
+
+    return (result.rows || []).map(materializeMessage);
+  }
+
+  async function hydrateQuotedMessages({
+    workspaceId,
+    conversationId,
+    messages,
+  }) {
+    const rows = messages || [];
+    const quoteIds = rows
+      .map((message) => message?.quote_message_id)
+      .filter(Boolean);
+
+    if (!quoteIds.length) {
+      return rows.map((message) => ({
+        ...message,
+        quoted_message: null,
+      }));
+    }
+
+    const previews = await getMessagePreviews({
+      workspaceId,
+      conversationId,
+      messageIds: quoteIds,
+    });
+
+    const byId = new Map(
+      previews.map((preview) => [
+        preview.message_id,
+        {
+          message_id: preview.message_id,
+          sender_type: preview.sender_type,
+          sender_member_id: preview.sender_member_id,
+          message_type: preview.message_type,
+          body_text: preview.body_text,
+          sender_display_name: preview.sender_display_name,
+          created_at: preview.created_at,
+          edited_at: preview.edited_at,
+          deleted_at: preview.deleted_at,
+        },
+      ])
+    );
+
+    return rows.map((message) => ({
+      ...message,
+      quoted_message:
+        (message?.quote_message_id &&
+          byId.get(message.quote_message_id)) ||
+        null,
+    }));
   }
 
   async function messageDetails({ workspaceId, conversationId, messageId }) {
@@ -148,6 +256,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
         m.client_message_id,
         m.source_event_id,
         m.reply_to_message_id,
+        m.quote_message_id,
         m.created_at,
         m.edited_at,
         m.deleted_at,
@@ -173,7 +282,19 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
         AND m.message_id = $3
       LIMIT 1
     `, [workspaceId, conversationId, messageId]);
-    return materializeMessage(result.rows?.[0] || null);
+
+    const materialized =
+      materializeMessage(result.rows?.[0] || null);
+
+    if (!materialized) return null;
+
+    const hydrated = await hydrateQuotedMessages({
+      workspaceId,
+      conversationId,
+      messages: [materialized],
+    });
+
+    return hydrated[0] || materialized;
   }
 
   async function findHumanMessageByClientId({ workspaceId, conversationId, clientMessageId }) {
@@ -197,6 +318,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     bodyText,
     clientMessageId,
     replyToMessageId,
+    quoteMessageId,
   }) {
     const messageId = randomUUID();
     const encrypted = messageCrypto.encryptText(bodyText, {
@@ -222,9 +344,10 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
           body_key_id,
           body_encryption_version,
           client_message_id,
-          reply_to_message_id
+          reply_to_message_id,
+          quote_message_id
         )
-        VALUES ($1, $2, $3, 'HUMAN', $4, 'TEXT', $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, 'HUMAN', $4, 'TEXT', $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING message_id
       `, [
         messageId,
@@ -238,6 +361,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
         encrypted.bodyEncryptionVersion,
         clientMessageId,
         replyToMessageId || null,
+        quoteMessageId || null,
       ]);
 
       await client.query(`
@@ -633,7 +757,182 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     }
   }
 
-  async function listMessages({ workspaceId, conversationId, limit, beforeMessageId }) {
+
+
+  async function decorateReactionSummaries({ workspaceId, workspaceMemberId, messages }) {
+    const rows = (messages || []).filter(Boolean);
+    const messageIds = rows.map((message) => message.message_id).filter(Boolean);
+    if (!messageIds.length) return rows;
+
+    const result = await db.query(`
+      SELECT
+        r.message_id,
+        r.emoji,
+        COUNT(*)::int AS reaction_count,
+        BOOL_OR(r.workspace_member_id = $3::uuid) AS reacted_by_me
+      FROM ac_message_reaction r
+      WHERE r.workspace_id = $1
+        AND r.message_id = ANY($2::uuid[])
+      GROUP BY r.message_id, r.emoji
+      ORDER BY r.message_id, r.emoji
+    `, [workspaceId, messageIds, workspaceMemberId]);
+
+    const byMessage = new Map();
+    for (const row of result.rows || []) {
+      if (!byMessage.has(row.message_id)) byMessage.set(row.message_id, []);
+      byMessage.get(row.message_id).push({
+        emoji: row.emoji,
+        count: Number(row.reaction_count || 0),
+        reacted_by_me: Boolean(row.reacted_by_me),
+      });
+    }
+
+    return rows.map((message) => ({
+      ...message,
+      reactions: byMessage.get(message.message_id) || [],
+    }));
+  }
+
+  async function searchConversationMessages({
+    workspaceId,
+    conversationId,
+    workspaceMemberId,
+    query,
+    limit,
+  }) {
+    const result = await db.query(`
+      SELECT
+        m.workspace_id,
+        m.message_id,
+        m.conversation_id,
+        m.sender_type,
+        m.sender_member_id,
+        m.system_sender_id,
+        m.message_type,
+        m.body_ciphertext,
+        m.body_nonce,
+        m.body_auth_tag,
+        m.body_key_id,
+        m.body_encryption_version,
+        m.client_message_id,
+        m.source_event_id,
+        m.reply_to_message_id,
+        m.quote_message_id,
+        m.created_at,
+        m.edited_at,
+        m.deleted_at,
+        CASE
+          WHEN m.sender_type = 'HUMAN'
+            THEN COALESCE(wm.display_name_override, i.display_name)
+          ELSE ss.display_name
+        END AS sender_display_name,
+        CASE WHEN m.sender_type = 'HUMAN' THEN i.primary_email ELSE NULL END
+          AS sender_primary_email
+      FROM ac_message m
+      LEFT JOIN ac_workspace_member wm
+        ON wm.workspace_id = m.workspace_id
+       AND wm.workspace_member_id = m.sender_member_id
+      LEFT JOIN ac_identity i ON i.identity_id = wm.identity_id
+      LEFT JOIN ac_system_sender ss
+        ON ss.workspace_id = m.workspace_id
+       AND ss.system_sender_id = m.system_sender_id
+      WHERE m.workspace_id = $1
+        AND m.conversation_id = $2
+        AND m.deleted_at IS NULL
+      ORDER BY m.created_at DESC, m.message_id DESC
+      LIMIT 2000
+    `, [workspaceId, conversationId]);
+
+    const needle = String(query || '').trim().toLocaleLowerCase();
+    const matched = [];
+    for (const row of result.rows || []) {
+      const message = materializeMessage(row);
+      const haystack = [message.body_text, message.sender_display_name]
+        .filter(Boolean)
+        .join(' ')
+        .toLocaleLowerCase();
+      if (!needle || !haystack.includes(needle)) continue;
+      matched.push(message);
+      if (matched.length >= limit) break;
+    }
+
+    return decorateReactionSummaries({
+      workspaceId,
+      workspaceMemberId,
+      messages: await hydrateQuotedMessages({ workspaceId, conversationId, messages: matched }),
+    });
+  }
+
+  async function toggleMessageReaction({
+    workspaceId,
+    conversationId,
+    messageId,
+    workspaceMemberId,
+    emoji,
+  }) {
+    const existing = await db.query(`
+      SELECT emoji
+      FROM ac_message_reaction
+      WHERE workspace_id = $1
+        AND conversation_id = $2
+        AND message_id = $3
+        AND workspace_member_id = $4
+      LIMIT 1
+    `, [workspaceId, conversationId, messageId, workspaceMemberId]);
+
+    const current = existing.rows?.[0]?.emoji || null;
+    if (current === emoji) {
+      await db.query(`
+        DELETE FROM ac_message_reaction
+        WHERE workspace_id = $1
+          AND conversation_id = $2
+          AND message_id = $3
+          AND workspace_member_id = $4
+      `, [workspaceId, conversationId, messageId, workspaceMemberId]);
+    } else {
+      await db.query(`
+        INSERT INTO ac_message_reaction (
+          workspace_id, conversation_id, message_id, workspace_member_id, emoji, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, NOW())
+        ON CONFLICT (workspace_id, conversation_id, message_id, workspace_member_id)
+        DO UPDATE SET emoji = EXCLUDED.emoji, created_at = NOW()
+      `, [workspaceId, conversationId, messageId, workspaceMemberId, emoji]);
+    }
+
+    const [decorated] = await decorateReactionSummaries({
+      workspaceId,
+      workspaceMemberId,
+      messages: [{ message_id: messageId }],
+    });
+    return decorated?.reactions || [];
+  }
+
+  async function listMessageReactionUsers({
+    workspaceId,
+    conversationId,
+    messageId,
+  }) {
+    const result = await db.query(`
+      SELECT
+        r.emoji,
+        r.workspace_member_id,
+        COALESCE(wm.display_name_override, i.display_name) AS display_name,
+        r.created_at
+      FROM ac_message_reaction r
+      JOIN ac_workspace_member wm
+        ON wm.workspace_id = r.workspace_id
+       AND wm.workspace_member_id = r.workspace_member_id
+      JOIN ac_identity i ON i.identity_id = wm.identity_id
+      WHERE r.workspace_id = $1
+        AND r.conversation_id = $2
+        AND r.message_id = $3
+      ORDER BY r.emoji, COALESCE(wm.display_name_override, i.display_name)
+    `, [workspaceId, conversationId, messageId]);
+    return result.rows || [];
+  }
+
+  async function listMessages({ workspaceId, conversationId, workspaceMemberId, limit, beforeMessageId }) {
     let cursor = null;
     if (beforeMessageId) {
       const cursorResult = await db.query(`
@@ -649,12 +948,18 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
       if (!cursor) return { cursorInvalid: true, rows: [], hasMore: false, nextBeforeMessageId: null };
     }
 
-    const params = [workspaceId, conversationId, limit + 1];
-    let cursorClause = '';
-    if (cursor) {
-      params.push(cursor.created_at, cursor.message_id);
-      cursorClause = `AND (m.created_at, m.message_id) < ($4::timestamptz, $5::uuid)`;
-    }
+    const params = [
+      workspaceId,
+      conversationId,
+      limit + 1,
+      cursor?.created_at || null,
+      cursor?.message_id || null,
+      workspaceMemberId,
+    ];
+    const cursorClause = cursor
+      ? `AND (m.created_at, m.message_id) < ($4::timestamptz, $5::uuid)`
+      : `AND $4::timestamptz IS NULL
+         AND $5::uuid IS NULL`;
 
     const result = await db.query(`
       SELECT
@@ -673,6 +978,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
         m.client_message_id,
         m.source_event_id,
         m.reply_to_message_id,
+        m.quote_message_id,
         m.created_at,
         m.edited_at,
         m.deleted_at,
@@ -701,6 +1007,42 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
           ORDER BY tr.created_at DESC, tr.message_id DESC
           LIMIT 1
         ) AS thread_last_reply_message_id,
+        (
+          SELECT COUNT(*)::int
+          FROM ac_read_cursor rc
+          JOIN ac_message cursor_message
+            ON cursor_message.workspace_id = rc.workspace_id
+           AND cursor_message.conversation_id = rc.conversation_id
+           AND cursor_message.message_id = rc.last_read_message_id
+          WHERE rc.workspace_id = m.workspace_id
+            AND rc.conversation_id = m.conversation_id
+            AND rc.workspace_member_id IS DISTINCT FROM m.sender_member_id
+            AND (cursor_message.created_at, cursor_message.message_id)
+                  >= (m.created_at, m.message_id)
+        ) AS read_by_count,
+        (
+          SELECT COUNT(*)::int
+          FROM ac_message tr
+          LEFT JOIN ac_thread_read_cursor trc
+            ON trc.workspace_id = tr.workspace_id
+           AND trc.conversation_id = tr.conversation_id
+           AND trc.thread_root_message_id = m.message_id
+           AND trc.workspace_member_id = $6
+          LEFT JOIN ac_message cursor_reply
+            ON cursor_reply.workspace_id = trc.workspace_id
+           AND cursor_reply.conversation_id = trc.conversation_id
+           AND cursor_reply.message_id = trc.last_read_message_id
+          WHERE tr.workspace_id = m.workspace_id
+            AND tr.conversation_id = m.conversation_id
+            AND tr.reply_to_message_id = m.message_id
+            AND tr.deleted_at IS NULL
+            AND (tr.sender_type <> 'HUMAN' OR tr.sender_member_id IS DISTINCT FROM $6::uuid)
+            AND (
+              trc.last_read_message_id IS NULL
+              OR (tr.created_at, tr.message_id) >
+                 (cursor_reply.created_at, cursor_reply.message_id)
+            )
+        ) AS thread_unread_count,
         CASE
           WHEN m.sender_type = 'HUMAN'
             THEN COALESCE(wm.display_name_override, i.display_name)
@@ -733,15 +1075,28 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
       ? pageDescending[pageDescending.length - 1].message_id
       : null;
 
+    const rows = await decorateReactionSummaries({
+      workspaceId,
+      workspaceMemberId,
+      messages: await hydrateQuotedMessages({
+        workspaceId,
+        conversationId,
+        messages:
+          pageDescending
+            .reverse()
+            .map(materializeMessage),
+      }),
+    });
+
     return {
       cursorInvalid: false,
-      rows: pageDescending.reverse().map(materializeMessage),
+      rows,
       hasMore,
       nextBeforeMessageId,
     };
   }
 
-  async function listThread({ workspaceId, conversationId, parentMessageId }) {
+  async function listThread({ workspaceId, conversationId, parentMessageId, workspaceMemberId }) {
     const parent = await messageDetails({
       workspaceId,
       conversationId,
@@ -769,6 +1124,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
         m.client_message_id,
         m.source_event_id,
         m.reply_to_message_id,
+        m.quote_message_id,
         m.created_at,
         m.edited_at,
         m.deleted_at,
@@ -780,7 +1136,21 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
         CASE
           WHEN m.sender_type = 'HUMAN' THEN i.primary_email
           ELSE NULL
-        END AS sender_primary_email
+        END AS sender_primary_email,
+        (
+          SELECT COUNT(*)::int
+          FROM ac_thread_read_cursor trc
+          JOIN ac_message cursor_reply
+            ON cursor_reply.workspace_id = trc.workspace_id
+           AND cursor_reply.conversation_id = trc.conversation_id
+           AND cursor_reply.message_id = trc.last_read_message_id
+          WHERE trc.workspace_id = m.workspace_id
+            AND trc.conversation_id = m.conversation_id
+            AND trc.thread_root_message_id = $3
+            AND trc.workspace_member_id IS DISTINCT FROM m.sender_member_id
+            AND (cursor_reply.created_at, cursor_reply.message_id)
+                  >= (m.created_at, m.message_id)
+        ) AS read_by_count
       FROM ac_message m
       LEFT JOIN ac_workspace_member wm
         ON wm.workspace_id = m.workspace_id
@@ -795,10 +1165,101 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
       ORDER BY m.created_at, m.message_id
     `, [workspaceId, conversationId, parentMessageId]);
 
+    const replies =
+      await decorateReactionSummaries({
+        workspaceId,
+        workspaceMemberId,
+        messages: await hydrateQuotedMessages({
+          workspaceId,
+          conversationId,
+          messages:
+            (result.rows || [])
+              .map(materializeMessage),
+        }),
+      });
+
     return {
       parent,
-      replies: (result.rows || []).map(materializeMessage),
+      replies,
+      thread_read_cursor: await getThreadReadCursor({
+        workspaceId,
+        conversationId,
+        parentMessageId,
+        workspaceMemberId,
+      }),
     };
+  }
+
+  async function getThreadReadCursor({
+    workspaceId,
+    conversationId,
+    parentMessageId,
+    workspaceMemberId,
+  }) {
+    const result = await db.query(`
+      SELECT
+        workspace_id,
+        conversation_id,
+        thread_root_message_id,
+        workspace_member_id,
+        last_read_message_id,
+        read_at
+      FROM ac_thread_read_cursor
+      WHERE workspace_id = $1
+        AND conversation_id = $2
+        AND thread_root_message_id = $3
+        AND workspace_member_id = $4
+      LIMIT 1
+    `, [workspaceId, conversationId, parentMessageId, workspaceMemberId]);
+
+    return result.rows?.[0] || null;
+  }
+
+  async function advanceThreadReadCursor({
+    workspaceId,
+    conversationId,
+    parentMessageId,
+    workspaceMemberId,
+    lastReadMessageId,
+  }) {
+    const result = await db.query(`
+      INSERT INTO ac_thread_read_cursor (
+        workspace_id, conversation_id, thread_root_message_id,
+        workspace_member_id, last_read_message_id, read_at
+      )
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT (
+        workspace_id, conversation_id, thread_root_message_id, workspace_member_id
+      )
+      DO UPDATE SET
+        last_read_message_id = EXCLUDED.last_read_message_id,
+        read_at = NOW()
+      WHERE ac_thread_read_cursor.last_read_message_id IS NULL
+         OR EXISTS (
+            SELECT 1
+            FROM ac_message current_message
+            JOIN ac_message candidate_message
+              ON candidate_message.workspace_id = current_message.workspace_id
+             AND candidate_message.conversation_id = current_message.conversation_id
+            WHERE current_message.workspace_id = ac_thread_read_cursor.workspace_id
+              AND current_message.conversation_id = ac_thread_read_cursor.conversation_id
+              AND current_message.message_id = ac_thread_read_cursor.last_read_message_id
+              AND candidate_message.message_id = EXCLUDED.last_read_message_id
+              AND candidate_message.reply_to_message_id = ac_thread_read_cursor.thread_root_message_id
+              AND (current_message.created_at, current_message.message_id)
+                    <= (candidate_message.created_at, candidate_message.message_id)
+         )
+      RETURNING
+        workspace_id, conversation_id, thread_root_message_id,
+        workspace_member_id, last_read_message_id, read_at
+    `, [workspaceId, conversationId, parentMessageId, workspaceMemberId, lastReadMessageId]);
+
+    if (result.rows?.[0]) return { ...result.rows[0], advanced: true };
+
+    const current = await getThreadReadCursor({
+      workspaceId, conversationId, parentMessageId, workspaceMemberId,
+    });
+    return current ? { ...current, advanced: false } : null;
   }
 
   async function getReadCursor({ workspaceId, conversationId, workspaceMemberId }) {
@@ -1032,11 +1493,133 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
       LEFT JOIN ac_message m
         ON m.workspace_id = $1
        AND m.conversation_id = ac.conversation_id
+       AND m.reply_to_message_id IS NULL
       GROUP BY ac.conversation_id
       ORDER BY ac.conversation_id
     `, [workspaceId, workspaceMemberId]);
 
     return result.rows || [];
+  }
+
+  async function getMemberPresenceProfile({ workspaceId, workspaceMemberId }) {
+    const result = await db.query(`
+      SELECT
+        workspace_id,
+        workspace_member_id,
+        CASE
+          WHEN status_expires_at IS NOT NULL AND status_expires_at <= NOW()
+            THEN NULL
+          ELSE custom_status
+        END AS custom_status,
+        CASE
+          WHEN status_expires_at IS NOT NULL AND status_expires_at <= NOW()
+            THEN NULL
+          ELSE status_expires_at
+        END AS status_expires_at,
+        last_seen_at,
+        updated_at
+      FROM ac_member_presence_profile
+      WHERE workspace_id = $1
+        AND workspace_member_id = $2
+      LIMIT 1
+    `, [workspaceId, workspaceMemberId]);
+
+    return result.rows?.[0] || {
+      workspace_id: workspaceId,
+      workspace_member_id: workspaceMemberId,
+      custom_status: null,
+      status_expires_at: null,
+      last_seen_at: null,
+      updated_at: null,
+    };
+  }
+
+  async function listMemberPresenceProfiles({ workspaceId, workspaceMemberIds }) {
+    const ids = Array.isArray(workspaceMemberIds)
+      ? [...new Set(workspaceMemberIds.filter(Boolean))]
+      : [];
+    if (!ids.length) return [];
+
+    const result = await db.query(`
+      SELECT
+        requested.workspace_member_id,
+        CASE
+          WHEN p.status_expires_at IS NOT NULL AND p.status_expires_at <= NOW()
+            THEN NULL
+          ELSE p.custom_status
+        END AS custom_status,
+        CASE
+          WHEN p.status_expires_at IS NOT NULL AND p.status_expires_at <= NOW()
+            THEN NULL
+          ELSE p.status_expires_at
+        END AS status_expires_at,
+        p.last_seen_at,
+        p.updated_at
+      FROM unnest($2::uuid[]) AS requested(workspace_member_id)
+      LEFT JOIN ac_member_presence_profile p
+        ON p.workspace_id = $1
+       AND p.workspace_member_id = requested.workspace_member_id
+      ORDER BY requested.workspace_member_id
+    `, [workspaceId, ids]);
+
+    return result.rows || [];
+  }
+
+  async function updateMemberPresenceProfile({
+    workspaceId,
+    workspaceMemberId,
+    customStatus,
+    statusExpiresAt,
+  }) {
+    const result = await db.query(`
+      INSERT INTO ac_member_presence_profile (
+        workspace_id,
+        workspace_member_id,
+        custom_status,
+        status_expires_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (workspace_id, workspace_member_id)
+      DO UPDATE SET
+        custom_status = EXCLUDED.custom_status,
+        status_expires_at = EXCLUDED.status_expires_at,
+        updated_at = NOW()
+      RETURNING
+        workspace_id,
+        workspace_member_id,
+        custom_status,
+        status_expires_at,
+        last_seen_at,
+        updated_at
+    `, [workspaceId, workspaceMemberId, customStatus || null, statusExpiresAt || null]);
+
+    return result.rows?.[0] || null;
+  }
+
+  async function touchMemberLastSeen({ workspaceId, workspaceMemberId }) {
+    const result = await db.query(`
+      INSERT INTO ac_member_presence_profile (
+        workspace_id,
+        workspace_member_id,
+        last_seen_at,
+        updated_at
+      )
+      VALUES ($1, $2, NOW(), NOW())
+      ON CONFLICT (workspace_id, workspace_member_id)
+      DO UPDATE SET
+        last_seen_at = NOW(),
+        updated_at = NOW()
+      RETURNING
+        workspace_id,
+        workspace_member_id,
+        custom_status,
+        status_expires_at,
+        last_seen_at,
+        updated_at
+    `, [workspaceId, workspaceMemberId]);
+
+    return result.rows?.[0] || null;
   }
 
   async function listConversationRecipientMemberIds({ workspaceId, conversationId }) {
@@ -1097,18 +1680,28 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     getConversationAccess,
     getActiveConversation,
     getMessageInConversation,
+    getMessagePreviews,
     findHumanMessageByClientId,
     createHumanMessage,
     updateHumanTextMessage,
     softDeleteHumanMessage,
     listMessages,
+    searchConversationMessages,
+    toggleMessageReaction,
+    listMessageReactionUsers,
     listThread,
+    getThreadReadCursor,
+    advanceThreadReadCursor,
     getReadCursor,
     advanceReadCursor,
     getActiveSystemSender,
     findSystemMessageBySourceEvent,
     createSystemMessage,
     listUnreadCounts,
+    getMemberPresenceProfile,
+    listMemberPresenceProfiles,
+    updateMemberPresenceProfile,
+    touchMemberLastSeen,
     listConversationRecipientMemberIds,
   });
 }
