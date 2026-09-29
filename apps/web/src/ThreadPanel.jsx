@@ -115,6 +115,13 @@ export default function ThreadPanel({
   const [pendingFiles, setPendingFiles] = useState([]);
   const fileInputRef = useRef(null);
   const bottomRef = useRef(null);
+  const onApiFailureRef = useRef(onApiFailure);
+  const onThreadActivityRef = useRef(onThreadActivity);
+
+  useEffect(() => {
+    onApiFailureRef.current = onApiFailure;
+    onThreadActivityRef.current = onThreadActivity;
+  }, [onApiFailure, onThreadActivity]);
 
   const parentId = parentMessage?.message_id || '';
   const conversationId = conversation?.id || '';
@@ -136,11 +143,11 @@ export default function ThreadPanel({
         setParent(result.parent || parentMessage);
         setReplies(result.replies || []);
         const latest = (result.replies || []).at(-1);
-        if (latest?.message_id) onThreadActivity?.(latest.message_id);
+        if (latest?.message_id) onThreadActivityRef.current?.(latest.message_id);
       })
       .catch((requestError) => {
         if (cancelled) return;
-        if (!onApiFailure?.(requestError)) {
+        if (!onApiFailureRef.current?.(requestError)) {
           setError(requestError.message || 'Could not load thread');
         }
       })
@@ -149,7 +156,7 @@ export default function ThreadPanel({
       });
 
     return () => { cancelled = true; };
-  }, [token, conversationId, parentId, parentMessage, onApiFailure, onThreadActivity]);
+  }, [token, conversationId, parentId]);
 
   useEffect(() => {
     const event = realtimeMessage;
@@ -165,7 +172,7 @@ export default function ThreadPanel({
 
     if (event.type === 'message.created') {
       setReplies((current) => mergeById([...current, message]));
-      onThreadActivity?.(message.message_id);
+      onThreadActivityRef.current?.(message.message_id);
       window.requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }));
       return;
     }
@@ -173,7 +180,7 @@ export default function ThreadPanel({
     if (event.type === 'message.updated' || event.type === 'message.deleted') {
       setReplies((current) => current.map((item) => item.message_id === message.message_id ? message : item));
     }
-  }, [realtimeMessage, conversationId, parentId, onThreadActivity]);
+  }, [realtimeMessage, conversationId, parentId]);
 
   const title = useMemo(() => {
     const count = replies.length;
@@ -234,7 +241,7 @@ export default function ThreadPanel({
       setPendingFiles([]);
       window.requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }));
     } catch (requestError) {
-      if (!onApiFailure?.(requestError)) {
+      if (!onApiFailureRef.current?.(requestError)) {
         setError(requestError.message || 'Could not send thread reply');
       }
     } finally {
