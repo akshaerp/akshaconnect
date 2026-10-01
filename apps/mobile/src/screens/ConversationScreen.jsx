@@ -1201,6 +1201,64 @@ export default function ConversationScreen({
       }, 250);
     }
 
+    const reactionEvents = pending
+      .map((envelope) => envelope.payload)
+      .filter(
+        (payload) =>
+          payload?.type ===
+            'message.reaction.updated' &&
+          payload.conversation_id ===
+            conversation?.conversationId &&
+          payload.message_id &&
+          Array.isArray(payload.reactions)
+      );
+
+    if (reactionEvents.length > 0) {
+      const latestByMessageId =
+        new Map();
+
+      for (
+        const event of reactionEvents
+      ) {
+        latestByMessageId.set(
+          event.message_id,
+          event.reactions
+        );
+      }
+
+      setMessages((current) =>
+        current.map((item) =>
+          latestByMessageId.has(
+            item.message_id
+          )
+            ? {
+                ...item,
+                reactions:
+                  latestByMessageId.get(
+                    item.message_id
+                  ) || [],
+              }
+            : item
+        )
+      );
+
+      setMessageActionTarget(
+        (current) =>
+          current?.message_id &&
+          latestByMessageId.has(
+            current.message_id
+          )
+            ? {
+                ...current,
+                reactions:
+                  latestByMessageId.get(
+                    current.message_id
+                  ) || [],
+              }
+            : current
+      );
+    }
+
     const mutations = pending
       .map((envelope) => envelope.payload)
       .filter(
@@ -3368,21 +3426,32 @@ export default function ConversationScreen({
 
   return (
     <SafeAreaView
-      style={[styles.safeArea, { backgroundColor: palette.shell }]}
-      edges={['top', 'bottom']}
+      style={styles.safeArea}
+      edges={['top']}
     >
-      <StatusBar
-        backgroundColor={colors.primary}
-        barStyle="light-content"
-      />
-      <KeyboardAvoidingView
+      <SafeAreaView
+        style={[
+          styles.safeAreaContent,
+          {
+            backgroundColor:
+              palette.shell,
+          },
+        ]}
+        edges={['bottom']}
+      >
+        <StatusBar
+          backgroundColor={colors.primary}
+          barStyle="light-content"
+        />
+        <KeyboardAvoidingView
         style={styles.flex}
-        behavior={
-          Platform.OS === 'ios'
-            ? 'padding'
-            : 'height'
+        behavior="padding"
+        enabled
+        keyboardVerticalOffset={
+          Platform.OS === 'android'
+            ? 56
+            : 0
         }
-        keyboardVerticalOffset={0}
       >
         <ConversationHeader
           title={
@@ -4800,7 +4869,8 @@ export default function ConversationScreen({
             </View>
           </View>
         </Modal>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
     </SafeAreaView>
   );
 }
@@ -5479,6 +5549,9 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.primary,
+  },
+  safeAreaContent: {
+    flex: 1,
   },
   header: {
     minHeight: 72,

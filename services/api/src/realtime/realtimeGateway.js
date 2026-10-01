@@ -11,6 +11,7 @@ const {
 const DEFAULT_AUTH_TIMEOUT_MS = 5000;
 const DEFAULT_HEARTBEAT_MS = 30000;
 const DEFAULT_MOBILE_PRESENCE_LEASE_MS = 25 * 1000;
+const DEFAULT_WEB_PRESENCE_IDLE_MS = 5 * 60 * 1000;
 const DEFAULT_PRESENCE_SWEEP_MS = 5 * 1000;
 const MAX_CLIENT_PAYLOAD_BYTES = 16 * 1024;
 const MAX_CONVERSATION_ID_CHARS = 160;
@@ -61,6 +62,7 @@ function attachRealtimeGateway({
   authTimeoutMs = DEFAULT_AUTH_TIMEOUT_MS,
   heartbeatMs = DEFAULT_HEARTBEAT_MS,
   mobilePresenceLeaseMs = DEFAULT_MOBILE_PRESENCE_LEASE_MS,
+  webPresenceIdleMs = DEFAULT_WEB_PRESENCE_IDLE_MS,
   presenceSweepMs = DEFAULT_PRESENCE_SWEEP_MS,
   wsModule = null,
 } = {}) {
@@ -324,18 +326,34 @@ function attachRealtimeGateway({
     if (
       event.type === 'message.created' ||
       event.type === 'message.updated' ||
-      event.type === 'message.deleted'
+      event.type === 'message.deleted' ||
+      event.type === 'message.reaction.updated'
     ) {
       const recipientMemberIds = await messagingRepository.listConversationRecipientMemberIds({
         workspaceId: event.workspace_id,
         conversationId: event.conversation_id,
       });
       const allowed = new Set(recipientMemberIds || []);
-      const payload = {
-        type: event.type,
-        conversation_id: event.conversation_id,
-        message: event.message,
-      };
+      const payload =
+        event.type === 'message.reaction.updated'
+          ? {
+              type: event.type,
+              conversation_id:
+                event.conversation_id,
+              message_id:
+                event.message_id,
+              reactions:
+                Array.isArray(event.reactions)
+                  ? event.reactions
+                  : [],
+            }
+          : {
+              type: event.type,
+              conversation_id:
+                event.conversation_id,
+              message:
+                event.message,
+            };
 
       for (const connection of connections) {
         if (!connection.authenticated || !connection.claims) continue;
@@ -400,18 +418,61 @@ function attachRealtimeGateway({
     for (const connection of connections) {
       if (
         !connection.authenticated ||
-        !connection.presenceRegistered ||
-        connection.clientType !== 'MOBILE'
+        !connection.presenceRegistered
       ) continue;
 
-      const row = registry.getConnection(connection.connectionId);
+      const row =
+        registry.getConnection(
+          connection.connectionId
+        );
+
       if (!row) {
         connection.presenceRegistered = false;
         continue;
       }
 
-      if (now - Number(row.updatedAt || 0) > mobilePresenceLeaseMs) {
-        unregisterPresence(connection);
+      const ageMs =
+        now -
+        Number(
+          row.updatedAt || 0
+        );
+
+      if (
+        connection.clientType === 'MOBILE'
+      ) {
+        if (
+          ageMs >
+          mobilePresenceLeaseMs
+        ) {
+          unregisterPresence(
+            connection
+          );
+        }
+        continue;
+      }
+
+      if (
+        connection.clientType === 'WEB' &&
+        row.state === 'ACTIVE' &&
+        ageMs > webPresenceIdleMs
+      ) {
+        const result =
+          registry.updateConnection(
+            connection.connectionId,
+            {
+              state: 'AWAY',
+              activeConversationId: null,
+            },
+          );
+
+        if (
+          result?.changed
+        ) {
+          broadcastPresence(
+            connection.claims.workspace_id,
+            result.presence,
+          );
+        }
       }
     }
   }, presenceSweepMs);
@@ -453,6 +514,7 @@ module.exports = {
   DEFAULT_AUTH_TIMEOUT_MS,
   DEFAULT_HEARTBEAT_MS,
   DEFAULT_MOBILE_PRESENCE_LEASE_MS,
+  DEFAULT_WEB_PRESENCE_IDLE_MS,
   DEFAULT_PRESENCE_SWEEP_MS,
   MAX_CLIENT_PAYLOAD_BYTES,
   MAX_CONVERSATION_ID_CHARS,

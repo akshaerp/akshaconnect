@@ -683,17 +683,32 @@ export default function ThreadModal({
       navigationBarTranslucent={false}
     >
       <SafeAreaView
-        style={[styles.safeArea, { backgroundColor: palette.shell }]}
-        edges={['top', 'bottom']}
+        style={styles.safeArea}
+        edges={['top']}
       >
-        <StatusBar
-          backgroundColor={colors.primary}
-          barStyle="light-content"
-        />
-        <KeyboardAvoidingView
+        <SafeAreaView
+          style={[
+            styles.safeAreaContent,
+            {
+              backgroundColor:
+                palette.shell,
+            },
+          ]}
+          edges={['bottom']}
+        >
+          <StatusBar
+            backgroundColor={colors.primary}
+            barStyle="light-content"
+          />
+          <KeyboardAvoidingView
           style={styles.flex}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={0}
+          behavior="padding"
+          enabled
+          keyboardVerticalOffset={
+            Platform.OS === 'android'
+              ? 56
+              : 0
+          }
         >
           <ConversationHeader
             title="Thread"
@@ -928,7 +943,8 @@ export default function ThreadModal({
             refreshEpoch={messageReadersRefreshEpoch}
             onClose={() => setMessageReadersTarget(null)}
           />
-        </KeyboardAvoidingView>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
       </SafeAreaView>
     </Modal>
   );
@@ -1061,6 +1077,9 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.primary,
+  },
+  safeAreaContent: {
+    flex: 1,
   },
   flex: {
     flex: 1,

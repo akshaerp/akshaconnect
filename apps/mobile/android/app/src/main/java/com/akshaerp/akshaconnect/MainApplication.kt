@@ -17,6 +17,8 @@ class MainApplication : Application(), ReactApplication {
           add(AkshaConnectAuthBridgePackage())
           add(AkshaConnectAppInfoPackage())
           add(AkshaConnectClipboardPackage())
+          add(AkshaConnectNotificationPackage())
+          add(AkshaConnectDateTimePickerPackage())
         },
     )
   }

@@ -28,3 +28,61 @@ test('V16-J mobile and web render reaction chips', () => {
   assert.match(read('apps/mobile/src/screens/ConversationScreen.jsx'), /reactionChip/);
   assert.match(read('apps/web/src/App.jsx'), /reaction-chip/);
 });
+
+
+test('V17-C1 reaction updates fan out in realtime and update the open mobile conversation', () => {
+  const gateway =
+    read(
+      'services/api/src/realtime/realtimeGateway.js'
+    );
+
+  const app =
+    read(
+      'apps/mobile/App.jsx'
+    );
+
+  const mobile =
+    read(
+      'apps/mobile/src/screens/ConversationScreen.jsx'
+    );
+
+  assert.match(
+    gateway,
+    /event\.type === 'message\.reaction\.updated'/
+  );
+
+  assert.match(
+    gateway,
+    /message_id:\s*event\.message_id/
+  );
+
+  assert.match(
+    gateway,
+    /Array\.isArray\(event\.reactions\)/
+  );
+
+  assert.match(
+    app,
+    /const reactionEvent/
+  );
+
+  assert.match(
+    app,
+    /payload\?\.type ===[\s\S]*'message\.reaction\.updated'/
+  );
+
+  assert.match(
+    mobile,
+    /const reactionEvents = pending/
+  );
+
+  assert.match(
+    mobile,
+    /latestByMessageId/
+  );
+
+  assert.match(
+    mobile,
+    /reactions:[\s\S]*latestByMessageId\.get/
+  );
+});

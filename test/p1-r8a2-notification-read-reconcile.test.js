@@ -51,3 +51,61 @@ test('R8A.2 Android build uses the current VC17 package identity', () => {
   assert.match(gradle, /versionCode 17/);
   assert.match(gradle, /versionName "0\.3\.0-v17"/);
 });
+
+
+test('V17-C1 Android clears system FCM notifications using the server conversation tag', () => {
+  const notifications =
+    read(
+      'apps/mobile/src/notifications/nativeNotifications.js'
+    );
+
+  const moduleSource =
+    read(
+      'apps/mobile/android/app/src/main/java/com/akshaerp/akshaconnect/AkshaConnectNotificationModule.kt'
+    );
+
+  const packageSource =
+    read(
+      'apps/mobile/android/app/src/main/java/com/akshaerp/akshaconnect/AkshaConnectNotificationPackage.kt'
+    );
+
+  const application =
+    read(
+      'apps/mobile/android/app/src/main/java/com/akshaerp/akshaconnect/MainApplication.kt'
+    );
+
+  assert.match(
+    notifications,
+    /AkshaConnectNotifications/
+  );
+
+  assert.match(
+    notifications,
+    /clearConversation\(cleanId\)/
+  );
+
+  assert.match(
+    moduleSource,
+    /activeNotifications/
+  );
+
+  assert.match(
+    moduleSource,
+    /akshaconnect-conversation-/
+  );
+
+  assert.match(
+    moduleSource,
+    /manager\.cancel/
+  );
+
+  assert.match(
+    packageSource,
+    /AkshaConnectNotificationModule/
+  );
+
+  assert.match(
+    application,
+    /add\(AkshaConnectNotificationPackage\(\)\)/
+  );
+});

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,9 +16,9 @@ import {
   useAppAppearance,
 } from '../theme/appearanceStore';
 
-export const CONVERSATION_COMPOSER_MIN_HEIGHT = 46;
+export const CONVERSATION_COMPOSER_MIN_HEIGHT = 44;
 export const CONVERSATION_COMPOSER_LINE_HEIGHT = 20;
-export const CONVERSATION_COMPOSER_MAX_LINES = 10;
+export const CONVERSATION_COMPOSER_MAX_LINES = 6;
 export const CONVERSATION_COMPOSER_MAX_HEIGHT =
   CONVERSATION_COMPOSER_LINE_HEIGHT *
     CONVERSATION_COMPOSER_MAX_LINES +
@@ -244,7 +245,11 @@ export function ConversationComposer({
   sending = false,
   sendLabel = 'Send',
 }) {
-  const { textScale, palette } = useAppAppearance();
+  const {
+    textScale,
+    palette,
+  } = useAppAppearance();
+
   const composerMaxHeight =
     scaleTextMetric(
       CONVERSATION_COMPOSER_LINE_HEIGHT,
@@ -253,116 +258,399 @@ export function ConversationComposer({
       CONVERSATION_COMPOSER_MAX_LINES +
     22;
 
-  const [inputHeight, setInputHeight] = useState(
+  const [
+    inputHeight,
+    setInputHeight,
+  ] = useState(
     CONVERSATION_COMPOSER_MIN_HEIGHT
   );
 
+  const [
+    keyboardVisible,
+    setKeyboardVisible,
+  ] = useState(
+    Boolean(
+      Keyboard.isVisible?.()
+    )
+  );
+
+  useEffect(() => {
+    const showSubscription =
+      Keyboard.addListener(
+        'keyboardDidShow',
+        () => {
+          setKeyboardVisible(
+            true
+          );
+        },
+      );
+
+    const hideSubscription =
+      Keyboard.addListener(
+        'keyboardDidHide',
+        () => {
+          setKeyboardVisible(
+            false
+          );
+        },
+      );
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
   useEffect(() => {
     if (!value) {
-      setInputHeight(CONVERSATION_COMPOSER_MIN_HEIGHT);
+      setInputHeight(
+        CONVERSATION_COMPOSER_MIN_HEIGHT
+      );
       return;
     }
 
-    setInputHeight((current) =>
-      Math.min(current, composerMaxHeight)
+    setInputHeight(
+      (current) =>
+        Math.min(
+          current,
+          composerMaxHeight
+        )
     );
-  }, [composerMaxHeight, value]);
+  }, [
+    composerMaxHeight,
+    value,
+  ]);
 
   const canUseAttachment =
-    typeof onAttach === 'function' && !attachmentDisabled;
-  const canUseEmoji = typeof onEmojiPress === 'function';
+    typeof onAttach === 'function' &&
+    !attachmentDisabled;
 
-  return (
-    <View style={[styles.composer, { backgroundColor: palette.surface, borderTopColor: palette.border }]}>
+  const canUseEmoji =
+    typeof onEmojiPress ===
+    'function';
+
+  const composing =
+    keyboardVisible;
+
+  function renderAttachButton({
+    toolbar = false,
+  } = {}) {
+    return (
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Attach files"
         onPress={onAttach}
-        disabled={!canUseAttachment}
-        style={({ pressed }) => [
+        disabled={
+          !canUseAttachment
+        }
+        style={({
+          pressed,
+        }) => [
           styles.attachButton,
-          !canUseAttachment ? styles.controlDisabled : null,
-          pressed && canUseAttachment ? styles.pressed : null,
+          toolbar
+            ? styles.toolbarAttachButton
+            : null,
+          {
+            backgroundColor:
+              palette.surfaceRaised,
+            borderColor:
+              palette.border,
+          },
+          !canUseAttachment
+            ? styles.controlDisabled
+            : null,
+          pressed &&
+          canUseAttachment
+            ? styles.pressed
+            : null,
         ]}
       >
         {attaching ? (
-          <ActivityIndicator size="small" color={colors.primary} />
+          <ActivityIndicator
+            size="small"
+            color={
+              colors.primary
+            }
+          />
         ) : (
-          <Text style={styles.attachButtonIcon}>＋</Text>
+          <Text
+            style={
+              styles.attachButtonIcon
+            }
+          >
+            ＋
+          </Text>
         )}
       </Pressable>
+    );
+  }
 
-      <View style={styles.composerInputShell}>
-        <TextInput
-          ref={inputRef}
-          value={value}
-          onChangeText={onChangeText}
-          onFocus={onFocus}
-          onContentSizeChange={(event) => {
-            const nextHeight = clampComposerHeight(
-              event.nativeEvent?.contentSize?.height,
-              composerMaxHeight
-            );
-            setInputHeight(nextHeight);
-          }}
-          placeholder={placeholder}
-          placeholderTextColor={colors.textMuted}
-          style={[
-            styles.input,
-            {
-              height: inputHeight,
-              maxHeight: composerMaxHeight,
-              color: palette.textPrimary,
-              backgroundColor: palette.input,
-              borderColor: palette.border,
-            },
-            canUseEmoji ? styles.inputWithEmoji : null,
-          ]}
-          multiline
-          maxLength={maxLength}
-          editable={editable}
-          textAlignVertical="top"
-          scrollEnabled={
-            inputHeight >= composerMaxHeight
-          }
-        />
+  function renderEmojiButton({
+    toolbar = false,
+  } = {}) {
+    if (
+      !canUseEmoji
+    ) {
+      return null;
+    }
 
-        {canUseEmoji ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Choose emoji"
-            accessibilityState={{ expanded: Boolean(emojiOpen) }}
-            onPress={onEmojiPress}
-            disabled={!editable}
-            hitSlop={8}
-            style={({ pressed }) => [
-              styles.inlineEmojiButton,
-              emojiOpen ? styles.inlineEmojiButtonOpen : null,
-              pressed ? styles.pressed : null,
-            ]}
-          >
-            <Text style={styles.inlineEmojiButtonText}>😊</Text>
-          </Pressable>
-        ) : null}
-      </View>
-
+    return (
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={sendLabel}
-        onPress={onSend}
-        disabled={sendDisabled}
-        style={({ pressed }) => [
+        accessibilityLabel="Choose emoji"
+        accessibilityState={{
+          expanded:
+            Boolean(
+              emojiOpen
+            ),
+        }}
+        onPress={
+          onEmojiPress
+        }
+        disabled={
+          !editable
+        }
+        hitSlop={8}
+        style={({
+          pressed,
+        }) => [
+          styles.composerActionButton,
+          toolbar
+            ? null
+            : styles.compactEmojiButton,
+          {
+            backgroundColor:
+              emojiOpen
+                ? palette.surfaceRaised
+                : palette.input,
+            borderColor:
+              palette.border,
+          },
+          pressed
+            ? styles.pressed
+            : null,
+        ]}
+      >
+        <Text
+          style={
+            styles.inlineEmojiButtonText
+          }
+        >
+          😊
+        </Text>
+      </Pressable>
+    );
+  }
+
+  function renderSendButton({
+    toolbar = false,
+  } = {}) {
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={
+          sendLabel
+        }
+        onPress={
+          onSend
+        }
+        disabled={
+          sendDisabled
+        }
+        style={({
+          pressed,
+        }) => [
           styles.sendButton,
-          sendDisabled ? styles.controlDisabled : null,
-          pressed && !sendDisabled ? styles.pressed : null,
+          toolbar
+            ? styles.toolbarSendButton
+            : null,
+          sendLabel !== 'Send'
+            ? styles.sendButtonWide
+            : null,
+          sendDisabled
+            ? styles.controlDisabled
+            : null,
+          pressed &&
+          !sendDisabled
+            ? styles.pressed
+            : null,
         ]}
       >
         {sending ? (
-          <ActivityIndicator color="#FFFFFF" />
+          <ActivityIndicator
+            color="#FFFFFF"
+          />
+        ) : sendLabel ===
+          'Send' ? (
+          <Text
+            style={
+              styles.sendArrow
+            }
+          >
+            ↑
+          </Text>
         ) : (
-          <Text style={styles.sendText}>{sendLabel}</Text>
+          <Text
+            style={
+              styles.sendText
+            }
+          >
+            {sendLabel}
+          </Text>
         )}
       </Pressable>
+    );
+  }
+
+  return (
+    <View
+      style={[
+        styles.composer,
+        composing
+          ? styles.composerExpanded
+          : styles.composerCompact,
+        {
+          backgroundColor:
+            palette.surface,
+          borderTopColor:
+            palette.border,
+        },
+      ]}
+    >
+      <View
+        style={[
+          styles.composerInputRow,
+          composing
+            ? styles.composerInputRowExpanded
+            : null,
+        ]}
+      >
+        <View
+          style={[
+            styles.compactLeadingSlot,
+            composing
+              ? styles.composerCompactSlotHidden
+              : null,
+          ]}
+        >
+          {renderAttachButton()}
+        </View>
+
+        <View
+          style={[
+            styles.composerInputShell,
+            composing
+              ? styles.composerInputShellExpanded
+              : null,
+            {
+              backgroundColor:
+                palette.input,
+              borderColor:
+                palette.border,
+            },
+          ]}
+        >
+          <TextInput
+            ref={inputRef}
+            value={value}
+            onChangeText={
+              onChangeText
+            }
+            onFocus={(
+              event
+            ) => {
+              onFocus?.(
+                event
+              );
+            }}
+            onContentSizeChange={(
+              event
+            ) => {
+              const nextHeight =
+                clampComposerHeight(
+                  event
+                    .nativeEvent
+                    ?.contentSize
+                    ?.height,
+                  composerMaxHeight
+                );
+
+              setInputHeight(
+                nextHeight
+              );
+            }}
+            placeholder={
+              placeholder
+            }
+            placeholderTextColor={
+              palette.textMuted
+            }
+            style={[
+              styles.input,
+              {
+                height:
+                  inputHeight,
+                maxHeight:
+                  composerMaxHeight,
+                color:
+                  palette.textPrimary,
+                backgroundColor:
+                  'transparent',
+              },
+            ]}
+            multiline
+            maxLength={
+              maxLength
+            }
+            editable={
+              editable
+            }
+            textAlignVertical="top"
+            scrollEnabled={
+              inputHeight >=
+              composerMaxHeight
+            }
+          />
+        </View>
+
+        <View
+          style={[
+            styles.compactActions,
+            composing
+              ? styles.composerCompactSlotHidden
+              : null,
+          ]}
+        >
+          {renderEmojiButton()}
+          {renderSendButton()}
+        </View>
+      </View>
+
+      {composing ? (
+        <View
+          style={
+            styles.composerToolbar
+          }
+        >
+          {renderAttachButton({
+            toolbar: true,
+          })}
+
+          <View
+            style={
+              styles.composerToolbarSpacer
+            }
+          />
+
+          {renderEmojiButton({
+            toolbar: true,
+          })}
+
+          {renderSendButton({
+            toolbar: true,
+          })}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -513,25 +801,24 @@ const styles = StyleSheet.create({
     color: '#D7E0EA',
   },
   composer: {
-    minHeight: 66,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    minHeight: 60,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
     flexDirection: 'row',
     alignItems: 'flex-end',
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth:
+      StyleSheet.hairlineWidth,
     borderTopColor: '#D2DDE7',
     backgroundColor: colors.surface,
   },
   attachButton: {
-    width: 46,
-    height: 46,
-    marginRight: 8,
-    borderRadius: 15,
+    width: 44,
+    height: 44,
+    marginRight: 7,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#C9DCEF',
-    backgroundColor: '#EDF6FF',
   },
   attachButtonIcon: {
     marginTop: -2,
@@ -542,30 +829,35 @@ const styles = StyleSheet.create({
   },
   composerInputShell: {
     flex: 1,
+    minHeight:
+      CONVERSATION_COMPOSER_MIN_HEIGHT,
     position: 'relative',
+    borderWidth: 1,
+    borderRadius: 22,
+    overflow: 'hidden',
   },
   input: {
     width: '100%',
-    minHeight: CONVERSATION_COMPOSER_MIN_HEIGHT,
-    maxHeight: CONVERSATION_COMPOSER_MAX_HEIGHT,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.input,
+    minHeight:
+      CONVERSATION_COMPOSER_MIN_HEIGHT,
+    maxHeight:
+      CONVERSATION_COMPOSER_MAX_HEIGHT,
+    borderWidth: 0,
     paddingHorizontal: 14,
-    paddingTop: 11,
-    paddingBottom: 11,
+    paddingTop: 10,
+    paddingBottom: 10,
     color: colors.navy,
     fontSize: 14,
-    lineHeight: CONVERSATION_COMPOSER_LINE_HEIGHT,
+    lineHeight:
+      CONVERSATION_COMPOSER_LINE_HEIGHT,
   },
   inputWithEmoji: {
     paddingRight: 44,
   },
   inlineEmojiButton: {
     position: 'absolute',
-    right: 8,
-    bottom: 7,
+    right: 6,
+    bottom: 5,
     width: 34,
     height: 34,
     borderRadius: 17,
@@ -579,19 +871,90 @@ const styles = StyleSheet.create({
     fontSize: 21,
   },
   sendButton: {
-    minWidth: 66,
-    height: 46,
-    marginLeft: 8,
-    paddingHorizontal: 10,
-    borderRadius: 15,
+    width: 44,
+    height: 44,
+    marginLeft: 7,
+    paddingHorizontal: 0,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.primary,
   },
+  sendButtonWide: {
+    width: 'auto',
+    minWidth: 58,
+    paddingHorizontal: 12,
+  },
+  sendArrow: {
+    marginTop: -2,
+    color: '#FFFFFF',
+    fontSize: 24,
+    lineHeight: 26,
+    fontWeight: '800',
+  },
   sendText: {
     color: '#FFFFFF',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '900',
+  },
+  composerCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  composerExpanded: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    paddingTop: 8,
+    paddingBottom: 7,
+  },
+  composerInputRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+  },
+  composerInputRowExpanded: {
+    alignItems: 'stretch',
+  },
+  compactLeadingSlot: {
+    flexShrink: 0,
+  },
+  compactActions: {
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  composerCompactSlotHidden: {
+    display: 'none',
+  },
+  composerInputShellExpanded: {
+    width: '100%',
+  },
+  composerToolbar: {
+    width: '100%',
+    marginTop: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  composerToolbarSpacer: {
+    flex: 1,
+  },
+  composerActionButton: {
+    width: 40,
+    height: 40,
+    marginLeft: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  compactEmojiButton: {
+    marginLeft: 7,
+  },
+  toolbarAttachButton: {
+    marginRight: 0,
+  },
+  toolbarSendButton: {
+    marginLeft: 7,
   },
   controlDisabled: {
     opacity: 0.35,

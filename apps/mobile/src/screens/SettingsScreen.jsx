@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  NativeModules,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,6 +22,37 @@ import {
   useAppAppearance,
 } from '../theme/appearanceStore';
 import { colors } from '../theme/colors';
+
+const {
+  AkshaConnectDateTimePicker,
+} = NativeModules;
+
+const STATUS_PRESETS = Object.freeze([
+  Object.freeze({
+    key: 'away',
+    label: 'Away',
+  }),
+  Object.freeze({
+    key: 'busy',
+    label: 'Busy',
+  }),
+  Object.freeze({
+    key: 'meeting',
+    label: 'In a meeting',
+  }),
+  Object.freeze({
+    key: 'wfh',
+    label: 'Working from home',
+  }),
+  Object.freeze({
+    key: 'sick',
+    label: 'Sick',
+  }),
+  Object.freeze({
+    key: 'leave',
+    label: 'On leave',
+  }),
+]);
 
 function initials(name = '') {
   return (
@@ -66,33 +98,6 @@ function expiryFromHours(hours) {
   return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 }
 
-function customExpiryFromLocalText(value) {
-  const source = String(value || '').trim();
-  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/.exec(source);
-  if (!match) return null;
-
-  const [, yearText, monthText, dayText, hourText, minuteText] = match;
-  const year = Number(yearText);
-  const month = Number(monthText);
-  const day = Number(dayText);
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  const parsed = new Date(year, month - 1, day, hour, minute, 0, 0);
-
-  if (
-    parsed.getFullYear() !== year ||
-    parsed.getMonth() !== month - 1 ||
-    parsed.getDate() !== day ||
-    parsed.getHours() !== hour ||
-    parsed.getMinutes() !== minute ||
-    parsed.getTime() <= Date.now()
-  ) {
-    return null;
-  }
-
-  return parsed.toISOString();
-}
-
 export default function SettingsScreen({
   session,
   serverUrl,
@@ -122,7 +127,6 @@ export default function SettingsScreen({
   const [presenceSaving, setPresenceSaving] = useState(false);
   const [presenceError, setPresenceError] = useState('');
   const [presenceSaved, setPresenceSaved] = useState('');
-  const [customExpiryInput, setCustomExpiryInput] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -179,41 +183,158 @@ export default function SettingsScreen({
   function clearPresence() {
     setStatusText('');
     setStatusExpiry(null);
-    setCustomExpiryInput('');
+    setPresenceError('');
     setPresenceSaved('');
   }
 
-  function applyCustomExpiry() {
-    const parsed = customExpiryFromLocalText(customExpiryInput);
+  function selectStatusPreset(preset) {
+    setStatusText(preset.label);
+    setPresenceError('');
+    setPresenceSaved('');
+  }
 
-    if (!parsed) {
+  async function openCustomExpiryPicker() {
+    if (
+      !AkshaConnectDateTimePicker
+        ?.pick
+    ) {
       setPresenceError(
-        'Enter a future local date/time as YYYY-MM-DD HH:MM'
+        'The Android date and time picker is unavailable.'
       );
       return;
     }
 
     setPresenceError('');
-    setStatusExpiry(parsed);
-    setPresenceSaved('');
+
+    try {
+      const currentExpiryMs =
+        statusExpiry
+          ? new Date(
+              statusExpiry
+            ).getTime()
+          : 0;
+
+      const initialEpochMs =
+        Number.isFinite(
+          currentExpiryMs
+        ) &&
+        currentExpiryMs >
+          Date.now()
+          ? currentExpiryMs
+          : Date.now() +
+            60 * 60 * 1000;
+
+      const result =
+        await AkshaConnectDateTimePicker
+          .pick(
+            initialEpochMs
+          );
+
+      const selectedEpochMs =
+        Number(
+          result?.epoch_ms || 0
+        );
+
+      if (
+        !selectedEpochMs
+      ) {
+        return;
+      }
+
+      if (
+        selectedEpochMs <=
+        Date.now()
+      ) {
+        setPresenceError(
+          'Choose a future date and time.'
+        );
+        return;
+      }
+
+      setStatusExpiry(
+        new Date(
+          selectedEpochMs
+        ).toISOString()
+      );
+
+      setPresenceSaved('');
+    } catch (error) {
+      setPresenceError(
+        error?.message ||
+          'Could not choose the status expiry.'
+      );
+    }
   }
+
+  const selectedStatusKey =
+    STATUS_PRESETS.find(
+      (preset) =>
+        preset.label ===
+        statusText.trim()
+    )?.key || '';
 
   return (
     <ScrollView
-      contentContainerStyle={[styles.page, { backgroundColor: palette.shell }]}
+      style={{
+        backgroundColor:
+          palette.shell,
+      }}
+      contentContainerStyle={[
+        styles.page,
+        {
+          backgroundColor:
+            palette.shell,
+        },
+      ]}
       showsVerticalScrollIndicator={false}
     >
-      <View style={styles.hero}>
-        <View style={styles.avatar}>
+      <View
+        style={[
+          styles.hero,
+          {
+            backgroundColor:
+              palette.surface,
+            borderColor:
+              palette.border,
+          },
+        ]}
+      >
+        <View
+          style={[
+            styles.avatar,
+            {
+              backgroundColor:
+                palette.input,
+              borderColor:
+                palette.border,
+            },
+          ]}
+        >
           <Text style={styles.avatarText}>
             {initials(identity.display_name)}
           </Text>
         </View>
         <View style={styles.heroCopy}>
-          <Text style={styles.name}>
+          <Text
+            style={[
+              styles.name,
+              {
+                color:
+                  palette.textPrimary,
+              },
+            ]}
+          >
             {identity.display_name || 'AkshaConnect member'}
           </Text>
-          <Text style={styles.email}>
+          <Text
+            style={[
+              styles.email,
+              {
+                color:
+                  palette.textMuted,
+              },
+            ]}
+          >
             {identity.primary_email || 'Member'}
           </Text>
         </View>
@@ -223,11 +344,115 @@ export default function SettingsScreen({
       <SettingCard>
         <View style={styles.statusBlock}>
           <View style={styles.statusHeadingRow}>
-            <Text style={styles.statusHeading}>Custom status</Text>
+            <Text
+              style={[
+                styles.statusHeading,
+                {
+                  color:
+                    palette.textPrimary,
+                },
+              ]}
+            >
+              Custom status
+            </Text>
             {presenceLoading ? (
               <ActivityIndicator size="small" color={colors.primary} />
             ) : null}
           </View>
+          <Text
+            style={[
+              styles.statusHint,
+              {
+                color:
+                  palette.textMuted,
+              },
+            ]}
+          >
+            Online, Away and Offline are automatic presence states. Your status message tells people what you are doing.
+          </Text>
+
+          <Text
+            style={[
+              styles.statusSubheading,
+              {
+                color:
+                  palette.textSecondary,
+              },
+            ]}
+          >
+            Quick status
+          </Text>
+
+          <View
+            style={
+              styles.statusPresetOptions
+            }
+          >
+            {STATUS_PRESETS.map(
+              (preset) => {
+                const selected =
+                  preset.key ===
+                  selectedStatusKey;
+
+                return (
+                  <Pressable
+                    key={preset.key}
+                    accessibilityRole="button"
+                    accessibilityState={{
+                      selected,
+                    }}
+                    onPress={() =>
+                      selectStatusPreset(
+                        preset
+                      )
+                    }
+                    style={[
+                      styles.statusPreset,
+                      {
+                        borderColor:
+                          selected
+                            ? colors.primary
+                            : palette.border,
+                        backgroundColor:
+                          selected
+                            ? palette.mode === 'dark'
+                              ? '#183B5F'
+                              : '#EAF4FF'
+                            : palette.input,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusPresetText,
+                        {
+                          color:
+                            selected
+                              ? colors.primary
+                              : palette.textSecondary,
+                        },
+                      ]}
+                    >
+                      {preset.label}
+                    </Text>
+                  </Pressable>
+                );
+              }
+            )}
+          </View>
+
+          <Text
+            style={[
+              styles.statusSubheading,
+              {
+                color:
+                  palette.textSecondary,
+              },
+            ]}
+          >
+            Custom status message
+          </Text>
+
           <TextInput
             value={statusText}
             onChangeText={(value) => {
@@ -235,37 +460,80 @@ export default function SettingsScreen({
               setPresenceSaved('');
             }}
             placeholder="What are you working on?"
-            placeholderTextColor="#8AA0B5"
+            placeholderTextColor={palette.textMuted}
             maxLength={120}
             style={[styles.statusInput, { color: palette.textPrimary, backgroundColor: palette.input, borderColor: palette.border }]}
           />
-          <Text style={styles.statusExpiry}>{statusExpiryText}</Text>
+          <Text
+            style={[
+              styles.statusExpiry,
+              {
+                color:
+                  palette.textMuted,
+              },
+            ]}
+          >
+            {statusExpiryText}
+          </Text>
           <View style={styles.expiryOptions}>
             <ExpiryButton label="1 hour" onPress={() => setStatusExpiry(expiryFromHours(1))} />
             <ExpiryButton label="4 hours" onPress={() => setStatusExpiry(expiryFromHours(4))} />
             <ExpiryButton label="1 day" onPress={() => setStatusExpiry(expiryFromHours(24))} />
             <ExpiryButton label="No expiry" onPress={() => setStatusExpiry(null)} />
           </View>
-          <View style={styles.customExpiryRow}>
-            <TextInput
-              value={customExpiryInput}
-              onChangeText={(value) => {
-                setCustomExpiryInput(value);
-                setPresenceError('');
-              }}
-              placeholder="Custom: YYYY-MM-DD HH:MM"
-              placeholderTextColor="#8AA0B5"
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={[styles.customExpiryInput, { color: palette.textPrimary, backgroundColor: palette.input, borderColor: palette.border }]}
-            />
-            <Pressable
-              onPress={applyCustomExpiry}
-              style={styles.customExpiryButton}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Choose custom status expiry"
+            onPress={openCustomExpiryPicker}
+            style={({ pressed }) => [
+              styles.customExpiryPicker,
+              {
+                backgroundColor:
+                  palette.input,
+                borderColor:
+                  palette.border,
+              },
+              pressed
+                ? styles.pressed
+                : null,
+            ]}
+          >
+            <View>
+              <Text
+                style={[
+                  styles.customExpiryPickerLabel,
+                  {
+                    color:
+                      palette.textPrimary,
+                  },
+                ]}
+              >
+                Choose date & time
+              </Text>
+              <Text
+                style={[
+                  styles.customExpiryPickerDetail,
+                  {
+                    color:
+                      palette.textMuted,
+                  },
+                ]}
+              >
+                Uses the Android date and time picker
+              </Text>
+            </View>
+            <Text
+              style={[
+                styles.customExpiryPickerChevron,
+                {
+                  color:
+                    palette.textMuted,
+                },
+              ]}
             >
-              <Text style={styles.customExpiryButtonText}>Set</Text>
-            </Pressable>
-          </View>
+              ›
+            </Text>
+          </Pressable>
           {presenceError ? <Text style={styles.statusError}>{presenceError}</Text> : null}
           {presenceSaved ? <Text style={styles.statusSaved}>{presenceSaved}</Text> : null}
           <View style={styles.statusActions}>
@@ -304,8 +572,26 @@ export default function SettingsScreen({
       <SectionTitle title="APPEARANCE" />
       <SettingCard>
         <View style={styles.appearanceBlock}>
-          <Text style={styles.appearanceTitle}>Text size</Text>
-          <Text style={styles.appearanceDetail}>
+          <Text
+            style={[
+              styles.appearanceTitle,
+              {
+                color:
+                  palette.textPrimary,
+              },
+            ]}
+          >
+            Text size
+          </Text>
+          <Text
+            style={[
+              styles.appearanceDetail,
+              {
+                color:
+                  palette.textMuted,
+              },
+            ]}
+          >
             Comfortable is slightly larger by default. Choose Large for easier reading.
           </Text>
           <View style={styles.textSizeOptions}>
@@ -323,14 +609,32 @@ export default function SettingsScreen({
                   }
                   style={[
                     styles.textSizeOption,
+                    {
+                      borderColor:
+                        palette.border,
+                      backgroundColor:
+                        palette.input,
+                    },
                     selected
-                      ? styles.textSizeOptionSelected
+                      ? [
+                          styles.textSizeOptionSelected,
+                          {
+                            backgroundColor:
+                              palette.mode === 'dark'
+                                ? '#183B5F'
+                                : '#EAF4FF',
+                          },
+                        ]
                       : null,
                   ]}
                 >
                   <Text
                     style={[
                       styles.textSizeOptionLabel,
+                      {
+                        color:
+                          palette.textSecondary,
+                      },
                       selected
                         ? styles.textSizeOptionLabelSelected
                         : null,
@@ -342,8 +646,27 @@ export default function SettingsScreen({
               );
             })}
           </View>
-          <Text style={[styles.appearanceTitle, styles.themeTitle]}>Theme</Text>
-          <Text style={styles.appearanceDetail}>
+          <Text
+            style={[
+              styles.appearanceTitle,
+              styles.themeTitle,
+              {
+                color:
+                  palette.textPrimary,
+              },
+            ]}
+          >
+            Theme
+          </Text>
+          <Text
+            style={[
+              styles.appearanceDetail,
+              {
+                color:
+                  palette.textMuted,
+              },
+            ]}
+          >
             Follow the device automatically or choose Light or Dark.
           </Text>
           <View style={styles.textSizeOptions}>
@@ -357,13 +680,35 @@ export default function SettingsScreen({
                   onPress={() => setAppThemeMode(option.key)}
                   style={[
                     styles.textSizeOption,
-                    selected ? styles.textSizeOptionSelected : null,
+                    {
+                      borderColor:
+                        palette.border,
+                      backgroundColor:
+                        palette.input,
+                    },
+                    selected
+                      ? [
+                          styles.textSizeOptionSelected,
+                          {
+                            backgroundColor:
+                              palette.mode === 'dark'
+                                ? '#183B5F'
+                                : '#EAF4FF',
+                          },
+                        ]
+                      : null,
                   ]}
                 >
                   <Text
                     style={[
                       styles.textSizeOptionLabel,
-                      selected ? styles.textSizeOptionLabelSelected : null,
+                      {
+                        color:
+                          palette.textSecondary,
+                      },
+                      selected
+                        ? styles.textSizeOptionLabelSelected
+                        : null,
                     ]}
                   >
                     {option.label}
@@ -390,9 +735,37 @@ export default function SettingsScreen({
         {updatePolicy?.release_notes ? (
           <>
             <Divider />
-            <View style={styles.notesRow}>
-              <Text style={styles.notesLabel}>WHAT'S NEW</Text>
-              <Text style={styles.notesText}>{updatePolicy.release_notes}</Text>
+            <View
+              style={[
+                styles.notesRow,
+                {
+                  backgroundColor:
+                    palette.input,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.notesLabel,
+                  {
+                    color:
+                      palette.textMuted,
+                  },
+                ]}
+              >
+                WHAT'S NEW
+              </Text>
+              <Text
+                style={[
+                  styles.notesText,
+                  {
+                    color:
+                      palette.textSecondary,
+                  },
+                ]}
+              >
+                {updatePolicy.release_notes}
+              </Text>
             </View>
           </>
         ) : null}
@@ -437,30 +810,69 @@ export default function SettingsScreen({
         onPress={onLogout}
         style={({ pressed }) => [
           styles.signOutButton,
-          pressed ? styles.pressed : null,
+          {
+            backgroundColor:
+              palette.surface,
+            borderColor:
+              palette.mode === 'dark'
+                ? '#704646'
+                : '#F0C9C9',
+          },
+          pressed
+            ? styles.pressed
+            : null,
         ]}
       >
         <Text style={styles.signOutText}>Sign out</Text>
       </Pressable>
 
-      <Text style={styles.footer}>AkshaConnect • People • Ideas • Together</Text>
+      <Text
+        style={[
+          styles.footer,
+          {
+            color:
+              palette.textMuted,
+          },
+        ]}
+      >
+        AkshaConnect • People • Ideas • Together
+      </Text>
     </ScrollView>
   );
 }
 
 function SectionTitle({ title }) {
-  return <Text style={styles.sectionTitle}>{title}</Text>;
+  const { palette } =
+    useAppAppearance();
+
+  return (
+    <Text
+      style={[
+        styles.sectionTitle,
+        {
+          color:
+            palette.textMuted,
+        },
+      ]}
+    >
+      {title}
+    </Text>
+  );
 }
 
 function SettingCard({ children }) {
-  const { darkMode, palette } = useAppAppearance();
+  const { palette } =
+    useAppAppearance();
+
   return (
     <View
       style={[
         styles.card,
         {
-          backgroundColor: darkMode ? '#F7FAFD' : palette.surface,
-          borderColor: darkMode ? '#CBD7E4' : palette.border,
+          backgroundColor:
+            palette.surface,
+          borderColor:
+            palette.border,
         },
       ]}
     >
@@ -470,28 +882,96 @@ function SettingCard({ children }) {
 }
 
 function Divider() {
-  return <View style={styles.divider} />;
+  const { palette } =
+    useAppAppearance();
+
+  return (
+    <View
+      style={[
+        styles.divider,
+        {
+          backgroundColor:
+            palette.border,
+        },
+      ]}
+    />
+  );
 }
 
-function ExpiryButton({ label, onPress }) {
+function ExpiryButton({
+  label,
+  onPress,
+}) {
+  const { palette } =
+    useAppAppearance();
+
   return (
-    <Pressable onPress={onPress} style={styles.expiryButton}>
-      <Text style={styles.expiryButtonText}>{label}</Text>
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.expiryButton,
+        {
+          borderColor:
+            palette.border,
+          backgroundColor:
+            palette.input,
+        },
+      ]}
+    >
+      <Text
+        style={[
+          styles.expiryButtonText,
+          {
+            color:
+              palette.textSecondary,
+          },
+        ]}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 }
 
-function SettingRow({ label, value, accent = false, multiline = false }) {
+function SettingRow({
+  label,
+  value,
+  accent = false,
+  multiline = false,
+}) {
+  const { palette } =
+    useAppAppearance();
+
   return (
     <View style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
+      <Text
+        style={[
+          styles.rowLabel,
+          {
+            color:
+              palette.textPrimary,
+          },
+        ]}
+      >
+        {label}
+      </Text>
       <Text
         style={[
           styles.rowValue,
-          accent ? styles.rowValueAccent : null,
-          multiline ? styles.rowValueMultiline : null,
+          {
+            color:
+              palette.textSecondary,
+          },
+          accent
+            ? styles.rowValueAccent
+            : null,
+          multiline
+            ? styles.rowValueMultiline
+            : null,
         ]}
-        numberOfLines={multiline ? 2 : 1}
+        numberOfLines={
+          multiline ? 2 : 1
+        }
       >
         {value || '—'}
       </Text>
@@ -499,24 +979,77 @@ function SettingRow({ label, value, accent = false, multiline = false }) {
   );
 }
 
-function ActionRow({ label, detail, onPress, primary = false, loading = false }) {
+function ActionRow({
+  label,
+  detail,
+  onPress,
+  primary = false,
+  loading = false,
+}) {
+  const { palette } =
+    useAppAppearance();
+
   return (
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
       disabled={loading}
-      style={({ pressed }) => [styles.actionRow, pressed ? styles.pressed : null]}
+      style={({ pressed }) => [
+        styles.actionRow,
+        pressed
+          ? styles.pressed
+          : null,
+      ]}
     >
       <View style={styles.actionCopy}>
-        <Text style={[styles.actionLabel, primary ? styles.actionPrimary : null]}>
+        <Text
+          style={[
+            styles.actionLabel,
+            {
+              color:
+                palette.textPrimary,
+            },
+            primary
+              ? styles.actionPrimary
+              : null,
+          ]}
+        >
           {label}
         </Text>
-        {detail ? <Text style={styles.actionDetail}>{detail}</Text> : null}
+        {detail ? (
+          <Text
+            style={[
+              styles.actionDetail,
+              {
+                color:
+                  palette.textMuted,
+              },
+            ]}
+          >
+            {detail}
+          </Text>
+        ) : null}
       </View>
       {loading ? (
-        <ActivityIndicator size="small" color={colors.primary} />
+        <ActivityIndicator
+          size="small"
+          color={colors.primary}
+        />
       ) : (
-        <Text style={[styles.chevron, primary ? styles.actionPrimary : null]}>›</Text>
+        <Text
+          style={[
+            styles.chevron,
+            {
+              color:
+                palette.textMuted,
+            },
+            primary
+              ? styles.actionPrimary
+              : null,
+          ]}
+        >
+          ›
+        </Text>
       )}
     </Pressable>
   );
@@ -550,12 +1083,17 @@ const styles = StyleSheet.create({
   statusBlock: { padding: 14 },
   statusHeadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   statusHeading: { color: colors.navy, fontSize: 13, fontWeight: '800' },
-  statusInput: { marginTop: 10, minHeight: 46, borderWidth: 1, borderColor: colors.border, borderRadius: 12, paddingHorizontal: 12, color: colors.navy, backgroundColor: '#FBFDFF' },
+  statusHint: { marginTop: 7, fontSize: 10.5, lineHeight: 15 },
+  statusSubheading: { marginTop: 13, fontSize: 10.5, fontWeight: '900' },
+  statusPresetOptions: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  statusPreset: { minHeight: 36, paddingHorizontal: 11, borderRadius: 18, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  statusPresetText: { fontSize: 10.5, fontWeight: '800' },
+  statusInput: { marginTop: 8, minHeight: 46, borderWidth: 1, borderColor: colors.border, borderRadius: 12, paddingHorizontal: 12, color: colors.navy, backgroundColor: '#FBFDFF' },
   statusExpiry: { marginTop: 8, color: colors.textMuted, fontSize: 11 },
-  customExpiryRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  customExpiryInput: { flex: 1, minHeight: 42, borderWidth: 1, borderColor: colors.border, borderRadius: 11, paddingHorizontal: 11, color: colors.navy, backgroundColor: '#FBFDFF' },
-  customExpiryButton: { minHeight: 42, paddingHorizontal: 14, borderRadius: 11, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
-  customExpiryButtonText: { color: '#FFFFFF', fontSize: 11.5, fontWeight: '900' },
+  customExpiryPicker: { minHeight: 52, marginTop: 10, paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  customExpiryPickerLabel: { fontSize: 11.5, fontWeight: '900' },
+  customExpiryPickerDetail: { marginTop: 2, fontSize: 9.5 },
+  customExpiryPickerChevron: { marginLeft: 12, fontSize: 24, fontWeight: '500' },
   expiryOptions: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   expiryButton: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: '#F8FBFF' },
   expiryButtonText: { color: colors.textSecondary, fontSize: 10.5, fontWeight: '800' },

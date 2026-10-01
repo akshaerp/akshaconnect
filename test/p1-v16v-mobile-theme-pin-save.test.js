@@ -111,8 +111,11 @@ test('V16-V preserves E2 messaging correctness contracts', () => {
   assert.match(app, /clearConversationNotificationsReliably/);
   assert.match(home, /if \(status === 'LIVE'\) return 'Online'/);
   assert.match(home, /return 'Offline'/);
-  assert.match(settings, /customExpiryFromLocalText/);
-  assert.match(settings, /YYYY-MM-DD HH:MM/);
+  assert.match(settings, /AkshaConnectDateTimePicker/);
+  assert.match(settings, /openCustomExpiryPicker/);
+  assert.match(settings, /Choose date & time/);
+  assert.doesNotMatch(settings, /customExpiryFromLocalText/);
+  assert.doesNotMatch(settings, /YYYY-MM-DD HH:MM/);
   assert.match(conversation, /New messages/);
   assert.match(thread, /New messages/);
   assert.match(thread, /findThreadUnreadDivider/);

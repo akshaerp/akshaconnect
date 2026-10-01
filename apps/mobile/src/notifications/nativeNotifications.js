@@ -1,9 +1,17 @@
+import {
+  NativeModules,
+} from 'react-native';
+
 import notifee, {
   AndroidDefaults,
   AndroidImportance,
   AuthorizationStatus,
   EventType,
 } from '@notifee/react-native';
+
+const {
+  AkshaConnectNotifications,
+} = NativeModules;
 
 const MESSAGE_CHANNEL_ID = 'akshaconnect-messages-v1';
 const CONVERSATION_NOTIFICATION_PREFIX = 'conversation-';
@@ -142,7 +150,27 @@ export async function clearConversationNotifications(conversationId) {
     await notifee.cancelDisplayedNotifications(matchingIds);
   }
 
-  return matchingIds.length;
+  let systemCancelled = 0;
+
+  if (
+    AkshaConnectNotifications
+      ?.clearConversation
+  ) {
+    try {
+      systemCancelled =
+        Number(
+          await AkshaConnectNotifications
+            .clearConversation(cleanId)
+        ) || 0;
+    } catch {
+      // The Notifee cleanup above remains a safe fallback.
+    }
+  }
+
+  return (
+    matchingIds.length +
+    systemCancelled
+  );
 }
 
 export function subscribeToNativeNotificationPress(onOpen) {

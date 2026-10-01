@@ -651,9 +651,9 @@ function connectionLabel(status) {
 }
 
 function presenceLabel(status) {
-  if (status === 'LIVE') return 'Live';
+  if (status === 'LIVE') return 'Online';
   if (status === 'AWAY') return 'Away';
-  return 'Not available';
+  return 'Offline';
 }
 
 const PRESENCE_IDLE_MS = 5 * 60 * 1000;
@@ -1016,7 +1016,7 @@ function ChannelPeopleDialog({
                   <span>
                     {member.presence_profile?.custom_status ||
                       (member.presence_status === 'LIVE'
-                        ? 'Live'
+                        ? 'Online'
                         : member.presence_status === 'AWAY'
                           ? 'Away'
                           : formatLastSeen(

@@ -522,7 +522,8 @@ test('R8A.1 mobile presence has explicit leave plus a renewable foreground lease
   assert.match(gateway, /DEFAULT_MOBILE_PRESENCE_LEASE_MS\s*=\s*25\s*\*\s*1000/);
   assert.match(gateway, /DEFAULT_PRESENCE_SWEEP_MS\s*=\s*5\s*\*\s*1000/);
   assert.match(gateway, /message\.type === 'presence\.leave'/);
-  assert.match(gateway, /connection\.clientType !== 'MOBILE'/);
+  assert.match(gateway, /connection\.clientType === 'MOBILE'/);
+  assert.match(gateway, /connection\.clientType === 'WEB'/);
   assert.match(gateway, /unregisterPresence\(connection\)/);
 
   assert.match(mobile, /PRESENCE_HEARTBEAT_MS\s*=\s*10\s*\*\s*1000/);

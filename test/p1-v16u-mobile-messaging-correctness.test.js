@@ -65,13 +65,18 @@ test('V16-U presence uses Online Offline language and carries custom status to l
   assert.match(chrome, /\{customStatus\}/);
 });
 
-test('V16-U custom status accepts a future custom local date and time', () => {
+test('V16-U custom status uses the native Android date and time picker', () => {
   const settings = read('apps/mobile/src/screens/SettingsScreen.jsx');
+  const application = read(
+    'apps/mobile/android/app/src/main/java/com/akshaerp/akshaconnect/MainApplication.kt'
+  );
 
-  assert.match(settings, /function customExpiryFromLocalText/);
-  assert.match(settings, /Custom: YYYY-MM-DD HH:MM/);
-  assert.match(settings, /applyCustomExpiry/);
-  assert.match(settings, /setStatusExpiry\(parsed\)/);
+  assert.match(settings, /AkshaConnectDateTimePicker/);
+  assert.match(settings, /openCustomExpiryPicker/);
+  assert.match(settings, /Choose date & time/);
+  assert.doesNotMatch(settings, /Custom: YYYY-MM-DD HH:MM/);
+  assert.doesNotMatch(settings, /function customExpiryFromLocalText/);
+  assert.match(application, /add\(AkshaConnectDateTimePickerPackage\(\)\)/);
 });
 
 test('V16-U read notification cleanup retries and never blocks the read cursor', () => {
@@ -94,4 +99,68 @@ test('V16-U concurrent parent edits do not re-open the thread request or flash a
   );
   assert.match(conversation, /setQuoteReplyMessage\(\(current\) =>/);
   assert.match(conversation, /mutation\.type === 'message\.deleted'/);
+});
+
+
+test('V17-C1 conversation and thread preserve the Android system status area', () => {
+  const conversation =
+    read(
+      'apps/mobile/src/screens/ConversationScreen.jsx'
+    );
+
+  const thread =
+    read(
+      'apps/mobile/src/screens/ThreadModal.jsx'
+    );
+
+  for (
+    const source of [
+      conversation,
+      thread,
+    ]
+  ) {
+    assert.match(
+      source,
+      /style=\{styles\.safeArea\}[\s\S]*edges=\{\['top'\]\}/
+    );
+
+    assert.match(
+      source,
+      /styles\.safeAreaContent[\s\S]*edges=\{\['bottom'\]\}/
+    );
+
+    assert.match(
+      source,
+      /backgroundColor=\{colors\.primary\}/
+    );
+
+    assert.match(
+      source,
+      /barStyle="light-content"/
+    );
+  }
+});
+
+
+test('V17-C2.3 Android keeps the composer above the keyboard', () => {
+  const conversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
+  const thread = read('apps/mobile/src/screens/ThreadModal.jsx');
+  const manifest = read('apps/mobile/android/app/src/main/AndroidManifest.xml');
+
+  for (const source of [conversation, thread]) {
+    assert.match(
+      source,
+      /behavior="padding"/
+    );
+
+    assert.match(
+      source,
+      /enabled[\s\S]*keyboardVerticalOffset=\{[\s\S]*Platform\.OS === 'android'[\s\S]*\?[\s\S]*56[\s\S]*:[\s\S]*0/
+    );
+  }
+
+  assert.match(
+    manifest,
+    /android:windowSoftInputMode="adjustResize"/
+  );
 });

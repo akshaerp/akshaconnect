@@ -34,19 +34,22 @@ test('V16-L message actions use compact action icons rather than six full reacti
   assert.doesNotMatch(sheet, /actionDetail/);
 });
 
-test('V16-L composer keeps emoji control inside the text field to preserve chat width', () => {
+test('V16-L composer uses one compact row when idle and a two-stage composer while typing', () => {
   const conversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
   const chrome = read('apps/mobile/src/screens/ConversationChrome.jsx');
 
   assert.match(conversation, /<ConversationComposer/);
   assert.match(conversation, /onEmojiPress/);
-  assert.match(chrome, /style=\{styles\.composerInputShell\}/);
-  assert.match(chrome, /styles\.inlineEmojiButton/);
-  assert.match(chrome, /inputWithEmoji:[\s\S]*paddingRight:\s*44/);
-  assert.match(chrome, /inlineEmojiButton:[\s\S]*position:\s*'absolute'/);
-  assert.match(chrome, /sendButton:[\s\S]*minWidth:\s*66/);
+  assert.match(chrome, /const composing =/);
+  assert.match(chrome, /keyboardVisible/);
+  assert.match(chrome, /styles\.composerCompact/);
+  assert.match(chrome, /styles\.composerExpanded/);
+  assert.match(chrome, /styles\.composerToolbar/);
+  assert.match(chrome, /composerCompactSlotHidden/);
+  assert.match(chrome, /CONVERSATION_COMPOSER_MAX_LINES = 6/);
+  assert.match(chrome, /scrollEnabled=\{[\s\S]*inputHeight >=[\s\S]*composerMaxHeight/);
+  assert.match(chrome, /sendButton:[\s\S]*width:\s*44/);
 });
-
 test('V16-L quoted reply remains visibly embedded and jumps to the original message', () => {
   const conversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
 

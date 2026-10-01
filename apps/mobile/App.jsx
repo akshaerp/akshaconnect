@@ -787,18 +787,43 @@ export default function App() {
             .includes(payload?.type) &&
           Boolean(payload?.message);
 
-        if (!readCursorEvent && !messageEvent) {
+        const reactionEvent =
+          payload?.type ===
+            'message.reaction.updated' &&
+          Boolean(payload?.message_id) &&
+          Array.isArray(payload?.reactions);
+
+        if (
+          !readCursorEvent &&
+          !messageEvent &&
+          !reactionEvent
+        ) {
           return;
         }
 
         realtimeSequenceRef.current += 1;
         setRealtimeEvents((current) => [
           ...current.slice(-99),
-          { sequence: realtimeSequenceRef.current, payload },
+          {
+            sequence:
+              realtimeSequenceRef.current,
+            payload,
+          },
         ]);
 
-        if (readCursorEvent) return;
-        if (payload.type !== 'message.created') return;
+        if (
+          readCursorEvent ||
+          reactionEvent
+        ) {
+          return;
+        }
+
+        if (
+          payload.type !==
+          'message.created'
+        ) {
+          return;
+        }
 
         const ownMessage =
           payload.message.sender_type === 'HUMAN' &&
