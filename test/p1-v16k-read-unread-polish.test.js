@@ -6,8 +6,8 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
-test('V16-K uses explicit unread boundary wording on mobile and web', () => {
-  assert.match(read('apps/mobile/src/screens/ConversationScreen.jsx'), /Unread messages/);
+test('V16-K keeps an explicit unread boundary on mobile and web', () => {
+  assert.match(read('apps/mobile/src/screens/ConversationScreen.jsx'), /New messages/);
   assert.match(read('apps/web/src/App.jsx'), /Unread messages/);
 });
 

@@ -4,8 +4,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
   View,
 } from 'react-native';
 
@@ -13,6 +11,15 @@ import {
   getOwnPresenceProfile,
   updateOwnPresenceProfile,
 } from '../api/client';
+import Text from '../theme/AppText';
+import TextInput from '../theme/AppTextInput';
+import {
+  APP_TEXT_SIZE_OPTIONS,
+  APP_THEME_OPTIONS,
+  setAppTextSizeMode,
+  setAppThemeMode,
+  useAppAppearance,
+} from '../theme/appearanceStore';
 import { colors } from '../theme/colors';
 
 function initials(name = '') {
@@ -59,6 +66,33 @@ function expiryFromHours(hours) {
   return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 }
 
+function customExpiryFromLocalText(value) {
+  const source = String(value || '').trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/.exec(source);
+  if (!match) return null;
+
+  const [, yearText, monthText, dayText, hourText, minuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const parsed = new Date(year, month - 1, day, hour, minute, 0, 0);
+
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day ||
+    parsed.getHours() !== hour ||
+    parsed.getMinutes() !== minute ||
+    parsed.getTime() <= Date.now()
+  ) {
+    return null;
+  }
+
+  return parsed.toISOString();
+}
+
 export default function SettingsScreen({
   session,
   serverUrl,
@@ -80,12 +114,15 @@ export default function SettingsScreen({
     updateStatus === 'available' ||
     updateStatus === 'required';
 
+  const { textSizeMode, themeMode, palette } = useAppAppearance();
+
   const [statusText, setStatusText] = useState('');
   const [statusExpiry, setStatusExpiry] = useState(null);
   const [presenceLoading, setPresenceLoading] = useState(false);
   const [presenceSaving, setPresenceSaving] = useState(false);
   const [presenceError, setPresenceError] = useState('');
   const [presenceSaved, setPresenceSaved] = useState('');
+  const [customExpiryInput, setCustomExpiryInput] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -142,12 +179,28 @@ export default function SettingsScreen({
   function clearPresence() {
     setStatusText('');
     setStatusExpiry(null);
+    setCustomExpiryInput('');
+    setPresenceSaved('');
+  }
+
+  function applyCustomExpiry() {
+    const parsed = customExpiryFromLocalText(customExpiryInput);
+
+    if (!parsed) {
+      setPresenceError(
+        'Enter a future local date/time as YYYY-MM-DD HH:MM'
+      );
+      return;
+    }
+
+    setPresenceError('');
+    setStatusExpiry(parsed);
     setPresenceSaved('');
   }
 
   return (
     <ScrollView
-      contentContainerStyle={styles.page}
+      contentContainerStyle={[styles.page, { backgroundColor: palette.shell }]}
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.hero}>
@@ -184,7 +237,7 @@ export default function SettingsScreen({
             placeholder="What are you working on?"
             placeholderTextColor="#8AA0B5"
             maxLength={120}
-            style={styles.statusInput}
+            style={[styles.statusInput, { color: palette.textPrimary, backgroundColor: palette.input, borderColor: palette.border }]}
           />
           <Text style={styles.statusExpiry}>{statusExpiryText}</Text>
           <View style={styles.expiryOptions}>
@@ -192,6 +245,26 @@ export default function SettingsScreen({
             <ExpiryButton label="4 hours" onPress={() => setStatusExpiry(expiryFromHours(4))} />
             <ExpiryButton label="1 day" onPress={() => setStatusExpiry(expiryFromHours(24))} />
             <ExpiryButton label="No expiry" onPress={() => setStatusExpiry(null)} />
+          </View>
+          <View style={styles.customExpiryRow}>
+            <TextInput
+              value={customExpiryInput}
+              onChangeText={(value) => {
+                setCustomExpiryInput(value);
+                setPresenceError('');
+              }}
+              placeholder="Custom: YYYY-MM-DD HH:MM"
+              placeholderTextColor="#8AA0B5"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={[styles.customExpiryInput, { color: palette.textPrimary, backgroundColor: palette.input, borderColor: palette.border }]}
+            />
+            <Pressable
+              onPress={applyCustomExpiry}
+              style={styles.customExpiryButton}
+            >
+              <Text style={styles.customExpiryButtonText}>Set</Text>
+            </Pressable>
           </View>
           {presenceError ? <Text style={styles.statusError}>{presenceError}</Text> : null}
           {presenceSaved ? <Text style={styles.statusSaved}>{presenceSaved}</Text> : null}
@@ -226,6 +299,80 @@ export default function SettingsScreen({
           detail="Switch or add an organization"
           onPress={onOpenAccountSwitcher}
         />
+      </SettingCard>
+
+      <SectionTitle title="APPEARANCE" />
+      <SettingCard>
+        <View style={styles.appearanceBlock}>
+          <Text style={styles.appearanceTitle}>Text size</Text>
+          <Text style={styles.appearanceDetail}>
+            Comfortable is slightly larger by default. Choose Large for easier reading.
+          </Text>
+          <View style={styles.textSizeOptions}>
+            {APP_TEXT_SIZE_OPTIONS.map((option) => {
+              const selected =
+                option.key === textSizeMode;
+
+              return (
+                <Pressable
+                  key={option.key}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  onPress={() =>
+                    setAppTextSizeMode(option.key)
+                  }
+                  style={[
+                    styles.textSizeOption,
+                    selected
+                      ? styles.textSizeOptionSelected
+                      : null,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.textSizeOptionLabel,
+                      selected
+                        ? styles.textSizeOptionLabelSelected
+                        : null,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={[styles.appearanceTitle, styles.themeTitle]}>Theme</Text>
+          <Text style={styles.appearanceDetail}>
+            Follow the device automatically or choose Light or Dark.
+          </Text>
+          <View style={styles.textSizeOptions}>
+            {APP_THEME_OPTIONS.map((option) => {
+              const selected = option.key === themeMode;
+              return (
+                <Pressable
+                  key={option.key}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  onPress={() => setAppThemeMode(option.key)}
+                  style={[
+                    styles.textSizeOption,
+                    selected ? styles.textSizeOptionSelected : null,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.textSizeOptionLabel,
+                      selected ? styles.textSizeOptionLabelSelected : null,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
       </SettingCard>
 
       <SectionTitle title="APP" />
@@ -306,7 +453,20 @@ function SectionTitle({ title }) {
 }
 
 function SettingCard({ children }) {
-  return <View style={styles.card}>{children}</View>;
+  const { darkMode, palette } = useAppAppearance();
+  return (
+    <View
+      style={[
+        styles.card,
+        {
+          backgroundColor: darkMode ? '#F7FAFD' : palette.surface,
+          borderColor: darkMode ? '#CBD7E4' : palette.border,
+        },
+      ]}
+    >
+      {children}
+    </View>
+  );
 }
 
 function Divider() {
@@ -392,6 +552,10 @@ const styles = StyleSheet.create({
   statusHeading: { color: colors.navy, fontSize: 13, fontWeight: '800' },
   statusInput: { marginTop: 10, minHeight: 46, borderWidth: 1, borderColor: colors.border, borderRadius: 12, paddingHorizontal: 12, color: colors.navy, backgroundColor: '#FBFDFF' },
   statusExpiry: { marginTop: 8, color: colors.textMuted, fontSize: 11 },
+  customExpiryRow: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  customExpiryInput: { flex: 1, minHeight: 42, borderWidth: 1, borderColor: colors.border, borderRadius: 11, paddingHorizontal: 11, color: colors.navy, backgroundColor: '#FBFDFF' },
+  customExpiryButton: { minHeight: 42, paddingHorizontal: 14, borderRadius: 11, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  customExpiryButtonText: { color: '#FFFFFF', fontSize: 11.5, fontWeight: '900' },
   expiryOptions: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   expiryButton: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: '#F8FBFF' },
   expiryButtonText: { color: colors.textSecondary, fontSize: 10.5, fontWeight: '800' },
@@ -402,6 +566,15 @@ const styles = StyleSheet.create({
   statusPrimaryText: { color: '#FFFFFF', fontSize: 11.5, fontWeight: '900' },
   statusError: { marginTop: 8, color: '#A83232', fontSize: 11 },
   statusSaved: { marginTop: 8, color: '#257044', fontSize: 11, fontWeight: '700' },
+  appearanceBlock: { padding: 14 },
+  appearanceTitle: { color: colors.navy, fontSize: 13, fontWeight: '900' },
+  appearanceDetail: { marginTop: 4, color: colors.textMuted, fontSize: 10.5, lineHeight: 15 },
+  themeTitle: { marginTop: 16 },
+  textSizeOptions: { marginTop: 12, flexDirection: 'row', gap: 7 },
+  textSizeOption: { flex: 1, minHeight: 42, paddingHorizontal: 8, borderRadius: 12, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F8FBFF' },
+  textSizeOptionSelected: { borderColor: colors.primary, backgroundColor: '#EAF4FF' },
+  textSizeOptionLabel: { color: colors.textSecondary, fontSize: 10.5, fontWeight: '800' },
+  textSizeOptionLabelSelected: { color: colors.primary, fontWeight: '900' },
   signOutButton: { minHeight: 48, marginTop: 22, borderRadius: 14, borderWidth: 1, borderColor: '#F0C9C9', alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF8F8' },
   signOutText: { color: '#A83232', fontSize: 13, fontWeight: '900' },
   footer: { marginTop: 20, color: '#8BA0B4', fontSize: 10, fontWeight: '700', textAlign: 'center' },

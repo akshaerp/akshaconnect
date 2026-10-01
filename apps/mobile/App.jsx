@@ -75,6 +75,7 @@ import ConversationScreen from './src/screens/ConversationScreen.jsx';
 import HomeScreen from './src/screens/HomeScreen.jsx';
 import LoginScreen from './src/screens/LoginScreen.jsx';
 import SessionRestoreScreen from './src/screens/SessionRestoreScreen.jsx';
+import { useAppAppearance } from './src/theme/appearanceStore';
 
 const brandMark = require('./src/assets/brand/akshaconnect-mark.png');
 const brandWordmark = require('./src/assets/brand/akshaconnect-wordmark.png');
@@ -112,6 +113,39 @@ function normalizePresenceMembers(members = []) {
   }
 
   return next;
+}
+
+function normalizePresenceProfiles(members = []) {
+  const next = {};
+
+  for (const member of members || []) {
+    const memberId = clean(member?.workspace_member_id);
+    if (!memberId) continue;
+
+    next[memberId] = {
+      custom_status: clean(member?.custom_status) || null,
+      status_expires_at: clean(member?.status_expires_at) || null,
+      last_seen_at: clean(member?.last_seen_at) || null,
+    };
+  }
+
+  return next;
+}
+
+async function clearConversationNotificationsReliably(conversationId) {
+  const delays = [0, 250, 900];
+
+  for (const delay of delays) {
+    if (delay) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    try {
+      await clearConversationNotifications(conversationId);
+    } catch {
+      // Notification cleanup is best effort and must never block read state.
+    }
+  }
 }
 
 function peerPresenceStatus(selection, presenceByMember) {
@@ -225,6 +259,7 @@ function mobileUpdateStatus(appVersion, policy) {
 }
 
 export default function App() {
+  const { darkMode, palette } = useAppAppearance();
   const [showSplash, setShowSplash] = useState(true);
   const [restoringSession, setRestoringSession] = useState(true);
   const [restoreError, setRestoreError] = useState('');
@@ -249,6 +284,7 @@ export default function App() {
   );
   const [realtimeStatus, setRealtimeStatus] = useState('disconnected');
   const [presenceByMember, setPresenceByMember] = useState({});
+  const [presenceProfilesByMember, setPresenceProfilesByMember] = useState({});
   const [realtimeEvents, setRealtimeEvents] = useState([]);
   const [reconcileEpoch, setReconcileEpoch] = useState(0);
   const [showAccountSwitcher, setShowAccountSwitcher] = useState(false);
@@ -442,6 +478,7 @@ export default function App() {
     setNotificationToast(null);
     setRealtimeStatus('disconnected');
     setPresenceByMember({});
+    setPresenceProfilesByMember({});
     setRealtimeEvents([]);
     setReconcileEpoch(0);
     hasConnectedRef.current = false;
@@ -478,6 +515,7 @@ export default function App() {
     realtimeSequenceRef.current = 0;
     setRealtimeStatus('disconnected');
     setPresenceByMember({});
+    setPresenceProfilesByMember({});
     setRealtimeEvents([]);
     setReconcileEpoch(0);
   }, []);
@@ -690,8 +728,12 @@ export default function App() {
         }
 
         if (payload?.type === 'presence.snapshot') {
+          const members = payload.members || [];
           setPresenceByMember(
-            normalizePresenceMembers(payload.members || [])
+            normalizePresenceMembers(members)
+          );
+          setPresenceProfilesByMember(
+            normalizePresenceProfiles(members)
           );
           return;
         }
@@ -706,29 +748,46 @@ export default function App() {
               clean(payload.status).toUpperCase() ||
               'NOT_AVAILABLE',
           }));
+          setPresenceProfilesByMember((current) => ({
+            ...current,
+            [payload.workspace_member_id]: {
+              custom_status: clean(payload.custom_status) || null,
+              status_expires_at: clean(payload.status_expires_at) || null,
+              last_seen_at: clean(payload.last_seen_at) || null,
+            },
+          }));
           return;
         }
 
+        const readCursorEvent =
+          payload?.type === 'read_cursor.updated' ||
+          payload?.type === 'thread_read_cursor.updated';
+
         if (payload?.type === 'read_cursor.updated') {
-          if (payload.conversation_id) {
+          const ownReadCursor =
+            payload.workspace_member_id ===
+            sessionRef.current?.membership?.workspace_member_id;
+
+          if (ownReadCursor && payload.conversation_id) {
             setUnreadCounts((current) => ({
               ...current,
               [payload.conversation_id]: 0,
             }));
-            clearConversationNotifications(payload.conversation_id).catch(() => {});
+            clearConversationNotificationsReliably(payload.conversation_id).catch(() => {});
             setNotificationToast((current) =>
               current?.selection?.conversationId === payload.conversation_id
                 ? null
                 : current
             );
           }
-          return;
         }
 
-        if (
-          !['message.created', 'message.updated', 'message.deleted'].includes(payload?.type) ||
-          !payload.message
-        ) {
+        const messageEvent =
+          ['message.created', 'message.updated', 'message.deleted']
+            .includes(payload?.type) &&
+          Boolean(payload?.message);
+
+        if (!readCursorEvent && !messageEvent) {
           return;
         }
 
@@ -738,6 +797,7 @@ export default function App() {
           { sequence: realtimeSequenceRef.current, payload },
         ]);
 
+        if (readCursorEvent) return;
         if (payload.type !== 'message.created') return;
 
         const ownMessage =
@@ -975,7 +1035,7 @@ export default function App() {
     if (!conversationId) return;
 
     setUnreadCounts((current) => ({ ...current, [conversationId]: 0 }));
-    clearConversationNotifications(conversationId).catch(() => {});
+    clearConversationNotificationsReliably(conversationId).catch(() => {});
     setNotificationToast((current) =>
       current?.selection?.conversationId === conversationId
         ? null
@@ -1638,10 +1698,10 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <View
-        style={styles.interactionRoot}
+        style={[styles.interactionRoot, { backgroundColor: palette.shell }]}
         onTouchStart={markUserActivity}
       >
-        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+        <StatusBar barStyle={darkMode ? "light-content" : "dark-content"} backgroundColor={palette.surface} />
 
       {showSplash || restoringSession ? (
         <BrandSplash />
@@ -1675,6 +1735,13 @@ export default function App() {
             selectedConversation,
             presenceByMember
           )}
+          peerPresenceProfile={
+            selectedConversation?.kind === 'dm'
+              ? presenceProfilesByMember?.[
+                  selectedConversation?.otherWorkspaceMemberId
+                ] || null
+              : null
+          }
           onConversationRead={handleConversationRead}
           onUserActivity={markUserActivity}
           onBack={() => setSelectedConversation(null)}
@@ -1688,6 +1755,7 @@ export default function App() {
             directMessages={directMessages}
             unreadCounts={unreadCounts}
             presenceByMember={presenceByMember}
+            presenceProfilesByMember={presenceProfilesByMember}
             refreshing={loadingWorkspace}
             realtimeStatus={realtimeStatus}
             appVersion={appVersion}

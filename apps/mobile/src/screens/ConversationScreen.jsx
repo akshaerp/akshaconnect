@@ -20,8 +20,6 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
-  Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -61,16 +59,33 @@ import {
   loadConversationDraft,
   saveConversationDraft,
 } from '../drafts/draftStore';
+import Text from '../theme/AppText';
+import TextInput from '../theme/AppTextInput';
 import { colors } from '../theme/colors';
+import { useAppAppearance } from '../theme/appearanceStore';
 import { loadRecentEmojis, saveRecentEmojis } from '../emoji/recentEmojiStore';
 import ThreadModal from './ThreadModal.jsx';
 import ConversationDetailsModal from './ConversationDetailsModal';
 import MessageActionSheet from './MessageActionSheet.jsx';
 import {
+  COMPOSER_EMOJIS,
   ConversationComposer,
+  ConversationEmojiPicker,
   ConversationHeader,
   JumpToLatestButton,
 } from './ConversationChrome.jsx';
+import ConversationSearchBar from './ConversationSearchBar.jsx';
+import MessageReadersModal from './MessageReadersModal.jsx';
+import {
+  listConversationPins,
+  pinConversationMessage,
+  unpinConversationMessage,
+} from '../api/conversationDetails';
+import {
+  loadSavedMessages,
+  removeSavedMessageLocally,
+  saveMessageLocally,
+} from '../saved/savedMessageStore';
 
 function copyableMessageText(message) {
   if (!message || message.deleted_at) return '';
@@ -92,7 +107,6 @@ const MAX_MESSAGE_CHARS = 8000;
 const MAX_PENDING_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
-const COMPOSER_EMOJIS = ['😀','😃','😄','😁','😂','😊','😍','👍','👏','🙏','🎉','✅','❤️','🔥','👀','🤝'];
 
 const ALLOWED_ATTACHMENT_TYPES = new Set([
   'image/jpeg',
@@ -359,7 +373,7 @@ function realtimeLabel(status) {
 }
 
 function presenceLabel(status) {
-  if (status === 'LIVE') return 'Live';
+  if (status === 'LIVE') return 'Online';
   if (status === 'AWAY') return 'Away';
   return 'Offline';
 }
@@ -409,6 +423,37 @@ function findUnreadDivider(rows, unreadCount, currentMemberId) {
   return rows[0]?.message_id || null;
 }
 
+async function listMessagesWithTransientRetry(
+  serverUrl,
+  token,
+  conversationId,
+  options
+) {
+  try {
+    return await listMessages(
+      serverUrl,
+      token,
+      conversationId,
+      options
+    );
+  } catch (error) {
+    if (Number(error?.status) !== 404) {
+      throw error;
+    }
+
+    // Editing and reply/thread activity can overlap on separate clients. A
+    // short retry prevents a transient stale lookup from flashing a raw 404.
+    await new Promise((resolve) => setTimeout(resolve, 180));
+
+    return listMessages(
+      serverUrl,
+      token,
+      conversationId,
+      options
+    );
+  }
+}
+
 export default function ConversationScreen({
   session,
   serverUrl,
@@ -417,16 +462,24 @@ export default function ConversationScreen({
   realtimeEvents,
   reconcileEpoch,
   peerPresenceStatus,
+  peerPresenceProfile: externalPeerPresenceProfile,
   onConversationRead,
   onUserActivity,
   onBack,
 }) {
+  const { palette, darkMode } = useAppAppearance();
   const token = session?.access_token || '';
   const [conversation, setConversation] = useState(initialConversation);
 
   useEffect(() => {
     setConversation(initialConversation);
-  }, [initialConversation?.conversationId]);
+  }, [
+    initialConversation?.conversationId,
+    initialConversation?.unreadAtOpen,
+    initialConversation?.otherWorkspaceMemberId,
+    initialConversation?.title,
+    initialConversation?.subtitle,
+  ]);
 
   const currentMemberId =
     session?.membership?.workspace_member_id || '';
@@ -446,6 +499,9 @@ export default function ConversationScreen({
   const composerInputRef = useRef(null);
   const messageLayoutYRef = useRef(new Map());
   const highlightTimerRef = useRef(null);
+  const readReceiptRefreshTimerRef = useRef(null);
+  const loadingOlderRef = useRef(false);
+  const historyUserInteractedRef = useRef(false);
 
   const [messages, setMessages] = useState([]);
   const [page, setPage] = useState({
@@ -515,16 +571,74 @@ export default function ConversationScreen({
   const [messageSearchResults, setMessageSearchResults] = useState([]);
   const [messageSearchLoading, setMessageSearchLoading] = useState(false);
   const [messageSearchError, setMessageSearchError] = useState('');
+  const [messageSearchMode, setMessageSearchMode] = useState('matches');
+  const [messageSearchIndex, setMessageSearchIndex] = useState(-1);
   const [highlightMessageId, setHighlightMessageId] = useState('');
+  const [threadSearchTargetMessageId, setThreadSearchTargetMessageId] = useState('');
+  const [messageReadersTarget, setMessageReadersTarget] = useState(null);
+  const [messageReadersRefreshEpoch, setMessageReadersRefreshEpoch] = useState(0);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [recentEmojis, setRecentEmojis] = useState([]);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [pinnedMessageIds, setPinnedMessageIds] = useState(() => new Set());
+  const [savedMessageIds, setSavedMessageIds] = useState(() => new Set());
 
   useEffect(() => {
     let mounted = true;
     loadRecentEmojis().then((items) => { if (mounted) setRecentEmojis(items || []); });
     return () => { mounted = false; };
   }, []);
+
+
+  const savedScope = useMemo(() => ({
+    identityId: session?.identity?.identity_id || session?.identity_id || '',
+    workspaceId: session?.workspace?.workspace_id || '',
+    workspaceMemberId: currentMemberId,
+  }), [
+    session?.identity?.identity_id,
+    session?.identity_id,
+    session?.workspace?.workspace_id,
+    currentMemberId,
+  ]);
+
+  const refreshPinnedMessages = useCallback(async () => {
+    if (!serverUrl || !token || !conversation?.conversationId) {
+      setPinnedMessageIds(new Set());
+      return;
+    }
+    try {
+      const payload = await listConversationPins(
+        serverUrl,
+        token,
+        conversation.conversationId
+      );
+      setPinnedMessageIds(
+        new Set((payload?.pins || []).map((item) => item?.message_id).filter(Boolean))
+      );
+    } catch {
+      setPinnedMessageIds(new Set());
+    }
+  }, [conversation?.conversationId, serverUrl, token]);
+
+  const refreshSavedMessages = useCallback(async () => {
+    const rows = await loadSavedMessages(savedScope);
+    setSavedMessageIds(new Set(rows.map((item) => item?.message_id).filter(Boolean)));
+  }, [savedScope]);
+
+  useEffect(() => {
+    refreshPinnedMessages();
+    refreshSavedMessages();
+  }, [refreshPinnedMessages, refreshSavedMessages]);
+
+  useEffect(
+    () => () => {
+      if (readReceiptRefreshTimerRef.current) {
+        clearTimeout(readReceiptRefreshTimerRef.current);
+        readReceiptRefreshTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   const filteredForwardTargets = useMemo(() => {
     const query = String(forwardQuery || '').trim().toLowerCase();
@@ -585,6 +699,10 @@ export default function ConversationScreen({
       return undefined;
     }
 
+    if (externalPeerPresenceProfile) {
+      setPeerPresenceProfile(externalPeerPresenceProfile);
+    }
+
     listPresenceProfiles(serverUrl, token, [memberId])
       .then((result) => {
         if (cancelled) return;
@@ -600,6 +718,8 @@ export default function ConversationScreen({
   }, [
     conversation?.kind,
     conversation?.otherWorkspaceMemberId,
+    externalPeerPresenceProfile,
+    reconcileEpoch,
     serverUrl,
     token,
   ]);
@@ -792,7 +912,7 @@ export default function ConversationScreen({
       setError('');
 
       try {
-        const result = await listMessages(
+        const result = await listMessagesWithTransientRetry(
           serverUrl,
           token,
           conversation.conversationId,
@@ -880,6 +1000,16 @@ export default function ConversationScreen({
     setError('');
     setNewMessageDividerId(null);
     setShowJumpToLatest(false);
+    setShowMessageSearch(false);
+    setMessageSearchQuery('');
+    setMessageSearchResults([]);
+    setMessageSearchError('');
+    setMessageSearchMode('matches');
+    setMessageSearchIndex(-1);
+    setHighlightMessageId('');
+    setThreadSearchTargetMessageId('');
+    setMessageReadersTarget(null);
+    setMessageReadersRefreshEpoch(0);
 
     arrivalDividerReadyRef.current = false;
     initialUnreadPositionedRef.current = false;
@@ -905,6 +1035,20 @@ export default function ConversationScreen({
     conversation?.unreadAtOpen,
     loadLatest,
   ]);
+
+  useEffect(() => {
+    const targetId = String(conversation?.initialMessageId || '').trim();
+    if (!targetId || messages.length === 0) return;
+    const exists = messages.some((item) => item.message_id === targetId);
+    if (!exists) return;
+    setHighlightMessageId(targetId);
+    requestAnimationFrame(() => {
+      const y = messageLayoutYRef.current.get(targetId);
+      if (Number.isFinite(y)) {
+        scrollRef.current?.scrollTo({ y: Math.max(0, y - 20), animated: true });
+      }
+    });
+  }, [conversation?.initialMessageId, messages.length]);
 
   useEffect(() => {
     let active = true;
@@ -1035,6 +1179,28 @@ export default function ConversationScreen({
       )
     );
 
+    const readCursorEvents = pending
+      .map((envelope) => envelope.payload)
+      .filter(
+        (payload) =>
+          payload?.type === 'read_cursor.updated' &&
+          payload.conversation_id === conversation?.conversationId &&
+          payload.workspace_member_id !== currentMemberId
+      );
+
+    if (readCursorEvents.length > 0) {
+      setMessageReadersRefreshEpoch((value) => value + 1);
+
+      if (readReceiptRefreshTimerRef.current) {
+        clearTimeout(readReceiptRefreshTimerRef.current);
+      }
+
+      readReceiptRefreshTimerRef.current = setTimeout(() => {
+        readReceiptRefreshTimerRef.current = null;
+        loadLatest({ reconcile: true });
+      }, 250);
+    }
+
     const mutations = pending
       .map((envelope) => envelope.payload)
       .filter(
@@ -1064,6 +1230,19 @@ export default function ConversationScreen({
         }
 
         return next;
+      });
+
+      setQuoteReplyMessage((current) => {
+        if (!current?.message_id) return current;
+
+        const mutation = mutations.find(
+          (item) =>
+            item.message?.message_id === current.message_id
+        );
+
+        if (!mutation) return current;
+        if (mutation.type === 'message.deleted') return null;
+        return mutation.message;
       });
 
       const deletedIds =
@@ -1218,6 +1397,7 @@ export default function ConversationScreen({
     conversation?.conversationId,
     currentMemberId,
     editingMessage?.message_id,
+    loadLatest,
     markMessageRead,
     realtimeEvents,
     scrollToBottom,
@@ -1242,6 +1422,7 @@ export default function ConversationScreen({
 
   async function loadOlder() {
     if (
+      loadingOlderRef.current ||
       loadingOlder ||
       !page.has_more ||
       !page.next_before_message_id
@@ -1249,11 +1430,12 @@ export default function ConversationScreen({
       return;
     }
 
+    loadingOlderRef.current = true;
     setLoadingOlder(true);
     setError('');
 
     try {
-      const result = await listMessages(
+      const result = await listMessagesWithTransientRetry(
         serverUrl,
         token,
         conversation.conversationId,
@@ -1281,6 +1463,7 @@ export default function ConversationScreen({
         requestError?.message || 'Could not load older messages'
       );
     } finally {
+      loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
   }
@@ -2222,6 +2405,70 @@ export default function ConversationScreen({
     }
   }
 
+  async function togglePinnedMessage(message) {
+    if (!message?.message_id || !conversation?.conversationId) return;
+    const pinned = pinnedMessageIds.has(message.message_id);
+    try {
+      if (pinned) {
+        await unpinConversationMessage(
+          serverUrl,
+          token,
+          conversation.conversationId,
+          message.message_id
+        );
+      } else {
+        await pinConversationMessage(
+          serverUrl,
+          token,
+          conversation.conversationId,
+          message.message_id
+        );
+      }
+      setPinnedMessageIds((current) => {
+        const next = new Set(current);
+        if (pinned) next.delete(message.message_id);
+        else next.add(message.message_id);
+        return next;
+      });
+    } catch (requestError) {
+      Alert.alert(
+        pinned ? 'Could not unpin message' : 'Could not pin message',
+        requestError?.message || 'Please try again.'
+      );
+    }
+  }
+
+  async function toggleSavedMessage(message) {
+    if (!message?.message_id || !conversation?.conversationId) return;
+    const saved = savedMessageIds.has(message.message_id);
+    try {
+      if (saved) {
+        await removeSavedMessageLocally(savedScope, message.message_id);
+      } else {
+        await saveMessageLocally(savedScope, {
+          message_id: message.message_id,
+          conversation_id: conversation.conversationId,
+          conversation_kind: conversation.kind,
+          conversation_title: conversation.title,
+          conversation_subtitle: conversation.subtitle,
+          other_workspace_member_id: conversation.otherWorkspaceMemberId || '',
+          sender_display_name: message.sender_display_name || (message.sender_member_id === currentMemberId ? 'You' : 'Member'),
+          message_type: message.message_type,
+          body_text: message.body_text || '',
+          created_at: message.created_at || null,
+        });
+      }
+      setSavedMessageIds((current) => {
+        const next = new Set(current);
+        if (saved) next.delete(message.message_id);
+        else next.add(message.message_id);
+        return next;
+      });
+    } catch {
+      Alert.alert('Could not update saved messages', 'Please try again.');
+    }
+  }
+
   function manageOwnMessage(
     message,
     onReplyInThread
@@ -2297,6 +2544,27 @@ export default function ConversationScreen({
       label: 'Forward',
       onPress: () =>
         openForwardMessage(message),
+    });
+
+
+    actions.push({
+      key: pinnedMessageIds.has(message.message_id) ? 'unpin' : 'pin',
+      icon: '📌',
+      label: pinnedMessageIds.has(message.message_id) ? 'Unpin message' : 'Pin message',
+      onPress: () => {
+        closeMessageActions();
+        togglePinnedMessage(message);
+      },
+    });
+
+    actions.push({
+      key: savedMessageIds.has(message.message_id) ? 'unsave' : 'save',
+      icon: '🔖',
+      label: savedMessageIds.has(message.message_id) ? 'Remove saved message' : 'Save message',
+      onPress: () => {
+        closeMessageActions();
+        toggleSavedMessage(message);
+      },
     });
 
     if (
@@ -2846,9 +3114,32 @@ export default function ConversationScreen({
     setCanManageChannelPeople(false);
   }, [conversation?.conversationId]);
 
-  async function jumpToMessage(messageId) {
+  function scrollToMessageLayout(messageId, attempt = 0) {
     const targetId = String(messageId || '').trim();
     if (!targetId) return;
+
+    requestAnimationFrame(() => {
+      const y = messageLayoutYRef.current.get(targetId);
+      if (Number.isFinite(y)) {
+        scrollRef.current?.scrollTo({
+          y: Math.max(0, y - 16),
+          animated: true,
+        });
+        return;
+      }
+
+      if (attempt < 8) {
+        setTimeout(
+          () => scrollToMessageLayout(targetId, attempt + 1),
+          35
+        );
+      }
+    });
+  }
+
+  async function jumpToMessage(messageId) {
+    const targetId = String(messageId || '').trim();
+    if (!targetId) return null;
 
     let working = messages;
     let workingPage = page;
@@ -2857,7 +3148,7 @@ export default function ConversationScreen({
     while (!working.some((item) => item.message_id === targetId) &&
            workingPage?.has_more && workingPage?.next_before_message_id && guard < 40) {
       guard += 1;
-      const result = await listMessages(
+      const result = await listMessagesWithTransientRetry(
         serverUrl,
         token,
         conversation.conversationId,
@@ -2869,26 +3160,25 @@ export default function ConversationScreen({
       setPage(workingPage);
     }
 
-    if (!working.some((item) => item.message_id === targetId)) {
+    const target = working.find((item) => item.message_id === targetId) || null;
+    if (!target) {
       Alert.alert('Message unavailable', 'The original message could not be found.');
-      return;
+      return null;
     }
 
     setHighlightMessageId(targetId);
     if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
-    highlightTimerRef.current = setTimeout(() => setHighlightMessageId(''), 2200);
+    highlightTimerRef.current = setTimeout(() => setHighlightMessageId(''), 2600);
 
-    requestAnimationFrame(() => {
-      const y = messageLayoutYRef.current.get(targetId);
-      if (Number.isFinite(y)) {
-        scrollRef.current?.scrollTo({ y: Math.max(0, y - 16), animated: true });
-      }
-    });
+    scrollToMessageLayout(targetId);
+    return target;
   }
 
   async function runMessageSearch() {
     const query = messageSearchQuery.trim();
     if (!query || messageSearchLoading) return;
+
+    Keyboard.dismiss();
     setMessageSearchLoading(true);
     setMessageSearchError('');
     try {
@@ -2898,28 +3188,82 @@ export default function ConversationScreen({
         conversation.conversationId,
         { query, limit: 50 }
       );
-      setMessageSearchResults(result?.messages || []);
+      const rows = result?.messages || [];
+      setMessageSearchResults(rows);
+      setMessageSearchIndex(rows.length ? 0 : -1);
+      setMessageSearchMode('matches');
     } catch (requestError) {
+      setMessageSearchResults([]);
+      setMessageSearchIndex(-1);
       setMessageSearchError(requestError?.message || 'Could not search messages');
     } finally {
       setMessageSearchLoading(false);
     }
   }
 
-  async function openSearchResult(message) {
-    setShowMessageSearch(false);
-    if (message?.reply_to_message_id) {
-      const parent = messages.find((item) => item.message_id === message.reply_to_message_id);
+  async function openSearchResultAt(index) {
+    const rows = messageSearchResults || [];
+    if (!rows.length) return;
+
+    const nextIndex = Math.max(
+      0,
+      Math.min(rows.length - 1, Number(index || 0))
+    );
+    const message = rows[nextIndex];
+    if (!message?.message_id) return;
+
+    setMessageSearchIndex(nextIndex);
+    setMessageSearchMode('conversation');
+
+    if (message.reply_to_message_id) {
+      const parent =
+        messages.find(
+          (item) =>
+            item.message_id === message.reply_to_message_id
+        ) ||
+        await jumpToMessage(message.reply_to_message_id);
+
       if (parent) {
+        setThreadSearchTargetMessageId(message.message_id);
         setThreadParent(parent);
-        return;
       }
-      await jumpToMessage(message.reply_to_message_id);
-      const found = messages.find((item) => item.message_id === message.reply_to_message_id);
-      if (found) setThreadParent(found);
       return;
     }
-    await jumpToMessage(message?.message_id);
+
+    setThreadSearchTargetMessageId('');
+    setThreadParent(null);
+    await jumpToMessage(message.message_id);
+  }
+
+  async function navigateMessageSearch(delta) {
+    if (!messageSearchResults.length || messageSearchIndex < 0) return;
+
+    const nextIndex = messageSearchIndex + delta;
+    if (
+      nextIndex < 0 ||
+      nextIndex >= messageSearchResults.length
+    ) {
+      return;
+    }
+
+    await openSearchResultAt(nextIndex);
+  }
+
+  function changeMessageSearchMode(mode) {
+    const nextMode =
+      mode === 'conversation'
+        ? 'conversation'
+        : 'matches';
+
+    setMessageSearchMode(nextMode);
+
+    if (
+      nextMode === 'conversation' &&
+      messageSearchIndex >= 0 &&
+      messageSearchIndex < messageSearchResults.length
+    ) {
+      openSearchResultAt(messageSearchIndex);
+    }
   }
 
   function insertEmoji(emoji) {
@@ -3006,20 +3350,25 @@ export default function ConversationScreen({
   const statusAway =
     showPeerPresence &&
     normalizedPeerPresence === 'AWAY';
+  const effectivePeerPresenceProfile =
+    externalPeerPresenceProfile || peerPresenceProfile;
   const peerLastSeenLabel =
     showPeerPresence && normalizedPeerPresence === 'NOT_AVAILABLE'
-      ? formatLastSeen(peerPresenceProfile?.last_seen_at)
+      ? formatLastSeen(effectivePeerPresenceProfile?.last_seen_at)
       : '';
+  const peerCustomStatus =
+    String(effectivePeerPresenceProfile?.custom_status || '').trim();
+  const peerPresenceText =
+    peerLastSeenLabel || presenceLabel(normalizedPeerPresence);
+  const customStatus = showPeerPresence ? peerCustomStatus : '';
   const statusLabel =
     showPeerPresence
-      ? (peerPresenceProfile?.custom_status ||
-          peerLastSeenLabel ||
-          presenceLabel(normalizedPeerPresence))
+      ? peerPresenceText
       : realtimeLabel(realtimeStatus);
 
   return (
     <SafeAreaView
-      style={styles.safeArea}
+      style={[styles.safeArea, { backgroundColor: palette.shell }]}
       edges={['top', 'bottom']}
     >
       <StatusBar
@@ -3045,6 +3394,7 @@ export default function ConversationScreen({
           onBack={onBack}
           backAccessibilityLabel="Back to conversations"
           statusLabel={statusLabel}
+          customStatus={customStatus}
           statusTone={
             statusLive
               ? 'connected'
@@ -3059,9 +3409,13 @@ export default function ConversationScreen({
                 accessibilityRole="button"
                 accessibilityLabel="Search messages"
                 onPress={() => {
-                  setShowMessageSearch(true);
-                  setMessageSearchQuery('');
-                  setMessageSearchResults([]);
+                  setShowMessageSearch((current) => {
+                    const next = !current;
+                    if (next) {
+                      setShowEmojiPicker(false);
+                    }
+                    return next;
+                  });
                   setMessageSearchError('');
                 }}
                 style={({ pressed }) => [
@@ -3087,7 +3441,38 @@ export default function ConversationScreen({
           )}
         />
 
-        <View style={styles.history}>
+        <ConversationSearchBar
+          visible={showMessageSearch}
+          query={messageSearchQuery}
+          onChangeQuery={(value) => {
+            setMessageSearchQuery(value);
+            setMessageSearchResults([]);
+            setMessageSearchIndex(-1);
+            setMessageSearchMode('matches');
+            setMessageSearchError('');
+          }}
+          onSubmit={runMessageSearch}
+          onClose={() => setShowMessageSearch(false)}
+          loading={messageSearchLoading}
+          error={messageSearchError}
+          results={messageSearchResults}
+          currentIndex={messageSearchIndex}
+          mode={messageSearchMode}
+          onModeChange={changeMessageSearchMode}
+          onSelectResult={openSearchResultAt}
+          onPrevious={() => navigateMessageSearch(1)}
+          onNext={() => navigateMessageSearch(-1)}
+        />
+
+        <View
+          style={[
+            styles.history,
+            { backgroundColor: palette.shell },
+            showMessageSearch && messageSearchMode === 'matches'
+              ? styles.historyHiddenForSearch
+              : null,
+          ]}
+        >
           {loading ? (
             <View style={styles.loadingState}>
               <ActivityIndicator
@@ -3100,13 +3485,26 @@ export default function ConversationScreen({
           ) : (
             <ScrollView
               ref={scrollRef}
-              onScrollBeginDrag={onUserActivity}
+              onScrollBeginDrag={() => {
+                historyUserInteractedRef.current = true;
+                onUserActivity?.();
+              }}
               onScroll={(event) => {
                 const {
                   contentOffset,
                   contentSize,
                   layoutMeasurement,
                 } = event.nativeEvent;
+
+                if (
+                  historyUserInteractedRef.current &&
+                  contentOffset.y <= 120 &&
+                  page.has_more &&
+                  !loadingOlderRef.current
+                ) {
+                  loadOlder();
+                }
+
                 const distanceFromBottom =
                   contentSize.height -
                   contentOffset.y -
@@ -3142,6 +3540,9 @@ export default function ConversationScreen({
                 }
               }}
               scrollEventThrottle={32}
+              maintainVisibleContentPosition={{
+                minIndexForVisible: 0,
+              }}
               contentContainerStyle={
                 styles.messageList
               }
@@ -3180,33 +3581,16 @@ export default function ConversationScreen({
                 }
               }}
             >
-              {page.has_more ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={loadOlder}
-                  disabled={loadingOlder}
-                  style={({ pressed }) => [
-                    styles.loadOlderButton,
-                    pressed
-                      ? styles.pressed
-                      : null,
-                  ]}
-                >
-                  {loadingOlder ? (
-                    <ActivityIndicator
-                      size="small"
-                      color={colors.accent}
-                    />
-                  ) : (
-                    <Text
-                      style={
-                        styles.loadOlderText
-                      }
-                    >
-                      Load older messages
-                    </Text>
-                  )}
-                </Pressable>
+              {loadingOlder ? (
+                <View style={styles.olderMessagesLoading}>
+                  <ActivityIndicator
+                    size="small"
+                    color={colors.accent}
+                  />
+                  <Text style={styles.olderMessagesLoadingText}>
+                    Loading earlier messages…
+                  </Text>
+                </View>
               ) : null}
 
               {messages.length === 0 ? (
@@ -3320,7 +3704,7 @@ export default function ConversationScreen({
                                 styles.newMessagesText
                               }
                             >
-                              Unread messages
+                              New messages
                             </Text>
 
                             <View
@@ -3348,15 +3732,18 @@ export default function ConversationScreen({
                           message={message}
                           own={own}
                           system={system}
+                          pinned={pinnedMessageIds.has(message.message_id)}
+                          saved={savedMessageIds.has(message.message_id)}
                           messageMutationId={
                             messageMutationId
                           }
                           onManageMessage={
                             manageOwnMessage
                           }
-                          onReplyInThread={() =>
-                            setThreadParent(message)
-                          }
+                          onReplyInThread={() => {
+                            setThreadSearchTargetMessageId('');
+                            setThreadParent(message);
+                          }}
                           attachmentAction={
                             attachmentAction
                           }
@@ -3385,6 +3772,9 @@ export default function ConversationScreen({
                           }
                           onJumpToMessage={jumpToMessage}
                           onShowReactionUsers={showReactionUsers}
+                          onShowReaders={(targetMessage) =>
+                            setMessageReadersTarget(targetMessage)
+                          }
                         />
                         </View>
                       </React.Fragment>
@@ -3416,7 +3806,7 @@ export default function ConversationScreen({
           </View>
         ) : null}
 
-        {quoteReplyMessage ? (
+        {!showMessageSearch && quoteReplyMessage ? (
           <View style={styles.quoteReplyBanner}>
             <View style={styles.quoteReplyAccent} />
             <View style={styles.quoteReplyBannerCopy}>
@@ -3461,7 +3851,7 @@ export default function ConversationScreen({
           </View>
         ) : null}
 
-        {editingMessage ? (
+        {!showMessageSearch && editingMessage ? (
           <View style={styles.editingBanner}>
             <View style={styles.editingBannerCopy}>
               <Text style={styles.editingBannerTitle}>
@@ -3495,7 +3885,7 @@ export default function ConversationScreen({
           </View>
         ) : null}
 
-        {pendingAttachments.length > 0 ? (
+        {!showMessageSearch && pendingAttachments.length > 0 ? (
           <View style={styles.attachmentTray}>
             <View style={styles.attachmentTrayHeader}>
               <Text style={styles.attachmentTrayTitle}>
@@ -3599,22 +3989,16 @@ export default function ConversationScreen({
           </View>
         ) : null}
 
-        {showEmojiPicker ? (
-          <View style={styles.emojiPicker}>
-            {(recentEmojis.length ? recentEmojis : COMPOSER_EMOJIS).map((emoji) => (
-              <Pressable
-                key={emoji}
-                accessibilityRole="button"
-                accessibilityLabel={`Insert ${emoji}`}
-                onPress={() => insertEmoji(emoji)}
-                style={styles.emojiChoice}
-              >
-                <Text style={styles.emojiChoiceText}>{emoji}</Text>
-              </Pressable>
-            ))}
-          </View>
+        {!showMessageSearch ? (
+          <ConversationEmojiPicker
+            visible={showEmojiPicker}
+            recentEmojis={recentEmojis}
+            allEmojis={COMPOSER_EMOJIS}
+            onSelect={insertEmoji}
+          />
         ) : null}
 
+        {!showMessageSearch ? (
         <ConversationComposer
           inputRef={composerInputRef}
           value={draft}
@@ -3653,8 +4037,10 @@ export default function ConversationScreen({
           sending={sending}
           sendLabel={editingMessage ? 'Save' : 'Send'}
         />
+        ) : null}
 
-        {draft.length >=
+        {!showMessageSearch &&
+        draft.length >=
         MAX_MESSAGE_CHARS - 500 ? (
           <Text
             style={styles.characterCount}
@@ -3663,64 +4049,15 @@ export default function ConversationScreen({
           </Text>
         ) : null}
 
-        <Modal
-          visible={showMessageSearch}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setShowMessageSearch(false)}
-        >
-          <Pressable
-            style={styles.searchOverlay}
-            onPress={() => setShowMessageSearch(false)}
-          >
-            <Pressable style={styles.searchPanel} onPress={() => {}}>
-              <View style={styles.searchHeader}>
-                <Text style={styles.searchTitle}>Search in conversation</Text>
-                <Pressable onPress={() => setShowMessageSearch(false)}>
-                  <Text style={styles.searchClose}>×</Text>
-                </Pressable>
-              </View>
-              <View style={styles.searchRow}>
-                <TextInput
-                  value={messageSearchQuery}
-                  onChangeText={setMessageSearchQuery}
-                  placeholder="Search message text"
-                  placeholderTextColor={colors.textMuted}
-                  style={styles.searchInput}
-                  returnKeyType="search"
-                  onSubmitEditing={runMessageSearch}
-                />
-                <Pressable onPress={runMessageSearch} style={styles.searchButton}>
-                  <Text style={styles.searchButtonText}>Search</Text>
-                </Pressable>
-              </View>
-              {messageSearchError ? <Text style={styles.searchError}>{messageSearchError}</Text> : null}
-              {messageSearchLoading ? <ActivityIndicator color={colors.primary} /> : null}
-              <ScrollView style={styles.searchResults}>
-                {messageSearchResults.map((item) => (
-                  <Pressable
-                    key={item.message_id}
-                    onPress={() => openSearchResult(item)}
-                    style={styles.searchResultRow}
-                  >
-                    <Text style={styles.searchResultSender} numberOfLines={1}>
-                      {item.sender_display_name || 'Member'}
-                    </Text>
-                    <Text style={styles.searchResultBody} numberOfLines={2}>
-                      {item.body_text || (item.message_type === 'ATTACHMENT' ? 'Attachment' : '')}
-                    </Text>
-                    <Text style={styles.searchResultMeta}>
-                      {item.reply_to_message_id ? 'Thread reply · ' : ''}{formatMessageTime(item.created_at)}
-                    </Text>
-                  </Pressable>
-                ))}
-                {!messageSearchLoading && messageSearchQuery.trim() && messageSearchResults.length === 0 ? (
-                  <Text style={styles.searchEmpty}>No matching messages.</Text>
-                ) : null}
-              </ScrollView>
-            </Pressable>
-          </Pressable>
-        </Modal>
+        <MessageReadersModal
+          visible={Boolean(messageReadersTarget)}
+          serverUrl={serverUrl}
+          token={token}
+          conversationId={conversation?.conversationId || ''}
+          message={messageReadersTarget}
+          refreshEpoch={messageReadersRefreshEpoch}
+          onClose={() => setMessageReadersTarget(null)}
+        />
 
         <MessageActionSheet
           visible={Boolean(messageActionTarget)}
@@ -3927,6 +4264,7 @@ export default function ConversationScreen({
           serverUrl={serverUrl}
           token={token}
           conversation={conversation}
+          onPinsChanged={refreshPinnedMessages}
         />
 
         <Modal
@@ -4244,7 +4582,7 @@ export default function ConversationScreen({
                                 >
                                   {member.presence_profile?.custom_status ||
                                     (member.presence_status === 'LIVE'
-                                      ? 'Live'
+                                      ? 'Online'
                                       : member.presence_status === 'AWAY'
                                         ? 'Away'
                                         : formatLastSeen(
@@ -4303,7 +4641,15 @@ export default function ConversationScreen({
           realtimeEvents={realtimeEvents}
           currentMemberId={currentMemberId}
           currentPrimaryEmail={session?.identity?.primary_email || ''}
-          onClose={() => setThreadParent(null)}
+          initialMessageId={threadSearchTargetMessageId}
+          initialUnreadCount={Number(threadParent?.thread_unread_count || 0)}
+          pinnedMessageIds={pinnedMessageIds}
+          savedMessageIds={savedMessageIds}
+          onToggleSavedMessage={toggleSavedMessage}
+          onClose={() => {
+            setThreadParent(null);
+            setThreadSearchTargetMessageId('');
+          }}
           onRead={handleThreadRead}
         />
 
@@ -4463,6 +4809,8 @@ function MessageBubble({
   message,
   own,
   system,
+  pinned = false,
+  saved = false,
   messageMutationId,
   onManageMessage,
   onReplyInThread,
@@ -4478,7 +4826,10 @@ function MessageBubble({
   conversationId,
   onJumpToMessage,
   onShowReactionUsers,
+  onShowReaders,
 }) {
+  const { palette } = useAppAppearance();
+
   if (system) {
     return (
       <View style={styles.systemMessage}>
@@ -4579,6 +4930,10 @@ function MessageBubble({
           own
             ? styles.ownBubble
             : styles.otherBubble,
+          {
+            backgroundColor: own ? palette.ownBubble : palette.otherBubble,
+            borderColor: own ? palette.ownBubbleBorder : palette.otherBubbleBorder,
+          },
         ]}
       >
         <Text
@@ -4654,6 +5009,7 @@ function MessageBubble({
               own
                 ? styles.ownBody
                 : null,
+              { color: own ? palette.ownMessageText : palette.otherMessageText },
               styles.deletedBody,
             ]}
           >
@@ -4931,6 +5287,7 @@ function MessageBubble({
               own
                 ? styles.ownBody
                 : null,
+              { color: own ? palette.ownMessageText : palette.otherMessageText },
             ]}
           >
             {attachment
@@ -4942,12 +5299,20 @@ function MessageBubble({
           </Text>
         )}
 
+        {(pinned || saved) ? (
+          <View style={styles.messageFlags}>
+            {pinned ? <Text style={styles.messageFlagText}>📌 Pinned</Text> : null}
+            {saved ? <Text style={styles.messageFlagText}>🔖 Saved</Text> : null}
+          </View>
+        ) : null}
+
         <Text
           style={[
             styles.time,
             own
               ? styles.ownTime
               : null,
+            { color: own ? palette.ownTimestamp : palette.timestamp },
           ]}
         >
           {formatMessageTime(
@@ -4970,9 +5335,19 @@ function MessageBubble({
         ) : null}
 
         {own && !deleted && Number(message.read_by_count || 0) > 0 ? (
-          <Text style={styles.readReceipt}>
-            ✓✓ Read by {Number(message.read_by_count)}
-          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Read by ${Number(message.read_by_count || 0)}. Show readers.`}
+            onPress={() => onShowReaders?.(message)}
+            style={({ pressed }) => [
+              styles.readReceiptButton,
+              pressed ? styles.pressed : null,
+            ]}
+          >
+            <Text style={styles.readReceipt}>
+              ✓✓ Read by {Number(message.read_by_count)} ›
+            </Text>
+          </Pressable>
         ) : null}
 
         {!deleted && Array.isArray(message.reactions) && message.reactions.length ? (
@@ -5037,12 +5412,14 @@ function MessageBubble({
 }
 
 const styles = StyleSheet.create({
-  readReceipt: {
+  readReceiptButton: {
     marginTop: 3,
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#5E7892',
     alignSelf: 'flex-end',
+  },
+  readReceipt: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.primary,
   },
   threadSummary: {
     marginTop: 7,
@@ -5059,7 +5436,9 @@ const styles = StyleSheet.create({
   },
   highlightedMessage: {
     borderRadius: 12,
-    backgroundColor: 'rgba(255, 193, 7, 0.18)',
+    borderWidth: 2,
+    borderColor: colors.brandOrange,
+    backgroundColor: '#FFF6E9',
   },
   emojiButton: {
     width: 42, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
@@ -5095,6 +5474,7 @@ const styles = StyleSheet.create({
   searchEmpty: { textAlign: 'center', color: '#7890A6', paddingVertical: 18 },
   flex: {
     flex: 1,
+    backgroundColor: colors.shell,
   },
   safeArea: {
     flex: 1,
@@ -5416,6 +5796,9 @@ const styles = StyleSheet.create({
     position: 'relative',
     backgroundColor: '#F6F9FC',
   },
+  historyHiddenForSearch: {
+    display: 'none',
+  },
   messageList: {
     flexGrow: 1,
     paddingHorizontal: 13,
@@ -5432,22 +5815,23 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 13,
   },
-  loadOlderButton: {
+  olderMessagesLoading: {
     alignSelf: 'center',
-    minHeight: 38,
-    marginBottom: 14,
-    paddingHorizontal: 16,
-    borderRadius: 19,
+    minHeight: 36,
+    marginBottom: 12,
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    borderRadius: 18,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#EEF5FB',
   },
-  loadOlderText: {
-    color: colors.navy,
-    fontSize: 12,
-    fontWeight: '800',
+  olderMessagesLoadingText: {
+    marginLeft: 7,
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
   },
   emptyState: {
     flex: 1,
@@ -5594,6 +5978,17 @@ const styles = StyleSheet.create({
   ownLongPressHint: {
     color: '#D6FFF8',
   },
+  messageFlags: {
+    marginTop: 5,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 7,
+  },
+  messageFlagText: {
+    color: colors.textSecondary,
+    fontSize: 8.5,
+    fontWeight: '800',
+  },
   time: {
     marginTop: 5,
     color: colors.textMuted,
@@ -5601,7 +5996,7 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   ownTime: {
-    color: '#D6FFF8',
+    color: '#315D82',
   },
   systemMessage: {
     alignSelf: 'center',

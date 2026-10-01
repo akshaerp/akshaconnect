@@ -2,13 +2,18 @@ import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
+  ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
   View,
 } from 'react-native';
 
+import Text from '../theme/AppText';
+import TextInput from '../theme/AppTextInput';
 import { colors } from '../theme/colors';
+import {
+  scaleTextMetric,
+  useAppAppearance,
+} from '../theme/appearanceStore';
 
 export const CONVERSATION_COMPOSER_MIN_HEIGHT = 46;
 export const CONVERSATION_COMPOSER_LINE_HEIGHT = 20;
@@ -18,7 +23,96 @@ export const CONVERSATION_COMPOSER_MAX_HEIGHT =
     CONVERSATION_COMPOSER_MAX_LINES +
   22;
 
-function clampComposerHeight(value) {
+
+export const COMPOSER_EMOJIS = Object.freeze([
+  '😀', '😃', '😄', '😁', '😂', '😊', '🙂', '😉',
+  '😍', '🥰', '😎', '🤔', '😅', '😭', '😡', '👍',
+  '👎', '👏', '🙌', '🙏', '💪', '🤝', '👌', '✅',
+  '❌', '🎉', '🔥', '❤️', '💯', '👀', '🚀', '📌',
+  '📎', '💡', '📝', '☕',
+]);
+
+export function buildComposerEmojiChoices(recentEmojis = []) {
+  return [
+    ...new Set([
+      ...(recentEmojis || []).filter(Boolean),
+      ...COMPOSER_EMOJIS,
+    ]),
+  ];
+}
+
+export function ConversationEmojiPicker({
+  visible,
+  recentEmojis = [],
+  allEmojis = COMPOSER_EMOJIS,
+  onSelect,
+}) {
+  const { palette } = useAppAppearance();
+  if (!visible) return null;
+
+  const recent = [...new Set(
+    (recentEmojis || []).filter(Boolean)
+  )].slice(0, 8);
+  const all = [
+    ...new Set((allEmojis || COMPOSER_EMOJIS).filter(Boolean)),
+  ];
+
+  function renderEmoji(emoji, prefix) {
+    return (
+      <Pressable
+        key={`${prefix}-${emoji}`}
+        accessibilityRole="button"
+        accessibilityLabel={`Insert ${emoji}`}
+        onPress={() => onSelect?.(emoji)}
+        style={({ pressed }) => [
+          styles.emojiChoice,
+          pressed ? styles.pressed : null,
+        ]}
+      >
+        <Text style={styles.emojiChoiceText}>
+          {emoji}
+        </Text>
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={[styles.emojiPicker, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.emojiPickerContent}
+      >
+        {recent.length ? (
+          <>
+            <Text style={styles.emojiSectionLabel}>
+              Recent
+            </Text>
+            <View style={styles.emojiGrid}>
+              {recent.map((emoji) =>
+                renderEmoji(emoji, 'recent')
+              )}
+            </View>
+          </>
+        ) : null}
+
+        <Text style={styles.emojiSectionLabel}>
+          All emoji
+        </Text>
+        <View style={styles.emojiGrid}>
+          {all.map((emoji) =>
+            renderEmoji(emoji, 'all')
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function clampComposerHeight(
+  value,
+  maxHeight = CONVERSATION_COMPOSER_MAX_HEIGHT
+) {
   const measured = Number(value || 0);
   if (!Number.isFinite(measured) || measured <= 0) {
     return CONVERSATION_COMPOSER_MIN_HEIGHT;
@@ -27,7 +121,7 @@ function clampComposerHeight(value) {
   return Math.max(
     CONVERSATION_COMPOSER_MIN_HEIGHT,
     Math.min(
-      CONVERSATION_COMPOSER_MAX_HEIGHT,
+      maxHeight,
       Math.ceil(measured)
     )
   );
@@ -40,10 +134,13 @@ export function ConversationHeader({
   backAccessibilityLabel = 'Back',
   statusLabel = '',
   statusTone = 'offline',
+  customStatus = '',
   rightAccessory = null,
   style = null,
 }) {
+  const { palette } = useAppAppearance();
   const showStatus = Boolean(statusLabel);
+  const showCustomStatus = Boolean(customStatus);
 
   return (
     <View style={[styles.header, style]}>
@@ -60,9 +157,18 @@ export function ConversationHeader({
       </Pressable>
 
       <View style={styles.headerCopy}>
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {title}
-        </Text>
+        <View style={styles.headerTitleRow}>
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {title}
+          </Text>
+          {showCustomStatus ? (
+            <View style={styles.headerCustomStatus}>
+              <Text style={styles.headerCustomStatusText} numberOfLines={1}>
+                {customStatus}
+              </Text>
+            </View>
+          ) : null}
+        </View>
 
         <View style={styles.headerSubtitleRow}>
           {subtitle ? (
@@ -138,6 +244,15 @@ export function ConversationComposer({
   sending = false,
   sendLabel = 'Send',
 }) {
+  const { textScale, palette } = useAppAppearance();
+  const composerMaxHeight =
+    scaleTextMetric(
+      CONVERSATION_COMPOSER_LINE_HEIGHT,
+      textScale
+    ) *
+      CONVERSATION_COMPOSER_MAX_LINES +
+    22;
+
   const [inputHeight, setInputHeight] = useState(
     CONVERSATION_COMPOSER_MIN_HEIGHT
   );
@@ -145,15 +260,20 @@ export function ConversationComposer({
   useEffect(() => {
     if (!value) {
       setInputHeight(CONVERSATION_COMPOSER_MIN_HEIGHT);
+      return;
     }
-  }, [value]);
+
+    setInputHeight((current) =>
+      Math.min(current, composerMaxHeight)
+    );
+  }, [composerMaxHeight, value]);
 
   const canUseAttachment =
     typeof onAttach === 'function' && !attachmentDisabled;
   const canUseEmoji = typeof onEmojiPress === 'function';
 
   return (
-    <View style={styles.composer}>
+    <View style={[styles.composer, { backgroundColor: palette.surface, borderTopColor: palette.border }]}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Attach files"
@@ -180,7 +300,8 @@ export function ConversationComposer({
           onFocus={onFocus}
           onContentSizeChange={(event) => {
             const nextHeight = clampComposerHeight(
-              event.nativeEvent?.contentSize?.height
+              event.nativeEvent?.contentSize?.height,
+              composerMaxHeight
             );
             setInputHeight(nextHeight);
           }}
@@ -188,7 +309,13 @@ export function ConversationComposer({
           placeholderTextColor={colors.textMuted}
           style={[
             styles.input,
-            { height: inputHeight },
+            {
+              height: inputHeight,
+              maxHeight: composerMaxHeight,
+              color: palette.textPrimary,
+              backgroundColor: palette.input,
+              borderColor: palette.border,
+            },
             canUseEmoji ? styles.inputWithEmoji : null,
           ]}
           multiline
@@ -196,7 +323,7 @@ export function ConversationComposer({
           editable={editable}
           textAlignVertical="top"
           scrollEnabled={
-            inputHeight >= CONVERSATION_COMPOSER_MAX_HEIGHT
+            inputHeight >= composerMaxHeight
           }
         />
 
@@ -299,6 +426,24 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     marginHorizontal: 12,
+  },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  headerCustomStatus: {
+    maxWidth: '45%',
+    marginLeft: 7,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  headerCustomStatusText: {
+    color: '#FFFFFF',
+    fontSize: 8.5,
+    fontWeight: '800',
   },
   headerTitle: {
     color: '#FFFFFF',
@@ -494,6 +639,44 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 8,
     fontWeight: '900',
+  },
+  emojiPicker: {
+    maxHeight: 220,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    backgroundColor: '#FFFFFF',
+  },
+  emojiPickerContent: {
+    paddingHorizontal: 12,
+    paddingTop: 9,
+    paddingBottom: 11,
+  },
+  emojiSectionLabel: {
+    marginBottom: 6,
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  emojiGrid: {
+    marginBottom: 9,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  emojiChoice: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E4EBF2',
+    backgroundColor: '#F7FAFD',
+  },
+  emojiChoiceText: {
+    fontSize: 20,
   },
   pressed: {
     opacity: 0.78,

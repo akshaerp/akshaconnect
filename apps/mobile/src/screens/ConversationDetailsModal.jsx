@@ -14,8 +14,6 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
-  Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -38,6 +36,8 @@ import {
   updateChannelProfile,
   updateConversationSetting,
 } from '../api/conversationDetails';
+import Text from '../theme/AppText';
+import TextInput from '../theme/AppTextInput';
 import { colors } from '../theme/colors';
 import { ConversationHeader } from './ConversationChrome.jsx';
 
@@ -72,10 +72,10 @@ function presenceLabel(status) {
   const value =
     clean(status).toUpperCase();
 
-  if (value === 'LIVE') return 'Live';
+  if (value === 'LIVE') return 'Online';
   if (value === 'AWAY') return 'Away';
 
-  return 'Not available';
+  return 'Offline';
 }
 
 function presenceStyle(status) {
@@ -139,6 +139,7 @@ export default function ConversationDetailsModal({
   serverUrl,
   token,
   conversation,
+  onPinsChanged,
 }) {
   const isChannel =
     conversation?.kind === 'channel';
@@ -678,6 +679,7 @@ export default function ConversationDetailsModal({
       );
 
       await loadPins();
+      onPinsChanged?.();
     } catch (requestError) {
       setError(
         requestError?.message ||
@@ -701,6 +703,7 @@ export default function ConversationDetailsModal({
       );
 
       await loadPins();
+      onPinsChanged?.();
     } catch (requestError) {
       setError(
         requestError?.message ||
@@ -1073,7 +1076,7 @@ export default function ConversationDetailsModal({
                 <Text
                   style={styles.summaryChip}
                 >
-                  ● Live {liveCount}
+                  ● Online {liveCount}
                 </Text>
                 <Text
                   style={styles.summaryChip}
@@ -1083,7 +1086,7 @@ export default function ConversationDetailsModal({
                 <Text
                   style={styles.summaryChip}
                 >
-                  ○ Not available{' '}
+                  ○ Offline{' '}
                   {unavailableCount}
                 </Text>
               </View>
@@ -1462,7 +1465,7 @@ export default function ConversationDetailsModal({
                           styles.unpinText
                         }
                       >
-                        Unpin
+                        Unpin message
                       </Text>
                     </Pressable>
                   </View>

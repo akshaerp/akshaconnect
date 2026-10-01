@@ -74,11 +74,7 @@ function createConversationPlatformService(repository) {
     if (context.conversation_type === 'CHANNEL') {
       if (
         context.channel_status !== 'ACTIVE' ||
-        (
-          context.visibility === 'PRIVATE' &&
-          !context.requester_is_channel_member &&
-          !workspaceCanManage
-        )
+        !context.requester_is_channel_member
       ) {
         throw boundaryError(
           'CONVERSATION_ACCESS_DENIED',

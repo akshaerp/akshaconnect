@@ -7,14 +7,16 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import Text from '../theme/AppText';
+import TextInput from '../theme/AppTextInput';
 import { colors } from '../theme/colors';
+import { useAppAppearance } from '../theme/appearanceStore';
 import SettingsScreen from './SettingsScreen.jsx';
+import SavedMessagesScreen from './SavedMessagesScreen.jsx';
 
 const brandMark = require('../assets/brand/akshaconnect-mark.png');
 
@@ -37,9 +39,9 @@ function realtimeLabel(status) {
 }
 
 function presenceLabel(status) {
-  if (status === 'LIVE') return 'Live';
+  if (status === 'LIVE') return 'Online';
   if (status === 'AWAY') return 'Away';
-  return 'Not available';
+  return 'Offline';
 }
 
 function presenceStyle(status) {
@@ -55,6 +57,7 @@ export default function HomeScreen({
   directMessages,
   unreadCounts,
   presenceByMember,
+  presenceProfilesByMember,
   refreshing,
   realtimeStatus,
   onRefresh,
@@ -71,6 +74,7 @@ export default function HomeScreen({
   onOpenUpdate,
   onOpenDeviceSettings,
 }) {
+  const { palette } = useAppAppearance();
   const tenant = session?.tenant || {};
   const workspace = session?.workspace || {};
   const membership = session?.membership || {};
@@ -223,8 +227,8 @@ export default function HomeScreen({
     'Workspace';
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <View style={styles.topBar}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.shell }]} edges={['top', 'bottom']}>
+      <View style={[styles.topBar, { backgroundColor: palette.surface, borderBottomColor: palette.border }]}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Switch organization"
@@ -257,7 +261,7 @@ export default function HomeScreen({
         </View>
       </View>
 
-      <View style={styles.tabs}>
+      <View style={[styles.tabs, { backgroundColor: palette.surface, borderBottomColor: palette.border }]}>
         <TopTab
           label="Chats"
           active={activeTab === 'chats'}
@@ -269,6 +273,11 @@ export default function HomeScreen({
           active={activeTab === 'channels'}
           unread={unreadSummary.channels}
           onPress={() => setActiveTab('channels')}
+        />
+        <TopTab
+          label="Saved"
+          active={activeTab === 'saved'}
+          onPress={() => setActiveTab('saved')}
         />
         <TopTab
           label="Settings"
@@ -292,9 +301,14 @@ export default function HomeScreen({
           onOpenAccountSwitcher={onOpenAccountSwitcher}
           onLogout={onLogout}
         />
+      ) : activeTab === 'saved' ? (
+        <SavedMessagesScreen
+          session={session}
+          onOpenConversation={onOpenConversation}
+        />
       ) : (
         <ScrollView
-          contentContainerStyle={styles.page}
+          contentContainerStyle={[styles.page, { backgroundColor: palette.shell }]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
@@ -304,12 +318,12 @@ export default function HomeScreen({
             />
           }
         >
-          <View style={styles.sectionIntro}>
+          <View style={[styles.sectionIntro, { backgroundColor: palette.surface, borderBottomColor: palette.border }]}>
             <View>
-              <Text style={styles.sectionTitle}>
+              <Text style={[styles.sectionTitle, { color: palette.textPrimary }]}>
                 {activeTab === 'chats' ? 'Direct messages' : 'Channels'}
               </Text>
-              <Text style={styles.sectionSubtitle}>
+              <Text style={[styles.sectionSubtitle, { color: palette.textMuted }]}>
                 {activeTab === 'chats'
                   ? 'Your conversations'
                   : 'Team spaces'}
@@ -340,7 +354,7 @@ export default function HomeScreen({
             </View>
           </View>
 
-          <View style={styles.listSearchWrap}>
+          <View style={[styles.listSearchWrap, { backgroundColor: palette.surface, borderBottomColor: palette.border }]}>
             <TextInput
               value={activeTab === 'chats' ? chatFilter : channelFilter}
               onChangeText={
@@ -352,11 +366,11 @@ export default function HomeScreen({
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
-              style={styles.listSearchInput}
+              style={[styles.listSearchInput, { backgroundColor: palette.input, borderColor: palette.border, color: palette.textPrimary }]}
             />
           </View>
 
-          <View style={styles.listCard}>
+          <View style={[styles.listCard, { backgroundColor: palette.surface, borderColor: palette.border }]}>
             {activeTab === 'chats' ? (
               filteredDirectMessages.length === 0 ? (
                 <EmptyState text={chatFilter ? "No matching chats." : "No direct messages yet."} />
@@ -374,6 +388,11 @@ export default function HomeScreen({
                         dm.other_workspace_member_id
                       ] || 'NOT_AVAILABLE'
                     }
+                    presenceProfile={
+                      presenceProfilesByMember?.[
+                        dm.other_workspace_member_id
+                      ] || null
+                    }
                     unreadCount={unreadCounts?.[dm.conversation_id] || 0}
                     onPress={() =>
                       onOpenConversation({
@@ -383,6 +402,7 @@ export default function HomeScreen({
                         subtitle: dm.other_primary_email || 'Direct message',
                         otherWorkspaceMemberId:
                           dm.other_workspace_member_id || '',
+                        unreadAtOpen: Number(unreadCounts?.[dm.conversation_id] || 0),
                       })
                     }
                   />
@@ -412,6 +432,7 @@ export default function HomeScreen({
                         channel.visibility === 'PRIVATE'
                           ? 'Private channel'
                           : 'Public channel',
+                      unreadAtOpen: Number(unreadCounts?.[channel.conversation_id] || 0),
                     })
                   }
                 />
@@ -494,12 +515,28 @@ export default function HomeScreen({
                       </Text>
                     </View>
                     <View style={styles.memberCopy}>
-                      <Text style={styles.memberName} numberOfLines={1}>
-                        {member.display_name || 'Member'}
-                      </Text>
-                      <Text style={styles.memberEmail} numberOfLines={1}>
-                        {member.primary_email || member.member_role || 'Workspace member'}
-                      </Text>
+                      <View style={styles.memberNameLine}>
+                        <Text style={styles.memberName} numberOfLines={1}>
+                          {member.display_name || 'Member'}
+                        </Text>
+                        {member?.presence_profile?.custom_status ? (
+                          <View style={styles.customStatusPill}>
+                            <Text style={styles.customStatusText} numberOfLines={1}>
+                              {member.presence_profile.custom_status}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <View style={styles.memberMetaLine}>
+                        <Text style={styles.memberEmail} numberOfLines={1}>
+                          {member.primary_email || member.member_role || 'Workspace member'}
+                        </Text>
+                        {member?.presence_profile ? (
+                          <Text style={[styles.rowPresenceText, presenceStyle(member.presence_profile.status || 'NOT_AVAILABLE')]}>
+                            {presenceLabel(member.presence_profile.status || 'NOT_AVAILABLE')}
+                          </Text>
+                        ) : null}
+                      </View>
                     </View>
                     <Text style={styles.memberAction}>
                       {busyMemberId === member.workspace_member_id
@@ -578,7 +615,7 @@ export default function HomeScreen({
 
             <Text style={styles.visibilityHelp}>
               {channelVisibility === 'PUBLIC'
-                ? 'Visible to workspace members.'
+                ? 'Only channel members see its messages; workspace admins manage membership.'
                 : 'Only invited members can access this channel.'}
             </Text>
 
@@ -643,15 +680,20 @@ function ConversationRow({
   subtitle,
   avatar = false,
   presenceStatus = null,
+  presenceProfile = null,
   unreadCount = 0,
   onPress,
 }) {
+  const { palette } = useAppAppearance();
+  const customStatus = String(presenceProfile?.custom_status || '').trim();
+
   return (
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
+        { backgroundColor: palette.surface, borderTopColor: palette.border },
         first ? styles.firstRow : null,
         pressed ? styles.rowPressed : null,
       ]}
@@ -673,11 +715,20 @@ function ConversationRow({
       </View>
 
       <View style={styles.rowCopy}>
-        <Text style={styles.rowTitle} numberOfLines={1}>
-          {title}
-        </Text>
+        <View style={styles.rowTitleLine}>
+          <Text style={[styles.rowTitle, { color: palette.textPrimary }]} numberOfLines={1}>
+            {title}
+          </Text>
+          {customStatus ? (
+            <View style={styles.customStatusPill}>
+              <Text style={styles.customStatusText} numberOfLines={1}>
+                {customStatus}
+              </Text>
+            </View>
+          ) : null}
+        </View>
         <View style={styles.rowSubtitleLine}>
-          <Text style={styles.rowSubtitle} numberOfLines={1}>
+          <Text style={[styles.rowSubtitle, { color: palette.textSecondary }]} numberOfLines={1}>
             {subtitle}
           </Text>
           {presenceStatus ? (
@@ -997,6 +1048,9 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 13,
   },
+  rowTitleLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  customStatusPill: { maxWidth: '52%', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 9, backgroundColor: '#EAF4FF' },
+  customStatusText: { color: '#1769AA', fontSize: 8.5, fontWeight: '800' },
   rowTitle: {
     color: colors.navy,
     fontSize: 15,
@@ -1244,6 +1298,8 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 11,
   },
+  memberNameLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  memberMetaLine: { marginTop: 2, flexDirection: 'row', alignItems: 'center' },
   memberName: {
     color: colors.navy,
     fontSize: 14,

@@ -92,7 +92,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
           (
             conv.conversation_type = 'CHANNEL'
             AND ch.channel_id IS NOT NULL
-            AND (ch.visibility = 'PUBLIC' OR cm.workspace_member_id IS NOT NULL)
+            AND cm.workspace_member_id IS NOT NULL
           )
           OR
           (
@@ -1456,7 +1456,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
             (
               conv.conversation_type = 'CHANNEL'
               AND ch.channel_id IS NOT NULL
-              AND (ch.visibility = 'PUBLIC' OR cm.workspace_member_id IS NOT NULL)
+              AND cm.workspace_member_id IS NOT NULL
             )
             OR
             (
@@ -1632,22 +1632,21 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
           ON ch.workspace_id = conv.workspace_id
          AND ch.conversation_id = conv.conversation_id
          AND ch.status = 'ACTIVE'
+        JOIN ac_channel_member cm
+          ON cm.workspace_id = ch.workspace_id
+         AND cm.channel_id = ch.channel_id
+         AND cm.left_at IS NULL
         JOIN ac_workspace_member wm
-          ON wm.workspace_id = conv.workspace_id
+          ON wm.workspace_id = cm.workspace_id
+         AND wm.workspace_member_id = cm.workspace_member_id
          AND wm.status = 'ACTIVE'
         JOIN ac_identity i
           ON i.identity_id = wm.identity_id
          AND i.status = 'ACTIVE'
-        LEFT JOIN ac_channel_member cm
-          ON cm.workspace_id = ch.workspace_id
-         AND cm.channel_id = ch.channel_id
-         AND cm.workspace_member_id = wm.workspace_member_id
-         AND cm.left_at IS NULL
         WHERE conv.workspace_id = $1
           AND conv.conversation_id = $2
           AND conv.status = 'ACTIVE'
           AND conv.conversation_type = 'CHANNEL'
-          AND (ch.visibility = 'PUBLIC' OR cm.workspace_member_id IS NOT NULL)
 
         UNION
 

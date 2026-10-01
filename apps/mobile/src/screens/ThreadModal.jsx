@@ -8,7 +8,6 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
-  Text,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -24,12 +23,18 @@ import {
   sendMessage,
   uploadAttachment,
 } from '../api/client';
+import Text from '../theme/AppText';
 import { colors } from '../theme/colors';
+import { useAppAppearance } from '../theme/appearanceStore';
+import { loadRecentEmojis, saveRecentEmojis } from '../emoji/recentEmojiStore';
 import {
+  COMPOSER_EMOJIS,
   ConversationComposer,
+  ConversationEmojiPicker,
   ConversationHeader,
   JumpToLatestButton,
 } from './ConversationChrome.jsx';
+import MessageReadersModal from './MessageReadersModal.jsx';
 
 const MAX_PENDING_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -72,6 +77,41 @@ function mergeById(rows) {
   });
 }
 
+function findThreadUnreadDivider(
+  rows,
+  unreadCount,
+  currentMemberId
+) {
+  let remaining = Number(unreadCount || 0);
+
+  if (remaining <= 0) {
+    return null;
+  }
+
+  for (
+    let index = (rows || []).length - 1;
+    index >= 0;
+    index -= 1
+  ) {
+    const item = rows[index];
+    const own =
+      item?.sender_type === 'HUMAN' &&
+      item?.sender_member_id === currentMemberId;
+
+    if (own) {
+      continue;
+    }
+
+    remaining -= 1;
+
+    if (remaining <= 0) {
+      return item?.message_id || null;
+    }
+  }
+
+  return rows?.[0]?.message_id || null;
+}
+
 function localPathFromUri(value) {
   const raw = String(value || '').replace(/^file:\/\//, '');
   try { return decodeURI(raw); } catch { return raw; }
@@ -102,10 +142,15 @@ function sameIdentityValue(left, right) {
 
 function ThreadMessage({
   message,
+  pinned = false,
+  saved = false,
   currentMemberId,
   currentPrimaryEmail,
   onOpenAttachment,
+  onShowReaders,
+  onToggleSaved,
 }) {
+  const { palette } = useAppAppearance();
   const deleted = Boolean(message.deleted_at);
   const own =
     message.sender_type === 'HUMAN' &&
@@ -143,6 +188,10 @@ function ThreadMessage({
           own
             ? styles.v16oMessageBubbleOwn
             : styles.v16oMessageBubbleOther,
+          {
+            backgroundColor: own ? palette.ownBubble : palette.otherBubble,
+            borderColor: own ? palette.ownBubbleBorder : palette.otherBubbleBorder,
+          },
         ]}
       >
         <View style={styles.v16oMetaRow}>
@@ -155,7 +204,7 @@ function ThreadMessage({
             {own ? 'You' : message.sender_display_name || 'Member'}
           </Text>
 
-          <Text style={styles.v16oTime}>
+          <Text style={[styles.v16oTime, { color: own ? palette.ownTimestamp : palette.timestamp }]}>
             {formatTime(message.created_at)}
           </Text>
 
@@ -165,9 +214,9 @@ function ThreadMessage({
         </View>
 
         {deleted ? (
-          <Text style={styles.v16oDeleted}>Message deleted</Text>
+          <Text style={[styles.v16oDeleted, { color: palette.textMuted }]}>Message deleted</Text>
         ) : message.message_type !== 'ATTACHMENT' ? (
-          <Text style={styles.v16oBody}>
+          <Text style={[styles.v16oBody, { color: own ? palette.ownMessageText : palette.otherMessageText }]}>
             {message.body_text || ''}
           </Text>
         ) : null}
@@ -195,10 +244,39 @@ function ThreadMessage({
             ))
           : null}
 
-        {own && Number(message.read_by_count || 0) > 0 ? (
-          <Text style={styles.v16oReadReceipt}>
-            ✓✓ Read by {Number(message.read_by_count || 0)}
-          </Text>
+        {(pinned || saved || !deleted) ? (
+          <View style={styles.v16oFlagsRow}>
+            {pinned ? <Text style={styles.v16oPinned}>📌 Pinned</Text> : null}
+            {saved ? <Text style={styles.v16oSaved}>🔖 Saved</Text> : null}
+            {!deleted ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={saved ? 'Remove saved message' : 'Save message'}
+                onPress={() => onToggleSaved?.(message)}
+                style={({ pressed }) => [styles.v16oSaveButton, pressed ? styles.pressed : null]}
+              >
+                <Text style={styles.v16oSaveText}>
+                  {saved ? 'Remove saved' : 'Save'}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+
+        {own && !deleted && Number(message.read_by_count || 0) > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Read by ${Number(message.read_by_count || 0)}. Show readers.`}
+            onPress={() => onShowReaders?.(message)}
+            style={({ pressed }) => [
+              styles.v16oReadReceiptButton,
+              pressed ? styles.pressed : null,
+            ]}
+          >
+            <Text style={styles.v16oReadReceipt}>
+              ✓✓ Read by {Number(message.read_by_count || 0)} ›
+            </Text>
+          </Pressable>
         ) : null}
       </View>
     </View>
@@ -214,9 +292,15 @@ export default function ThreadModal({
   realtimeEvents,
   currentMemberId,
   currentPrimaryEmail,
+  initialMessageId = '',
+  initialUnreadCount = 0,
+  pinnedMessageIds = new Set(),
+  savedMessageIds = new Set(),
+  onToggleSavedMessage,
   onClose,
   onRead,
 }) {
+  const { palette } = useAppAppearance();
   const [parent, setParent] = useState(parentMessage);
   const [replies, setReplies] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -225,9 +309,19 @@ export default function ThreadModal({
   const [error, setError] = useState('');
   const [pending, setPending] = useState([]);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [newMessageDividerId, setNewMessageDividerId] = useState(null);
+  const [highlightMessageId, setHighlightMessageId] = useState('');
+  const [messageReadersTarget, setMessageReadersTarget] = useState(null);
+  const [messageReadersRefreshEpoch, setMessageReadersRefreshEpoch] = useState(0);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [recentEmojis, setRecentEmojis] = useState([]);
   const lastSequenceRef = useRef(0);
   const scrollRef = useRef(null);
   const nearBottomRef = useRef(true);
+  const initialUnreadPositionedRef = useRef(false);
+  const messageLayoutYRef = useRef(new Map());
+  const highlightTimerRef = useRef(null);
+  const readReceiptRefreshTimerRef = useRef(null);
   const parentId = parentMessage?.message_id || '';
 
   function scrollToLatest(animated = true) {
@@ -238,6 +332,79 @@ export default function ThreadModal({
     });
   }
 
+  function scrollToThreadMessage(messageId, attempt = 0) {
+    const targetId = String(messageId || '').trim();
+    if (!targetId) return;
+
+    requestAnimationFrame(() => {
+      const y = messageLayoutYRef.current.get(targetId);
+      if (Number.isFinite(y)) {
+        scrollRef.current?.scrollTo({
+          y: Math.max(0, y - 18),
+          animated: true,
+        });
+        return;
+      }
+
+      if (attempt < 8) {
+        setTimeout(
+          () => scrollToThreadMessage(targetId, attempt + 1),
+          35
+        );
+      }
+    });
+  }
+
+  function scheduleThreadReadReceiptRefresh() {
+    setMessageReadersRefreshEpoch((value) => value + 1);
+
+    if (readReceiptRefreshTimerRef.current) {
+      clearTimeout(readReceiptRefreshTimerRef.current);
+    }
+
+    readReceiptRefreshTimerRef.current = setTimeout(() => {
+      readReceiptRefreshTimerRef.current = null;
+
+      listThread(
+        serverUrl,
+        token,
+        conversationId,
+        parentId
+      )
+        .then((result) => {
+          if (!result) return;
+          setParent(result.parent || parentMessage);
+          setReplies(result.replies || []);
+        })
+        .catch(() => {});
+    }, 250);
+  }
+
+  useEffect(() => {
+    let mounted = true;
+    loadRecentEmojis()
+      .then((items) => {
+        if (mounted) setRecentEmojis(items || []);
+      })
+      .catch(() => {});
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current);
+      }
+      if (readReceiptRefreshTimerRef.current) {
+        clearTimeout(readReceiptRefreshTimerRef.current);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     if (!visible || !parentId || !conversationId || !token) return;
     let cancelled = false;
@@ -247,52 +414,161 @@ export default function ThreadModal({
     setReplies([]);
     setDraft('');
     setPending([]);
-    nearBottomRef.current = true;
+    setHighlightMessageId('');
+    setMessageReadersTarget(null);
+    setMessageReadersRefreshEpoch(0);
+    setShowEmojiPicker(false);
+    setNewMessageDividerId(null);
+    messageLayoutYRef.current.clear();
+    initialUnreadPositionedRef.current = false;
+    nearBottomRef.current = Number(initialUnreadCount || 0) <= 0;
     setShowJumpToLatest(false);
     listThread(serverUrl, token, conversationId, parentId)
       .then((result) => {
         if (cancelled) return;
+        const nextReplies = result.replies || [];
         setParent(result.parent || parentMessage);
-        setReplies(result.replies || []);
-        const latest = (result.replies || []).at(-1);
-        if (latest?.message_id) onRead?.(latest.message_id);
-        requestAnimationFrame(() => {
-          scrollRef.current?.scrollToEnd({ animated: false });
-        });
+        setReplies(nextReplies);
+
+        const dividerId = findThreadUnreadDivider(
+          nextReplies,
+          initialUnreadCount,
+          currentMemberId
+        );
+        setNewMessageDividerId(dividerId);
+        nearBottomRef.current = !dividerId;
+
+        const latest = nextReplies.at(-1);
+        if (latest?.message_id && !dividerId) {
+          onRead?.(latest.message_id);
+        }
+
+        if (!initialMessageId && !dividerId) {
+          requestAnimationFrame(() => {
+            scrollRef.current?.scrollToEnd({ animated: false });
+          });
+        }
       })
-      .catch((requestError) => { if (!cancelled) setError(requestError?.message || 'Could not load thread'); })
+      .catch((requestError) => {
+        if (cancelled) return;
+        if (Number(requestError?.status || 0) === 404 && parent) {
+          setError('');
+          return;
+        }
+        setError(requestError?.message || 'Could not load thread');
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [visible, parentId, conversationId, token, serverUrl, parentMessage, onRead]);
+  }, [
+    visible,
+    parentId,
+    conversationId,
+    token,
+    serverUrl,
+    initialUnreadCount,
+    currentMemberId,
+    onRead,
+  ]);
+
+  useEffect(() => {
+    const targetId = String(initialMessageId || '').trim();
+    if (!visible || !targetId) return;
+
+    const exists = replies.some(
+      (message) => message.message_id === targetId
+    );
+    if (!exists) return;
+
+    setHighlightMessageId(targetId);
+    if (highlightTimerRef.current) {
+      clearTimeout(highlightTimerRef.current);
+    }
+    highlightTimerRef.current = setTimeout(
+      () => setHighlightMessageId(''),
+      2600
+    );
+
+    scrollToThreadMessage(targetId);
+  }, [visible, initialMessageId, replies.length]);
 
   useEffect(() => {
     if (!visible || !Array.isArray(realtimeEvents)) return;
     const events = realtimeEvents.filter((event) => Number(event?.sequence || 0) > lastSequenceRef.current);
     for (const event of events) {
-      lastSequenceRef.current = Math.max(lastSequenceRef.current, Number(event?.sequence || 0));
+      lastSequenceRef.current = Math.max(
+        lastSequenceRef.current,
+        Number(event?.sequence || 0)
+      );
+
       const payload = event?.payload || event;
+
+      if (
+        payload?.type === 'thread_read_cursor.updated' &&
+        payload.conversation_id === conversationId &&
+        payload.thread_root_message_id === parentId &&
+        payload.workspace_member_id !== currentMemberId
+      ) {
+        scheduleThreadReadReceiptRefresh();
+        continue;
+      }
+
       const message = payload?.message;
       if (!message || payload?.conversation_id !== conversationId) continue;
+
       if (message.message_id === parentId) {
         setParent(message);
         continue;
       }
+
       if (message.reply_to_message_id !== parentId) continue;
+
       if (payload.type === 'message.created') {
         setReplies((current) => mergeById([...current, message]));
-        onRead?.(message.message_id);
+
+        const own =
+          message.sender_type === 'HUMAN' &&
+          sameIdentityValue(message.sender_member_id, currentMemberId);
+
         if (nearBottomRef.current) {
+          if (!own) {
+            onRead?.(message.message_id);
+          }
+          setNewMessageDividerId(null);
           requestAnimationFrame(() => {
             scrollRef.current?.scrollToEnd({ animated: true });
           });
         } else {
+          if (!own) {
+            setNewMessageDividerId(
+              (current) => current || message.message_id
+            );
+          }
           setShowJumpToLatest(true);
         }
-      } else if (payload.type === 'message.updated' || payload.type === 'message.deleted') {
-        setReplies((current) => current.map((item) => item.message_id === message.message_id ? message : item));
+      } else if (
+        payload.type === 'message.updated' ||
+        payload.type === 'message.deleted'
+      ) {
+        setReplies((current) =>
+          current.map((item) =>
+            item.message_id === message.message_id
+              ? message
+              : item
+          )
+        );
       }
     }
-  }, [visible, realtimeEvents, conversationId, parentId, onRead]);
+  }, [
+    visible,
+    realtimeEvents,
+    conversationId,
+    parentId,
+    currentMemberId,
+    onRead,
+    serverUrl,
+    token,
+    parentMessage,
+  ]);
 
   const title = useMemo(() => `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}`, [replies.length]);
 
@@ -331,6 +607,26 @@ export default function ThreadModal({
     } catch (requestError) {
       setError(requestError?.message || 'Could not open attachment');
     }
+  }
+
+  function insertThreadEmoji(emoji) {
+    const value = String(emoji || '');
+    if (!value) return;
+
+    setDraft((current) =>
+      `${current}${value}`.slice(0, 8000)
+    );
+
+    setRecentEmojis((current) => {
+      const next = [
+        value,
+        ...current.filter((item) => item !== value),
+      ].slice(0, 8);
+      saveRecentEmojis(next);
+      return next;
+    });
+
+    setShowEmojiPicker(false);
   }
 
   async function submit() {
@@ -387,7 +683,7 @@ export default function ThreadModal({
       navigationBarTranslucent={false}
     >
       <SafeAreaView
-        style={styles.safeArea}
+        style={[styles.safeArea, { backgroundColor: palette.shell }]}
         edges={['top', 'bottom']}
       >
         <StatusBar
@@ -407,7 +703,7 @@ export default function ThreadModal({
             style={styles.header}
           />
 
-          <View style={styles.history}>
+          <View style={[styles.history, { backgroundColor: palette.shell }]}>
             <ScrollView
               ref={scrollRef}
               style={styles.historyScroll}
@@ -426,12 +722,23 @@ export default function ThreadModal({
                   contentSize.height -
                   contentOffset.y -
                   layoutMeasurement.height;
+                const wasNearBottom = nearBottomRef.current;
                 const nowNearBottom = distanceFromBottom < 48;
                 nearBottomRef.current = nowNearBottom;
                 setShowJumpToLatest(distanceFromBottom > 160);
+
+                if (nowNearBottom && !wasNearBottom) {
+                  const latest = replies.at(-1);
+                  if (latest?.message_id) {
+                    onRead?.(latest.message_id);
+                  }
+                  setNewMessageDividerId(null);
+                  setShowJumpToLatest(false);
+                }
               }}
               scrollEventThrottle={32}
               onContentSizeChange={() => {
+                if (newMessageDividerId) return;
                 if (nearBottomRef.current) {
                   scrollRef.current?.scrollToEnd({ animated: false });
                 }
@@ -440,9 +747,15 @@ export default function ThreadModal({
               {parent ? (
                 <ThreadMessage
                   message={parent}
+                  pinned={pinnedMessageIds?.has?.(parent.message_id)}
+                  saved={savedMessageIds?.has?.(parent.message_id)}
                   currentMemberId={currentMemberId}
                   currentPrimaryEmail={currentPrimaryEmail}
                   onOpenAttachment={openAttachment}
+                  onToggleSaved={onToggleSavedMessage}
+                  onShowReaders={(targetMessage) =>
+                    setMessageReadersTarget(targetMessage)
+                  }
                 />
               ) : null}
 
@@ -460,20 +773,80 @@ export default function ThreadModal({
                 <Text style={styles.empty}>No replies yet.</Text>
               ) : null}
 
-              {replies.map((message) => (
-                <ThreadMessage
-                  key={message.message_id}
-                  message={message}
-                  currentMemberId={currentMemberId}
-                  currentPrimaryEmail={currentPrimaryEmail}
-                  onOpenAttachment={openAttachment}
-                />
-              ))}
+              {replies.map((message) => {
+                const showNewMessages =
+                  message.message_id === newMessageDividerId;
+
+                return (
+                  <React.Fragment key={message.message_id}>
+                    {showNewMessages ? (
+                      <View
+                        style={styles.newMessagesRow}
+                        onLayout={(event) => {
+                          if (initialUnreadPositionedRef.current) return;
+
+                          initialUnreadPositionedRef.current = true;
+                          nearBottomRef.current = false;
+                          const targetY = Math.max(
+                            0,
+                            Number(event.nativeEvent?.layout?.y || 0) - 8
+                          );
+
+                          requestAnimationFrame(() => {
+                            scrollRef.current?.scrollTo({
+                              y: targetY,
+                              animated: false,
+                            });
+                          });
+                        }}
+                      >
+                        <View style={styles.newMessagesLine} />
+                        <Text style={styles.newMessagesText}>New messages</Text>
+                        <View style={styles.newMessagesLine} />
+                      </View>
+                    ) : null}
+
+                    <View
+                      onLayout={(event) => {
+                        messageLayoutYRef.current.set(
+                          message.message_id,
+                          Number(event.nativeEvent?.layout?.y || 0)
+                        );
+                      }}
+                      style={
+                        highlightMessageId === message.message_id
+                          ? styles.highlightedMessage
+                          : null
+                      }
+                    >
+                      <ThreadMessage
+                        message={message}
+                        pinned={pinnedMessageIds?.has?.(message.message_id)}
+                        saved={savedMessageIds?.has?.(message.message_id)}
+                        currentMemberId={currentMemberId}
+                        currentPrimaryEmail={currentPrimaryEmail}
+                        onOpenAttachment={openAttachment}
+                        onToggleSaved={onToggleSavedMessage}
+                        onShowReaders={(targetMessage) =>
+                          setMessageReadersTarget(targetMessage)
+                        }
+                      />
+                    </View>
+                  </React.Fragment>
+                );
+              })}
             </ScrollView>
 
             <JumpToLatestButton
               visible={showJumpToLatest}
-              onPress={() => scrollToLatest(true)}
+              onPress={() => {
+                scrollToLatest(true);
+                const latest = replies.at(-1);
+                if (latest?.message_id) {
+                  onRead?.(latest.message_id);
+                }
+                setNewMessageDividerId(null);
+              }}
             />
           </View>
 
@@ -516,6 +889,13 @@ export default function ThreadModal({
             </View>
           ) : null}
 
+          <ConversationEmojiPicker
+            visible={showEmojiPicker}
+            recentEmojis={recentEmojis}
+            allEmojis={COMPOSER_EMOJIS}
+            onSelect={insertThreadEmoji}
+          />
+
           <ConversationComposer
             value={draft}
             onChangeText={setDraft}
@@ -527,12 +907,26 @@ export default function ThreadModal({
             attachmentDisabled={
               sending || pending.length >= MAX_PENDING_ATTACHMENTS
             }
+            onEmojiPress={() =>
+              setShowEmojiPicker((current) => !current)
+            }
+            emojiOpen={showEmojiPicker}
             onSend={submit}
             sendDisabled={
               sending || (!draft.trim() && pending.length === 0)
             }
             sending={sending}
             sendLabel="Send"
+          />
+
+          <MessageReadersModal
+            visible={Boolean(messageReadersTarget)}
+            serverUrl={serverUrl}
+            token={token}
+            conversationId={conversationId}
+            message={messageReadersTarget}
+            refreshEpoch={messageReadersRefreshEpoch}
+            onClose={() => setMessageReadersTarget(null)}
           />
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -645,14 +1039,25 @@ const styles = StyleSheet.create({
     color: '#687B8E',
     marginTop: 2,
   },
-  v16oReadReceipt: {
+  v16oReadReceiptButton: {
     marginTop: 6,
     alignSelf: 'flex-end',
+  },
+  v16oReadReceipt: {
     fontSize: 10,
-    fontWeight: '700',
-    color: '#5D7790',
+    fontWeight: '800',
+    color: colors.primary,
   },
 
+  highlightedMessage: {
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: colors.brandOrange,
+    backgroundColor: '#FFF6E9',
+  },
+  pressed: {
+    opacity: 0.75,
+  },
   safeArea: {
     flex: 1,
     backgroundColor: colors.primary,
@@ -679,6 +1084,38 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     paddingBottom: 28,
   },
+  newMessagesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginVertical: 12,
+  },
+  newMessagesLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#F2A44A',
+  },
+  newMessagesText: {
+    color: '#D97912',
+    fontSize: 11.5,
+    fontWeight: '900',
+  },
+  v16oFlagsRow: {
+    marginTop: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  v16oPinned: { color: '#6B7280', fontSize: 8.5, fontWeight: '800' },
+  v16oSaved: { color: '#5B6F86', fontSize: 8.5, fontWeight: '800' },
+  v16oSaveButton: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(8,121,231,0.08)',
+  },
+  v16oSaveText: { color: '#0879E7', fontSize: 9, fontWeight: '900' },
   separator: {
     flexDirection: 'row',
     alignItems: 'center',

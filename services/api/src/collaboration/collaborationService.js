@@ -109,7 +109,6 @@ function createCollaborationService(repository, { presenceRegistry = null } = {}
     );
 
     if (
-      channel.visibility === 'PRIVATE' &&
       !channel.requester_is_member &&
       !workspaceCanManage
     ) {

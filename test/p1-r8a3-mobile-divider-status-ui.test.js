@@ -17,7 +17,7 @@ test('R8A.3 mobile captures unread count before opening a conversation', () => {
   assert.match(app, /setSelectedConversation\(\{\s*\.\.\.selection,\s*unreadAtOpen,/s);
 });
 
-test('R8A.3 mobile shows Unread messages divider for unread-at-open history', () => {
+test('R8A.3 mobile shows New messages divider for unread-at-open history', () => {
   const screen = read('apps/mobile/src/screens/ConversationScreen.jsx');
 
   assert.match(
@@ -38,7 +38,7 @@ test('R8A.3 mobile shows Unread messages divider for unread-at-open history', ()
   );
   assert.match(screen, /setNewMessageDividerId\(dividerId\)/);
   assert.match(screen, /initialUnreadPositionedRef/);
-  assert.match(screen, />\s*Unread messages\s*</);
+  assert.match(screen, />\s*New messages\s*</);
 });
 
 test('R8A.3 web status dot is beside the avatar and has no surround ring', () => {

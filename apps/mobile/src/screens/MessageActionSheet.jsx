@@ -3,10 +3,10 @@ import {
   Modal,
   Pressable,
   StyleSheet,
-  Text,
   View,
 } from 'react-native';
 
+import Text from '../theme/AppText';
 import { colors } from '../theme/colors';
 
 export default function MessageActionSheet({

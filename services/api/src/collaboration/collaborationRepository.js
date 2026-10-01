@@ -53,10 +53,7 @@ function createCollaborationRepository(db) {
       WHERE c.workspace_id = $1
         AND c.status = 'ACTIVE'
         AND conv.status = 'ACTIVE'
-        AND (
-          c.visibility = 'PUBLIC'
-          OR cm.workspace_member_id IS NOT NULL
-        )
+        AND cm.workspace_member_id IS NOT NULL
       ORDER BY LOWER(c.channel_name), c.channel_id
     `, [workspaceId, requesterMemberId]);
 

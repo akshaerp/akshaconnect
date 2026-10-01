@@ -201,12 +201,7 @@ test(
 
     assert.match(
       screen,
-      />\s*Save\s*</
-    );
-
-    assert.match(
-      screen,
-      />\s*Send\s*</
+      /sendLabel=\{editingMessage \? 'Save' : 'Send'\}/
     );
 
     assert.match(

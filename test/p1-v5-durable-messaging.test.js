@@ -297,7 +297,8 @@ test('P1-V5 durable web foundations remain active under later realtime checkpoin
 
 test('repository SQL keeps channel/DM access scoped and read cursor monotonic', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'services', 'api', 'src', 'messaging', 'messagingRepository.js'), 'utf8');
-  assert.match(source, /ch\.visibility = 'PUBLIC' OR cm\.workspace_member_id IS NOT NULL/);
+  assert.match(source, /conv\.conversation_type = 'CHANNEL'[\s\S]*cm\.workspace_member_id IS NOT NULL/);
+  assert.doesNotMatch(source, /ch\.visibility = 'PUBLIC' OR cm\.workspace_member_id IS NOT NULL/);
   assert.match(source, /conversation_type IN \('DM', 'GROUP_DM'\)[\s\S]*cp\.workspace_member_id IS NOT NULL/);
   assert.match(source, /ON CONFLICT \(workspace_id, conversation_id, workspace_member_id\)/);
   assert.match(source, /current_message\.created_at[\s\S]*candidate_message\.created_at/);

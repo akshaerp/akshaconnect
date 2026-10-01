@@ -38,12 +38,18 @@ test('V16-C mobile and web provide custom status with expiry and last seen displ
   const mobileApi = read('apps/mobile/src/api/client.js');
   const mobileSettings = read('apps/mobile/src/screens/SettingsScreen.jsx');
   const mobileConversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
+  const mobileHome = read('apps/mobile/src/screens/HomeScreen.jsx');
   const webApi = read('apps/web/src/api.js');
   const web = read('apps/web/src/App.jsx');
   assert.match(mobileApi, /updateOwnPresenceProfile/);
   assert.match(mobileSettings, /Save status/);
   assert.match(mobileSettings, /statusExpiresAt/);
+  assert.match(mobileSettings, /Custom: YYYY-MM-DD HH:MM/);
+  assert.match(mobileSettings, /customExpiryFromLocalText/);
   assert.match(mobileConversation, /Last seen/);
+  assert.match(mobileConversation, /peerCustomStatus/);
+  assert.match(mobileHome, /presenceProfilesByMember/);
+  assert.match(mobileHome, /custom_status/);
   assert.match(webApi, /updateOwnPresenceProfile/);
   assert.match(web, /Your status/);
   assert.match(web, /Last seen/);

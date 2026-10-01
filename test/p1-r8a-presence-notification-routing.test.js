@@ -552,8 +552,8 @@ test('R8A.3 web DM navigation shows explicit status text with a standalone ringl
   assert.doesNotMatch(styles, /\.dm-avatar-presence\s*\{/);
 });
 
-test('R8A.2 Android release advances to versionCode 15', () => {
+test('R8A.2 Android release remains on the current V16 development line', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
-  assert.match(gradle, /versionCode 15/);
-  assert.match(gradle, /versionName "0\.3\.0-v15"/);
+  assert.match(gradle, /versionCode 16/);
+  assert.match(gradle, /versionName "0\.3\.0-v16"/);
 });

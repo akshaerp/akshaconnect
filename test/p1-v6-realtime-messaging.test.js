@@ -287,7 +287,8 @@ test('websocket requires first-frame session auth and rejects invalid session', 
 test('repository unread SQL is access-scoped and does not count own human messages', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'services', 'api', 'src', 'messaging', 'messagingRepository.js'), 'utf8');
   assert.match(source, /listUnreadCounts/);
-  assert.match(source, /ch\.visibility = 'PUBLIC' OR cm\.workspace_member_id IS NOT NULL/);
+  assert.match(source, /conv\.conversation_type = 'CHANNEL'[\s\S]*cm\.workspace_member_id IS NOT NULL/);
+  assert.doesNotMatch(source, /ch\.visibility = 'PUBLIC' OR cm\.workspace_member_id IS NOT NULL/);
   assert.match(source, /m\.sender_member_id IS DISTINCT FROM \$2::uuid/);
   assert.match(source, /last_read_message_id/);
   assert.match(source, /listConversationRecipientMemberIds/);

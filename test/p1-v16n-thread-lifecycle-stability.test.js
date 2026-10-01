@@ -49,7 +49,7 @@ test('V16-N thread read acknowledgement does not rewrite an already-read parent 
   );
 });
 
-test('V16-N guard documents why ThreadModal callback identity must remain stable', () => {
+test('V16-N guard keeps ThreadModal read callback stable without parent-edit reload loops', () => {
   const thread = read('apps/mobile/src/screens/ThreadModal.jsx');
 
   assert.match(
@@ -60,7 +60,13 @@ test('V16-N guard documents why ThreadModal callback identity must remain stable
 
   assert.match(
     thread,
-    /\[\s*visible,\s*parentId,\s*conversationId,\s*token,\s*serverUrl,\s*parentMessage,\s*onRead\s*\]\s*\);/s,
-    'ThreadModal load effect currently depends on onRead identity'
+    /\[\s*visible,\s*parentId,\s*conversationId,\s*token,\s*serverUrl,\s*initialUnreadCount,\s*currentMemberId,\s*onRead\s*,?\s*\]\s*\);/s,
+    'ThreadModal load effect must remain stable across realtime parent-message edits'
+  );
+
+  assert.match(
+    thread,
+    /if \(message\.message_id === parentId\) \{[\s\S]*?setParent\(message\);[\s\S]*?continue;/,
+    'Realtime parent edits must update local thread state without reloading the thread'
   );
 });

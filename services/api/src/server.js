@@ -29,6 +29,7 @@ const {
 } = require('./collaboration/conversationPlatformService');
 const { createMessagingRepository } = require('./messaging/messagingRepository');
 const { createMessagingService } = require('./messaging/messagingService');
+const { createMessageReadersHttpHandler } = require('./messaging/messageReadersHttpHandler');
 const { createMessageCryptoFromEnv } = require('./messaging/messageCrypto');
 const { createAttachmentCryptoFromEnv } = require('./attachments/attachmentCrypto');
 const { createAttachmentRepository } = require('./attachments/attachmentRepository');
@@ -178,6 +179,12 @@ async function start() {
         attachmentCleanup: attachmentService,
       }
     );
+
+  const messageReadersHttpHandler =
+    createMessageReadersHttpHandler({
+      localIdentityService,
+      db: pool,
+    });
 
   let ssoService = null;
   let ssoRepository = null;
@@ -339,6 +346,14 @@ async function start() {
 
         handled =
           await workspaceDirectoryHttpHandler(
+            req,
+            res
+          );
+
+        if (handled) return;
+
+        handled =
+          await messageReadersHttpHandler(
             req,
             res
           );
