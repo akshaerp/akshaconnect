@@ -94,10 +94,10 @@ test('V15-A update policy still honors deployment overrides', () => {
   assert.equal(policy.minimum_version_code, 14);
 });
 
-test('V15-A accepted V15 baseline remains on Android versionCode 15 during V16 physical testing', () => {
+test('V15-A feature coverage remains valid on the current VC17 Android identity', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
-  assert.match(gradle, /versionCode 15/);
-  assert.match(gradle, /versionName "0\.3\.0-v15"/);
+  assert.match(gradle, /versionCode 17/);
+  assert.match(gradle, /versionName "0\.3\.0-v17"/);
 });
 
 

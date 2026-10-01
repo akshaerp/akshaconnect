@@ -44,9 +44,9 @@ test('R8C web uses namespaced localStorage drafts and clears only after send suc
   assert.match(app, /updateDraft\(event\.target\.value\)/);
 });
 
-test('R8C preserves the accepted V15 Android baseline and Play signing', () => {
+test('R8C preserves the current VC17 Android identity and Play signing', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
-  assert.match(gradle, /versionCode 15/);
-  assert.match(gradle, /versionName "0\.3\.0-v15"/);
+  assert.match(gradle, /versionCode 17/);
+  assert.match(gradle, /versionName "0\.3\.0-v17"/);
   assert.match(gradle, /AKSHACONNECT_UPLOAD_STORE_FILE/);
 });

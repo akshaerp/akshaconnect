@@ -64,7 +64,9 @@ test('P1-V8A V2 conversation screen renders durable history and bounded paginati
   );
 
   assert.match(screen, /listMessages/);
-  assert.match(screen, /Load older messages/);
+  assert.match(screen, /async function loadOlder\(\)/);
+  assert.match(screen, /contentOffset\.y <= 120/);
+  assert.match(screen, /page\.has_more/);
   assert.match(screen, /next_before_message_id/);
   assert.match(screen, /sender_display_name/);
   assert.match(screen, /created_at/);
@@ -72,27 +74,31 @@ test('P1-V8A V2 conversation screen renders durable history and bounded paginati
   assert.match(screen, /Yesterday/);
 });
 
-test('P1-V8A V2 sends idempotent text without fabricating delivery receipts', () => {
+test('P1-V8A V2 sends idempotent text without fabricating delivery state', () => {
   const screen = read(
     'apps/mobile/src/screens/ConversationScreen.jsx'
+  );
+  const chrome = read(
+    'apps/mobile/src/screens/ConversationChrome.jsx'
   );
 
   assert.match(screen, /sendMessage/);
   assert.match(screen, /makeClientMessageId/);
   assert.match(screen, /MAX_MESSAGE_CHARS = 8000/);
-  assert.match(screen, />\s*Send\s*</);
+  assert.match(screen, /<ConversationComposer/);
+  assert.match(screen, /onSend=\{submitMessage\}/);
+  assert.match(chrome, /sendLabel = 'Send'/);
+  assert.match(chrome, /accessibilityLabel=\{sendLabel\}/);
 
-  const forbiddenReceiptPresentation = [
+  const forbiddenFabricatedDeliveryPresentation = [
     />\s*Delivered\s*</i,
     />\s*Seen\s*</i,
-    />\s*Read by\b/i,
     /['"`]Delivered['"`]/i,
     /['"`]Seen['"`]/i,
-    /['"`]Read by\b/i,
     /double[- ]check/i,
   ];
 
-  for (const pattern of forbiddenReceiptPresentation) {
+  for (const pattern of forbiddenFabricatedDeliveryPresentation) {
     assert.doesNotMatch(screen, pattern);
   }
 });

@@ -234,7 +234,7 @@ test('R8A open-chat incoming messages render realtime content without unread or 
 
   assert.match(
     screen,
-    />\s*Unread messages\s*</
+    />\s*New messages\s*</
   );
 
   assert.match(

@@ -36,11 +36,15 @@ test('V16-L message actions use compact action icons rather than six full reacti
 
 test('V16-L composer keeps emoji control inside the text field to preserve chat width', () => {
   const conversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
+  const chrome = read('apps/mobile/src/screens/ConversationChrome.jsx');
 
-  assert.match(conversation, /style=\{styles\.composerInputShell\}/);
-  assert.match(conversation, /styles\.inlineEmojiButton/);
-  assert.match(conversation, /paddingRight:\s*42/);
-  assert.match(conversation, /minWidth:\s*54/);
+  assert.match(conversation, /<ConversationComposer/);
+  assert.match(conversation, /onEmojiPress/);
+  assert.match(chrome, /style=\{styles\.composerInputShell\}/);
+  assert.match(chrome, /styles\.inlineEmojiButton/);
+  assert.match(chrome, /inputWithEmoji:[\s\S]*paddingRight:\s*44/);
+  assert.match(chrome, /inlineEmojiButton:[\s\S]*position:\s*'absolute'/);
+  assert.match(chrome, /sendButton:[\s\S]*minWidth:\s*66/);
 });
 
 test('V16-L quoted reply remains visibly embedded and jumps to the original message', () => {

@@ -545,7 +545,7 @@ test(
 );
 
 test(
-  'V14.2 requires no database migration and keeps Android on the current V16 development line',
+  'V14.2 requires no database migration and remains valid on the current VC17 Android identity',
   () => {
     const schema = fs.readFileSync(
       path.join(
@@ -585,11 +585,11 @@ test(
     );
     assert.match(
       gradle,
-      /versionCode 16/
+      /versionCode 17/
     );
     assert.match(
       gradle,
-      /versionName "0\.3\.0-v16"/
+      /versionName "0\.3\.0-v17"/
     );
   }
 );

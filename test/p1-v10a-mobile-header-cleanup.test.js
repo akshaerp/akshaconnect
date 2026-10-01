@@ -18,11 +18,11 @@ test('authenticated shell no longer renders the legacy dark AccountBar', () => {
   assert.doesNotMatch(source, /styles\.accountBar\b/);
 });
 
-test('authenticated status bar uses the clean white safe-area header', () => {
+test('authenticated status bar follows the active light or dark appearance', () => {
   const source = read('apps/mobile/App.jsx');
   assert.match(
     source,
-    /<StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" \/>/
+    /<StatusBar barStyle=\{darkMode \? "light-content" : "dark-content"\} backgroundColor=\{palette\.surface\} \/>/
   );
 });
 

@@ -8,8 +8,10 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 test('V16-I mobile composer has emoji picker and durable recent emojis', () => {
   const mobile = read('apps/mobile/src/screens/ConversationScreen.jsx');
+  const chrome = read('apps/mobile/src/screens/ConversationChrome.jsx');
   const store = read('apps/mobile/src/emoji/recentEmojiStore.js');
-  assert.match(mobile, /Choose emoji/);
+  assert.match(chrome, /accessibilityLabel="Choose emoji"/);
+  assert.match(chrome, /COMPOSER_EMOJIS/);
   assert.match(mobile, /COMPOSER_EMOJIS/);
   assert.match(mobile, /loadRecentEmojis/);
   assert.match(mobile, /saveRecentEmojis/);

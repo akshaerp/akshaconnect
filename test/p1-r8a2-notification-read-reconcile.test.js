@@ -29,8 +29,10 @@ test('R8A.2 foreground notification identity is conversation scoped', () => {
 test('R8A.2 read cursor reconciliation clears that conversation only', () => {
   const app = read('apps/mobile/App.jsx');
 
-  assert.match(app, /clearConversationNotifications\(payload\.conversation_id\)\.catch/);
-  assert.match(app, /clearConversationNotifications\(conversationId\)\.catch/);
+  assert.match(app, /async function clearConversationNotificationsReliably\(conversationId\)/);
+  assert.match(app, /const delays = \[0, 250, 900\]/);
+  assert.match(app, /clearConversationNotificationsReliably\(payload\.conversation_id\)\.catch/);
+  assert.match(app, /clearConversationNotificationsReliably\(conversationId\)\.catch/);
   assert.match(app, /current\?\.selection\?\.conversationId === conversationId/);
 });
 
@@ -43,9 +45,9 @@ test('R8A.2 FCM has a stable Android tag per conversation', () => {
   assert.match(sender, /notification:\s*androidNotification/);
 });
 
-test('R8A.2 Android internal build uses accepted v15 baseline', () => {
+test('R8A.2 Android build uses the current VC17 package identity', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
 
-  assert.match(gradle, /versionCode 15/);
-  assert.match(gradle, /versionName "0\.3\.0-v15"/);
+  assert.match(gradle, /versionCode 17/);
+  assert.match(gradle, /versionName "0\.3\.0-v17"/);
 });

@@ -89,6 +89,9 @@ test('V4B1 picker validation and preview remain present as later V4B stages exte
   const screen = read(
     'apps/mobile/src/screens/ConversationScreen.jsx'
   );
+  const chrome = read(
+    'apps/mobile/src/screens/ConversationChrome.jsx'
+  );
 
   assert.match(screen, /pendingAttachments/);
   assert.match(screen, /chooseAttachments/);
@@ -96,7 +99,7 @@ test('V4B1 picker validation and preview remain present as later V4B stages exte
   assert.match(screen, /formatFileSize/);
   assert.match(screen, /attachmentBadge/);
   assert.match(screen, />\s*Attachments\s*</);
-  assert.match(screen, /accessibilityLabel="Attach files"/);
+  assert.match(chrome, /accessibilityLabel="Attach files"/);
   assert.match(
     screen,
     /errorCodes\.OPERATION_CANCELED/
