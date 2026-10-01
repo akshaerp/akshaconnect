@@ -244,6 +244,11 @@ test('V3C2B preserves V3B2 and V3C1 UX', () => {
 
   assert.match(
     conversation,
-    /Platform\.OS === 'ios'[\s\S]*\? 'padding'[\s\S]*: 'height'/
+    /behavior="padding"/
+  );
+
+  assert.match(
+    conversation,
+    /keyboardVerticalOffset=\{[\s\S]*Platform\.OS === 'android'[\s\S]*\?[\s\S]*56[\s\S]*:[\s\S]*0[\s\S]*\}/
   );
 });

@@ -3334,8 +3334,8 @@ export default function ConversationScreen({
       saveRecentEmojis(next);
       return next;
     });
-    setShowEmojiPicker(false);
-    requestAnimationFrame(() => composerInputRef.current?.focus?.());
+    // Keep the emoji picker open so multiple emoji can be inserted
+    // without reopening it after every selection.
   }
 
   async function reactToMessage(message, emoji) {

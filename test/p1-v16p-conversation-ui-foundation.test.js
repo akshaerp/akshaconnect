@@ -21,14 +21,14 @@ function parse(relative) {
   return source;
 }
 
-test('V16-P shared conversation chrome parses and defines one 10-line composer', () => {
+test('V16-P shared conversation chrome parses and defines the current six-line composer', () => {
   const chrome = parse(
     'apps/mobile/src/screens/ConversationChrome.jsx'
   );
 
   assert.match(
     chrome,
-    /CONVERSATION_COMPOSER_MAX_LINES\s*=\s*10/
+    /CONVERSATION_COMPOSER_MAX_LINES\s*=\s*6/
   );
   assert.match(
     chrome,

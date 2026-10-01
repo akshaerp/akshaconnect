@@ -249,3 +249,103 @@ test('V17-C2.1 composer switches from compact one-row to full-width input plus t
     /CONVERSATION_COMPOSER_MAX_LINES = 6/
   );
 });
+
+
+test(
+  'V17-C2.4 expanded composer is slim and emoji picker stays open for multi-selection',
+  () => {
+    const chrome =
+      read(
+        'apps/mobile/src/screens/ConversationChrome.jsx',
+      );
+
+    const conversation =
+      read(
+        'apps/mobile/src/screens/ConversationScreen.jsx',
+      );
+
+    const thread =
+      read(
+        'apps/mobile/src/screens/ThreadModal.jsx',
+      );
+
+    assert.match(
+      chrome,
+      /composerExpanded:[\s\S]*paddingTop:\s*4[\s\S]*paddingBottom:\s*4/
+    );
+
+    assert.match(
+      chrome,
+      /composerToolbar:[\s\S]*marginTop:\s*3/
+    );
+
+    assert.match(
+      chrome,
+      /toolbarActionButton:[\s\S]*width:\s*36[\s\S]*height:\s*36/
+    );
+
+    assert.match(
+      chrome,
+      /toolbarAttachButton:[\s\S]*width:\s*36[\s\S]*height:\s*36/
+    );
+
+    assert.match(
+      chrome,
+      /toolbarSendButton:[\s\S]*width:\s*36[\s\S]*height:\s*36/
+    );
+
+    const mainEmojiStart =
+      conversation.indexOf(
+        'function insertEmoji(emoji)'
+      );
+
+    const mainEmojiEnd =
+      conversation.indexOf(
+        'async function reactToMessage',
+        mainEmojiStart
+      );
+
+    assert.ok(
+      mainEmojiStart >= 0 &&
+      mainEmojiEnd > mainEmojiStart
+    );
+
+    const mainEmoji =
+      conversation.slice(
+        mainEmojiStart,
+        mainEmojiEnd
+      );
+
+    assert.doesNotMatch(
+      mainEmoji,
+      /setShowEmojiPicker\(false\)/
+    );
+
+    const threadEmojiStart =
+      thread.indexOf(
+        'function insertThreadEmoji(emoji)'
+      );
+
+    const threadEmojiEnd =
+      thread.indexOf(
+        'async function submit',
+        threadEmojiStart
+      );
+
+    assert.ok(
+      threadEmojiStart >= 0 &&
+      threadEmojiEnd > threadEmojiStart
+    );
+
+    const threadEmoji =
+      thread.slice(
+        threadEmojiStart,
+        threadEmojiEnd
+      );
+
+    assert.doesNotMatch(
+      threadEmoji,
+      /setShowEmojiPicker\(false\)/
+    );
+  }
+);

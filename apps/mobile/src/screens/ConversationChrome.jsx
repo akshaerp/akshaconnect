@@ -416,7 +416,7 @@ export function ConversationComposer({
         }) => [
           styles.composerActionButton,
           toolbar
-            ? null
+            ? styles.toolbarActionButton
             : styles.compactEmojiButton,
           {
             backgroundColor:
@@ -904,8 +904,8 @@ const styles = StyleSheet.create({
   composerExpanded: {
     flexDirection: 'column',
     alignItems: 'stretch',
-    paddingTop: 8,
-    paddingBottom: 7,
+    paddingTop: 4,
+    paddingBottom: 4,
   },
   composerInputRow: {
     width: '100%',
@@ -928,10 +928,11 @@ const styles = StyleSheet.create({
   },
   composerInputShellExpanded: {
     width: '100%',
+    borderRadius: 18,
   },
   composerToolbar: {
     width: '100%',
-    marginTop: 7,
+    marginTop: 3,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -947,14 +948,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  toolbarActionButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
   compactEmojiButton: {
     marginLeft: 7,
   },
   toolbarAttachButton: {
+    width: 36,
+    height: 36,
     marginRight: 0,
+    borderRadius: 18,
   },
   toolbarSendButton: {
-    marginLeft: 7,
+    width: 36,
+    height: 36,
+    marginLeft: 6,
+    borderRadius: 18,
   },
   controlDisabled: {
     opacity: 0.35,

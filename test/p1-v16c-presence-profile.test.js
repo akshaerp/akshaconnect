@@ -44,8 +44,9 @@ test('V16-C mobile and web provide custom status with expiry and last seen displ
   assert.match(mobileApi, /updateOwnPresenceProfile/);
   assert.match(mobileSettings, /Save status/);
   assert.match(mobileSettings, /statusExpiresAt/);
-  assert.match(mobileSettings, /Custom: YYYY-MM-DD HH:MM/);
-  assert.match(mobileSettings, /customExpiryFromLocalText/);
+  assert.match(mobileSettings, /AkshaConnectDateTimePicker/);
+  assert.match(mobileSettings, /openCustomExpiryPicker/);
+  assert.match(mobileSettings, /Choose date & time/);
   assert.match(mobileConversation, /Last seen/);
   assert.match(mobileConversation, /peerCustomStatus/);
   assert.match(mobileHome, /presenceProfilesByMember/);

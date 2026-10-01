@@ -626,7 +626,8 @@ export default function ThreadModal({
       return next;
     });
 
-    setShowEmojiPicker(false);
+    // Keep the emoji picker open so multiple emoji can be inserted
+    // before sending the thread reply.
   }
 
   async function submit() {

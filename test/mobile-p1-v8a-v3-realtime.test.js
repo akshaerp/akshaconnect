@@ -250,12 +250,12 @@ test('P1-V8A V3C1 keeps Android composer above keyboard and latest chat visible'
 
   assert.match(
     screen,
-    /Platform\.OS === 'ios'[\s\S]*\? 'padding'[\s\S]*: 'height'/
+    /behavior="padding"/
   );
 
   assert.match(
     screen,
-    /keyboardVerticalOffset=\{0\}/
+    /keyboardVerticalOffset=\{[\s\S]*Platform\.OS === 'android'[\s\S]*\?[\s\S]*56[\s\S]*:[\s\S]*0[\s\S]*\}/
   );
 
   assert.match(

@@ -88,7 +88,10 @@ test('P1-V8A V2 sends idempotent text without fabricating delivery state', () =>
   assert.match(screen, /<ConversationComposer/);
   assert.match(screen, /onSend=\{submitMessage\}/);
   assert.match(chrome, /sendLabel = 'Send'/);
-  assert.match(chrome, /accessibilityLabel=\{sendLabel\}/);
+  assert.match(
+    chrome,
+    /accessibilityLabel=\{\s*sendLabel\s*\}/
+  );
 
   const forbiddenFabricatedDeliveryPresentation = [
     />\s*Delivered\s*</i,
