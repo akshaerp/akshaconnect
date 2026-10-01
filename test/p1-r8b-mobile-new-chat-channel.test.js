@@ -40,8 +40,8 @@ test('R8B mobile HomeScreen exposes new chat people search and new channel creat
   assert.match(home, /onCreateChannel\(\{/);
 });
 
-test('R8B Android build uses the current VC17 package identity', () => {
+test('R8B Android build uses the current VC18 package identity', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
-  assert.match(gradle, /versionCode 17/);
-  assert.match(gradle, /versionName "0\.3\.0-v17"/);
+  assert.match(gradle, /versionCode 18/);
+  assert.match(gradle, /versionName "0\.3\.0-v18"/);
 });
