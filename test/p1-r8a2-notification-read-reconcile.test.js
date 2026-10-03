@@ -45,11 +45,11 @@ test('R8A.2 FCM has a stable Android tag per conversation', () => {
   assert.match(sender, /notification:\s*androidNotification/);
 });
 
-test('R8A.2 Android build uses the current VC18 package identity', () => {
+test('R8A.2 Android build uses the current VC19 package identity', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
 
-  assert.match(gradle, /versionCode 18/);
-  assert.match(gradle, /versionName "0\.3\.0-v18"/);
+  assert.match(gradle, /versionCode 19/);
+  assert.match(gradle, /versionName "0\.3\.0-v19"/);
 });
 
 

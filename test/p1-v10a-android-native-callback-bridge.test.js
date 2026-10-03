@@ -50,9 +50,9 @@ test('R6 native callback bridge actively emits warm callbacks to React Native', 
   assert.match(pkg, /listOf\(AkshaConnectAuthBridgeModule\(reactContext\)\)/);
 });
 
-test('current APK/AAB version uses the VC18 release identity', () => {
+test('current APK/AAB version uses the VC19 release identity', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
 
-  assert.match(gradle, /versionCode 18/);
-  assert.match(gradle, /versionName "0\.3\.0-v18"/);
+  assert.match(gradle, /versionCode 19/);
+  assert.match(gradle, /versionName "0\.3\.0-v19"/);
 });
