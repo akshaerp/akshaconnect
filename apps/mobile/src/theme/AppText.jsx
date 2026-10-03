@@ -11,6 +11,7 @@ import {
 
 export default function AppText({
   style,
+  allowFontScaling = false,
   ...props
 }) {
   const { textScale } = useAppAppearance();
@@ -34,6 +35,7 @@ export default function AppText({
   return (
     <NativeText
       {...props}
+      allowFontScaling={allowFontScaling}
       style={[style, scaled]}
     />
   );

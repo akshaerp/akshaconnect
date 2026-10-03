@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -240,7 +242,10 @@ export default function HomeScreen({
         >
           <Image source={brandMark} style={styles.brandLogo} resizeMode="contain" />
           <View style={styles.brandTextWrap}>
-            <Text style={styles.brandText}>
+            <Text
+              style={styles.brandText}
+              numberOfLines={1}
+            >
               <Text style={styles.brandAksha}>Aksha</Text>
               <Text style={styles.brandConnect}>Connect</Text>
             </Text>
@@ -347,7 +352,10 @@ export default function HomeScreen({
                   pressed ? styles.pressed : null,
                 ]}
               >
-                <Text style={styles.newButtonText}>
+                <Text
+                  style={styles.newButtonText}
+                  numberOfLines={1}
+                >
                   {activeTab === 'chats' ? '+ New chat' : '+ New channel'}
                 </Text>
               </Pressable>
@@ -454,7 +462,11 @@ export default function HomeScreen({
         animationType="slide"
         onRequestClose={closeComposer}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+        >
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
               <View style={styles.modalHeaderCopy}>
@@ -548,7 +560,7 @@ export default function HomeScreen({
               )}
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -557,8 +569,17 @@ export default function HomeScreen({
         animationType="slide"
         onRequestClose={closeComposer}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+        >
           <View style={styles.modalSheet}>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.channelModalContent}
+            >
             <View style={styles.modalHeader}>
               <View style={styles.modalHeaderCopy}>
                 <Text style={styles.modalTitle}>Create channel</Text>
@@ -639,8 +660,9 @@ export default function HomeScreen({
                 <Text style={styles.createButtonText}>Create channel</Text>
               )}
             </Pressable>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
@@ -657,7 +679,10 @@ function TopTab({ label, active, unread = 0, onPress }) {
       ]}
     >
       <View style={styles.tabLabelRow}>
-        <Text style={[styles.tabText, active ? styles.tabTextActive : null]}>
+        <Text
+          style={[styles.tabText, active ? styles.tabTextActive : null]}
+          numberOfLines={1}
+        >
           {label}
         </Text>
         {unread > 0 ? (
@@ -1199,12 +1224,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(8, 29, 55, 0.34)',
   },
   modalSheet: {
-    maxHeight: '82%',
+    maxHeight: '88%',
     padding: 18,
-    paddingBottom: 28,
+    paddingBottom: 20,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     backgroundColor: '#FFFFFF',
+  },
+  channelModalContent: {
+    paddingBottom: 8,
   },
   modalHeader: {
     flexDirection: 'row',

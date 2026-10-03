@@ -12,6 +12,7 @@ import {
 const AppTextInput = forwardRef(function AppTextInput(
   {
     style,
+    allowFontScaling = false,
     ...props
   },
   ref
@@ -38,6 +39,7 @@ const AppTextInput = forwardRef(function AppTextInput(
     <NativeTextInput
       {...props}
       ref={ref}
+      allowFontScaling={allowFontScaling}
       style={[style, scaled]}
     />
   );

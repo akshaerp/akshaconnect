@@ -158,6 +158,6 @@ test('V4A3R1C hides authenticated mobile vertical scroll indicators', () => {
       /showsVerticalScrollIndicator=\{false\}/g
     ) || [];
 
-  assert.equal(homeMatches.length, 1);
+  assert.equal(homeMatches.length, 2);
   assert.equal(settingsMatches.length, 1);
 });

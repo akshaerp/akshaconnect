@@ -639,6 +639,7 @@ export default function SettingsScreen({
                         ? styles.textSizeOptionLabelSelected
                         : null,
                     ]}
+                    numberOfLines={1}
                   >
                     {option.label}
                   </Text>
@@ -952,6 +953,7 @@ function SettingRow({
               palette.textPrimary,
           },
         ]}
+        numberOfLines={1}
       >
         {label}
       </Text>
@@ -1013,6 +1015,7 @@ function ActionRow({
               ? styles.actionPrimary
               : null,
           ]}
+          numberOfLines={1}
         >
           {label}
         </Text>
