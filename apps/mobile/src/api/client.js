@@ -570,6 +570,23 @@ export function markRead(baseUrl, token, conversationId, lastReadMessageId) {
   );
 }
 
+export function markMessageDelivered(
+  baseUrl,
+  token,
+  conversationId,
+  messageId
+) {
+  return request(
+    baseUrl,
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}/delivery`,
+    {
+      token,
+      method: 'PUT',
+    }
+  );
+}
+
 export function registerPush(
   baseUrl,
   token,

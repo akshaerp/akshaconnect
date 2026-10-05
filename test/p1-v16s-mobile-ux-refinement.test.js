@@ -98,7 +98,7 @@ test('V16-S adds persistent app text-size choices with a slightly larger default
 });
 
 test('V16-S applies scalable app text to the principal authenticated communication surfaces', () => {
-  const files = [
+  const surfaceFiles = [
     'apps/mobile/src/screens/HomeScreen.jsx',
     'apps/mobile/src/screens/SettingsScreen.jsx',
     'apps/mobile/src/screens/ConversationScreen.jsx',
@@ -110,7 +110,7 @@ test('V16-S applies scalable app text to the principal authenticated communicati
     'apps/mobile/src/screens/ConversationChrome.jsx',
   ];
 
-  for (const rel of files) {
+  for (const rel of surfaceFiles) {
     const source = read(rel);
     assert.match(
       source,
@@ -120,14 +120,15 @@ test('V16-S applies scalable app text to the principal authenticated communicati
   }
 });
 
+test('V20.1 Message Info avoids misleading receipt state and visible polling', () => {
+  const info = parse('apps/mobile/src/screens/MessageReadersModal.jsx');
 
-test('V16-S reader details avoids misleading Read by 0 while loading or unavailable', () => {
-  const readers = parse('apps/mobile/src/screens/MessageReadersModal.jsx');
-
-  assert.match(readers, /const firstLoadPending/);
-  assert.match(readers, /firstLoadPending \|\| error/);
-  assert.match(readers, /title=\{headerTitle\}/);
-  assert.match(readers, /subtitle=\{headerSubtitle\}/);
-  assert.match(readers, /Reader details are unavailable for this message/);
-  assert.doesNotMatch(readers, /Could not load readers \(\$\{response\.status\}\)/);
+  assert.match(info, /initialLoading/);
+  assert.match(info, /RefreshControl/);
+  assert.match(info, /load\(\{ manual: true \}\)/);
+  assert.match(info, /Message info/);
+  assert.match(info, /Read by/);
+  assert.match(info, /Delivered to/);
+  assert.match(info, /Pull down to refresh delivery status/);
+  assert.doesNotMatch(info, /setInterval\s*\(/);
 });

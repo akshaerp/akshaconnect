@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   View,
@@ -13,7 +14,8 @@ import Text from '../theme/AppText';
 import { colors } from '../theme/colors';
 import { ConversationHeader } from './ConversationChrome.jsx';
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 100;
+const MAX_PAGES = 20;
 
 function initials(value = '') {
   return (
@@ -27,9 +29,9 @@ function initials(value = '') {
   );
 }
 
-function formatReadTime(value) {
+function formatReceiptTime(value, fallback) {
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return 'Read';
+  if (Number.isNaN(parsed.getTime())) return fallback;
   return parsed.toLocaleString([], {
     month: 'short',
     day: 'numeric',
@@ -38,49 +40,194 @@ function formatReadTime(value) {
   });
 }
 
-async function fetchReaders({
+function formatReadTime(value) {
+  return formatReceiptTime(
+    value,
+    'Read'
+  );
+}
+
+async function fetchReceiptPage({
   serverUrl,
   token,
   conversationId,
   messageId,
+  status,
   offset = 0,
 }) {
-  const root = String(serverUrl || '').replace(/\/+$/, '');
+  const root =
+    String(serverUrl || '')
+      .replace(/\/+$/, '');
+
   const path =
     `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
-    `/messages/${encodeURIComponent(messageId)}/readers` +
-    `?limit=${PAGE_SIZE}&offset=${encodeURIComponent(String(offset))}`;
+    `/messages/${encodeURIComponent(messageId)}/receipts` +
+    `?status=${encodeURIComponent(status)}` +
+    `&limit=${PAGE_SIZE}` +
+    `&offset=${encodeURIComponent(String(offset))}`;
 
   let response;
   try {
-    response = await fetch(`${root}${path}`, {
-      headers: {
-        accept: 'application/json',
-        authorization: `Bearer ${token}`,
-      },
-    });
+    response = await fetch(
+      `${root}${path}`,
+      {
+        headers: {
+          accept:
+            'application/json',
+          authorization:
+            `Bearer ${token}`,
+        },
+      }
+    );
   } catch (error) {
-    throw new Error(error?.message || 'Could not reach the AkshaConnect server');
+    throw new Error(
+      error?.message ||
+      'Could not reach the AkshaConnect server'
+    );
   }
 
-  const text = await response.text();
+  const text =
+    await response.text();
+
   let payload = {};
   if (text) {
     try {
-      payload = JSON.parse(text);
+      payload =
+        JSON.parse(text);
     } catch {
-      throw new Error('The server returned an invalid response');
+      throw new Error(
+        'The server returned an invalid response'
+      );
     }
   }
 
   if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error('Reader details are unavailable for this message. Please try again later.');
-    }
-    throw new Error(payload?.error?.message || 'Could not load reader details');
+    throw new Error(
+      payload?.error?.message ||
+      'Could not load message info'
+    );
   }
 
   return payload;
+}
+
+async function fetchAllReceipts(input) {
+  const rows = [];
+  let offset = 0;
+  let total = 0;
+
+  for (
+    let pageIndex = 0;
+    pageIndex < MAX_PAGES;
+    pageIndex += 1
+  ) {
+    const payload =
+      await fetchReceiptPage({
+        ...input,
+        offset,
+      });
+
+    const pageRows =
+      Array.isArray(
+        payload?.receipts
+      )
+        ? payload.receipts
+        : [];
+
+    rows.push(...pageRows);
+
+    total =
+      Number(
+        payload?.total ||
+        rows.length
+      );
+
+    if (
+      !payload?.page?.has_more ||
+      pageRows.length === 0
+    ) {
+      break;
+    }
+
+    offset =
+      Number(
+        payload?.page
+          ?.next_offset ||
+        rows.length
+      );
+  }
+
+  return {
+    rows,
+    total,
+  };
+}
+
+function ReceiptSection({
+  title,
+  count,
+  rows,
+  emptyText,
+  timeField,
+  timeFallback,
+}) {
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>
+          {title}
+        </Text>
+        <View style={styles.countBadge}>
+          <Text style={styles.countText}>
+            {count}
+          </Text>
+        </View>
+      </View>
+
+      {rows.length === 0 ? (
+        <Text style={styles.emptyText}>
+          {emptyText}
+        </Text>
+      ) : (
+        rows.map(
+          (reader, index) => (
+            <View
+              key={
+                `${title}-${reader.display_name || 'member'}-${reader[timeField] || ''}-${index}`
+              }
+              style={styles.readerRow}
+            >
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>
+                  {initials(
+                    reader.display_name
+                  )}
+                </Text>
+              </View>
+
+              <View style={styles.readerCopy}>
+                <Text
+                  style={styles.readerName}
+                  numberOfLines={1}
+                >
+                  {reader.display_name ||
+                    'Member'}
+                </Text>
+                <Text style={styles.readerTime}>
+                  {timeField === 'read_at'
+                    ? formatReadTime(reader.read_at)
+                    : formatReceiptTime(
+                        reader[timeField],
+                        timeFallback
+                      )}
+                </Text>
+              </View>
+            </View>
+          )
+        )
+      )}
+    </View>
+  );
 }
 
 export default function MessageReadersModal({
@@ -92,87 +239,159 @@ export default function MessageReadersModal({
   refreshEpoch = 0,
   onClose,
 }) {
-  const [readers, setReaders] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [nextOffset, setNextOffset] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState('');
+  const [readers, setReaders] =
+    useState([]);
+  const [delivered, setDelivered] =
+    useState([]);
+  const [readTotal, setReadTotal] =
+    useState(0);
+  const [
+    deliveredTotal,
+    setDeliveredTotal,
+  ] = useState(0);
+  const [initialLoading, setInitialLoading] =
+    useState(false);
+  const [refreshing, setRefreshing] =
+    useState(false);
+  const [error, setError] =
+    useState('');
 
-  const messageId = message?.message_id || '';
+  const messageId =
+    message?.message_id || '';
+
   const preview = useMemo(() => {
-    const body = String(message?.body_text || '').trim();
+    const body =
+      String(
+        message?.body_text || ''
+      ).trim();
+
     if (body) return body;
-    if (message?.message_type === 'ATTACHMENT') return 'Attachment';
+    if (
+      message?.message_type ===
+      'ATTACHMENT'
+    ) {
+      return 'Attachment';
+    }
+
     return 'Message';
   }, [message]);
 
-  const load = useCallback(async ({ append = false } = {}) => {
-    if (!visible || !serverUrl || !token || !conversationId || !messageId) return;
+  const load = useCallback(
+    async ({
+      initial = false,
+      manual = false,
+      silent = false,
+    } = {}) => {
+      if (
+        !visible ||
+        !serverUrl ||
+        !token ||
+        !conversationId ||
+        !messageId
+      ) {
+        return;
+      }
 
-    if (append) setLoadingMore(true);
-    else setLoading(true);
-    setError('');
+      if (initial) {
+        setInitialLoading(true);
+      } else if (manual) {
+        setRefreshing(true);
+      }
 
-    try {
-      const offset = append ? Number(nextOffset || 0) : 0;
-      const payload = await fetchReaders({
-        serverUrl,
-        token,
-        conversationId,
-        messageId,
-        offset,
-      });
-      const rows = Array.isArray(payload?.readers) ? payload.readers : [];
-      setReaders((current) => (append ? [...current, ...rows] : rows));
-      setTotal(Number(payload?.total || rows.length));
-      setNextOffset(
-        payload?.page?.has_more
-          ? Number(payload?.page?.next_offset || offset + rows.length)
-          : null
-      );
-    } catch (requestError) {
-      setError(requestError?.message || 'Could not load readers');
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, [
-    visible,
-    serverUrl,
-    token,
-    conversationId,
-    messageId,
-    nextOffset,
-  ]);
+      if (!silent) {
+        setError('');
+      }
+
+      try {
+        const [
+          readResult,
+          deliveredResult,
+        ] = await Promise.all([
+          fetchAllReceipts({
+            serverUrl,
+            token,
+            conversationId,
+            messageId,
+            status: 'READ',
+          }),
+          fetchAllReceipts({
+            serverUrl,
+            token,
+            conversationId,
+            messageId,
+            status: 'DELIVERED',
+          }),
+        ]);
+
+        setReaders(
+          readResult.rows
+        );
+        setReadTotal(
+          readResult.total
+        );
+        setDelivered(
+          deliveredResult.rows
+        );
+        setDeliveredTotal(
+          deliveredResult.total
+        );
+
+        setError('');
+      } catch (requestError) {
+        if (!silent) {
+          setError(
+            requestError?.message ||
+            'Could not load message info'
+          );
+        }
+      } finally {
+        if (initial) {
+          setInitialLoading(false);
+        }
+
+        if (manual) {
+          setRefreshing(false);
+        }
+      }
+    },
+    [
+      visible,
+      serverUrl,
+      token,
+      conversationId,
+      messageId,
+    ]
+  );
 
   useEffect(() => {
     if (!visible) return;
+
     setReaders([]);
-    setTotal(0);
-    setNextOffset(null);
-    load({ append: false });
-  }, [visible, messageId]);
+    setDelivered([]);
+    setReadTotal(0);
+    setDeliveredTotal(0);
+
+    load({ initial: true });
+  }, [
+    visible,
+    messageId,
+    load,
+  ]);
 
   useEffect(() => {
-    if (!visible || refreshEpoch <= 0) return;
-    load({ append: false });
-  }, [refreshEpoch]);
+    if (
+      !visible ||
+      refreshEpoch <= 0
+    ) {
+      return;
+    }
 
-  const firstLoadPending =
-    loading &&
-    readers.length === 0 &&
-    !error;
-  const headerTitle =
-    firstLoadPending || error
-      ? 'Message readers'
-      : `Read by ${total}`;
-  const headerSubtitle =
-    firstLoadPending
-      ? 'Loading…'
-      : error
-        ? 'Reader details unavailable'
-        : 'Read receipts';
+    load({ silent: true });
+  }, [
+    refreshEpoch,
+    visible,
+    load,
+  ]);
 
   return (
     <Modal
@@ -182,77 +401,103 @@ export default function MessageReadersModal({
       statusBarTranslucent={false}
       navigationBarTranslucent={false}
     >
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+      <SafeAreaView
+        style={styles.safeArea}
+        edges={['top', 'bottom']}
+      >
         <ConversationHeader
-          title={headerTitle}
-          subtitle={headerSubtitle}
+          title="Message info"
+          subtitle={
+            `${readTotal} read · ${deliveredTotal} delivered`
+          }
           onBack={onClose}
-          backAccessibilityLabel="Close message readers"
+          backAccessibilityLabel="Close message info"
         />
 
         <View style={styles.previewCard}>
-          <Text style={styles.previewLabel}>MESSAGE</Text>
-          <Text style={styles.previewText} numberOfLines={3}>{preview}</Text>
+          <Text style={styles.previewLabel}>
+            MESSAGE
+          </Text>
+          <Text
+            style={styles.previewText}
+            numberOfLines={3}
+          >
+            {preview}
+          </Text>
         </View>
 
         {error ? (
           <View style={styles.errorCard}>
-            <Text style={styles.errorText}>{error}</Text>
-            <Pressable onPress={() => load({ append: false })} style={styles.retryButton}>
-              <Text style={styles.retryText}>Retry</Text>
+            <Text style={styles.errorText}>
+              {error}
+            </Text>
+            <Pressable
+              onPress={() =>
+                load({ initial: true })
+              }
+              style={styles.retryButton}
+            >
+              <Text style={styles.retryText}>
+                Retry
+              </Text>
             </Pressable>
           </View>
         ) : null}
 
-        <ScrollView
-          style={styles.list}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-        >
-          {loading ? (
-            <View style={styles.centerState}>
-              <ActivityIndicator color={colors.primary} />
-              <Text style={styles.stateText}>Loading readers…</Text>
-            </View>
-          ) : readers.length === 0 && !error ? (
-            <View style={styles.centerState}>
-              <Text style={styles.emptyTitle}>No readers yet</Text>
-              <Text style={styles.stateText}>Read details will appear after another member reads this message.</Text>
-            </View>
-          ) : (
-            readers.map((reader, index) => (
-              <View
-                key={`${reader.display_name || 'reader'}-${reader.read_at || ''}-${index}`}
-                style={styles.readerRow}
-              >
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{initials(reader.display_name)}</Text>
-                </View>
-                <View style={styles.readerCopy}>
-                  <Text style={styles.readerName} numberOfLines={1}>
-                    {reader.display_name || 'Member'}
-                  </Text>
-                  <Text style={styles.readerTime}>{formatReadTime(reader.read_at)}</Text>
-                </View>
-              </View>
-            ))
-          )}
+        {initialLoading &&
+        readers.length === 0 &&
+        delivered.length === 0 &&
+        !error ? (
+          <View style={styles.centerState}>
+            <ActivityIndicator
+              color={colors.primary}
+            />
+            <Text style={styles.stateText}>
+              Loading message info…
+            </Text>
+          </View>
+        ) : (
+          <ScrollView
+            style={styles.list}
+            contentContainerStyle={
+              styles.listContent
+            }
+            showsVerticalScrollIndicator={
+              false
+            }
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={() =>
+                  load({ manual: true })
+                }
+                tintColor={colors.primary}
+              />
+            }
+          >
+            <ReceiptSection
+              title="Read by"
+              count={readTotal}
+              rows={readers}
+              emptyText="No one has read this message yet."
+              timeField="read_at"
+              timeFallback="Read"
+            />
 
-          {nextOffset !== null ? (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => load({ append: true })}
-              disabled={loadingMore}
-              style={styles.loadMoreButton}
-            >
-              {loadingMore ? (
-                <ActivityIndicator size="small" color={colors.primary} />
-              ) : (
-                <Text style={styles.loadMoreText}>Load more</Text>
-              )}
-            </Pressable>
-          ) : null}
-        </ScrollView>
+            <ReceiptSection
+              title="Delivered to"
+              count={deliveredTotal}
+              rows={delivered}
+              emptyText="No unread recipient delivery confirmations yet."
+              timeField="delivered_at"
+              timeFallback="Delivered"
+            />
+
+            <Text style={styles.note}>
+              Recipients move from Delivered to Read after their read receipt is recorded. Pull down to refresh delivery status.
+            </Text>
+          </ScrollView>
+        )}
       </SafeAreaView>
     </Modal>
   );
@@ -319,13 +564,9 @@ const styles = StyleSheet.create({
     paddingBottom: 30,
   },
   centerState: {
+    flex: 1,
     paddingVertical: 34,
     alignItems: 'center',
-  },
-  emptyTitle: {
-    color: colors.navy,
-    fontSize: 15,
-    fontWeight: '900',
   },
   stateText: {
     marginTop: 7,
@@ -335,12 +576,52 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     textAlign: 'center',
   },
+  section: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#FFFFFF',
+  },
+  sectionHeader: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  sectionTitle: {
+    flex: 1,
+    color: colors.navy,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  countBadge: {
+    minWidth: 28,
+    height: 24,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EAF3FF',
+  },
+  countText: {
+    color: colors.primary,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  emptyText: {
+    paddingVertical: 18,
+    color: colors.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
+  },
   readerRow: {
     minHeight: 64,
     paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth:
+      StyleSheet.hairlineWidth,
     borderBottomColor: '#E3EAF1',
   },
   avatar: {
@@ -371,19 +652,11 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 10,
   },
-  loadMoreButton: {
-    minHeight: 42,
+  note: {
     marginTop: 12,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  loadMoreText: {
-    color: colors.primary,
-    fontSize: 11,
-    fontWeight: '900',
+    color: colors.textMuted,
+    fontSize: 10,
+    lineHeight: 15,
+    textAlign: 'center',
   },
 });

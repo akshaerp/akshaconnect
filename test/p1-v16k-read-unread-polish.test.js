@@ -11,9 +11,14 @@ test('V16-K keeps an explicit unread boundary on mobile and web', () => {
   assert.match(read('apps/web/src/App.jsx'), /Unread messages/);
 });
 
-test('V16-K makes read receipts clearer', () => {
-  assert.match(read('apps/mobile/src/screens/ConversationScreen.jsx'), /✓✓ Read by/);
-  assert.match(read('apps/web/src/App.jsx'), /✓✓ Read by/);
+test('V16-K keeps read state accessible through sender Message Info', () => {
+  const mobile = read('apps/mobile/src/screens/ConversationScreen.jsx');
+  const web = read('apps/web/src/App.jsx');
+
+  assert.match(mobile, /MessageReadersModal/);
+  assert.match(mobile, /Info/);
+  assert.match(web, /MessageInfoDialog/);
+  assert.match(web, /Info/);
 });
 
 test('V16-K strengthens thread unread styling', () => {

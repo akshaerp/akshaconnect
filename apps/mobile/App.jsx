@@ -5,6 +5,7 @@ import React, {
   useState,
 } from 'react';
 import {
+  Alert,
   AppState,
   BackHandler,
   Image,
@@ -32,6 +33,7 @@ import {
   listDirectMessages,
   listUnreadCounts,
   listWorkspaceMembers,
+  markMessageDelivered,
   logout,
   logoutMobile,
   refreshMobile,
@@ -1422,6 +1424,20 @@ export default function App() {
           payload.message.sender_type === 'HUMAN' &&
           payload.message.sender_member_id ===
             sessionRef.current?.membership?.workspace_member_id;
+
+        if (
+          !ownMessage &&
+          payload.conversation_id &&
+          payload.message.message_id
+        ) {
+          markMessageDelivered(
+            serverUrl,
+            sessionRef.current?.access_token || '',
+            payload.conversation_id,
+            payload.message.message_id
+          ).catch(() => {});
+        }
+
         if (ownMessage) return;
 
         const activeConversation = selectedConversationRef.current;
@@ -1756,6 +1772,89 @@ export default function App() {
       loadWorkspacePayload,
       serverUrl,
       session?.access_token,
+    ]
+  );
+
+  const handleMentionNavigation = useCallback(
+    async (mention) => {
+      const type =
+        clean(
+          mention?.mention_type
+        ).toUpperCase();
+
+      const targetId =
+        clean(
+          mention?.target_id ||
+          mention?.target_workspace_member_id ||
+          mention?.target_channel_conversation_id
+        );
+
+      if (!targetId) {
+        return;
+      }
+
+      if (type === 'CHANNEL') {
+        const channel =
+          (channels || []).find(
+            (item) =>
+              item.conversation_id ===
+              targetId
+          );
+
+        if (!channel) {
+          Alert.alert(
+            'Channel unavailable',
+            'This channel is no longer available to you.'
+          );
+          return;
+        }
+
+        handleOpenConversation({
+          kind: 'channel',
+          conversationId:
+            channel.conversation_id,
+          title:
+            channel.channel_name ||
+            String(
+              mention?.display_text ||
+              ''
+            ).replace(/^#/, '') ||
+            'Channel',
+          subtitle:
+            channel.visibility ===
+            'PRIVATE'
+              ? 'Private channel'
+              : 'Public channel',
+        });
+
+        return;
+      }
+
+      if (type === 'MEMBER') {
+        try {
+          await handleStartDirectMessage({
+            workspace_member_id:
+              targetId,
+            display_name:
+              String(
+                mention?.display_text ||
+                ''
+              ).replace(/^@/, '') ||
+              'Member',
+          });
+        } catch (error) {
+          Alert.alert(
+            'Person unavailable',
+            error?.message ||
+            'This person is no longer available to message.'
+          );
+        }
+      }
+    },
+    [
+      channels,
+      handleOpenConversation,
+      handleStartDirectMessage,
     ]
   );
 
@@ -2416,6 +2515,7 @@ export default function App() {
           }
           onConversationRead={handleConversationRead}
           onUserActivity={markUserActivity}
+          onMentionPress={handleMentionNavigation}
           onBack={() => setSelectedConversation(null)}
         />
       ) : (

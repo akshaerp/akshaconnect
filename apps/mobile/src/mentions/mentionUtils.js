@@ -19,17 +19,33 @@ export function normalizeMention(candidate) {
     candidate?.target_channel_conversation_id ||
     ''
   ).trim();
+
+  if (!targetId || !['MEMBER', 'CHANNEL'].includes(type)) return null;
+
+  const prefix = type === 'MEMBER' ? '@' : '#';
+  const rawDisplayText = String(candidate?.display_text || '').trim();
+
   const label = String(
     candidate?.display_name ||
     candidate?.channel_name ||
     candidate?.label ||
+    (
+      rawDisplayText.startsWith(prefix)
+        ? rawDisplayText.slice(1)
+        : rawDisplayText
+    ) ||
     ''
   ).trim();
-  if (!targetId || !label || !['MEMBER','CHANNEL'].includes(type)) return null;
+
+  if (!label) return null;
+
   return {
     mention_type: type,
     target_id: targetId,
-    display_text: `${type === 'MEMBER' ? '@' : '#'}${label}`,
+    display_text:
+      rawDisplayText.startsWith(prefix)
+        ? rawDisplayText
+        : `${prefix}${label}`,
   };
 }
 

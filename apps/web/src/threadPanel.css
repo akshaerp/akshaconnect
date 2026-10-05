@@ -476,3 +476,16 @@
     margin-left: auto;
   }
 }
+
+
+/* V20.1 thread message info */
+.thread-message-info-link {
+  margin-top: 5px;
+  padding: 0;
+  border: 0;
+  color: var(--ac-blue);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}

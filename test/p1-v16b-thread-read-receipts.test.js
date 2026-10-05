@@ -30,15 +30,19 @@ test('V16-B conversation history carries unread thread and read receipt counts',
   assert.match(repository, /m\.reply_to_message_id IS NULL/);
 });
 
-test('V16-B mobile and web use dedicated thread read cursor', () => {
+test('V16-B mobile and web preserve dedicated thread read cursor and sender Message Info', () => {
   const mobileApi = read('apps/mobile/src/api/client.js');
   const mobile = read('apps/mobile/src/screens/ConversationScreen.jsx');
   const webApi = read('apps/web/src/api.js');
   const web = read('apps/web/src/App.jsx');
+
   assert.match(mobileApi, /markThreadRead/);
   assert.match(mobile, /thread_unread_count/);
-  assert.match(mobile, /Read by/);
+  assert.match(mobile, /MessageReadersModal/);
+  assert.match(mobile, /Info/);
+
   assert.match(webApi, /markThreadRead/);
   assert.match(web, /thread_unread_count/);
-  assert.match(web, /Read by/);
+  assert.match(web, /MessageInfoDialog/);
+  assert.match(web, /Info/);
 });

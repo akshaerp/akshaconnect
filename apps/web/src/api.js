@@ -312,6 +312,56 @@ export function markRead(token, conversationId, lastReadMessageId) {
   );
 }
 
+export function markMessageDelivered(
+  token,
+  conversationId,
+  messageId
+) {
+  return request(
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}/delivery`,
+    {
+      token,
+      method: 'PUT',
+    }
+  );
+}
+
+export function listMessageReceipts(
+  token,
+  conversationId,
+  messageId,
+  {
+    status = 'READ',
+    limit = 100,
+    offset = 0,
+  } = {}
+) {
+  const params =
+    new URLSearchParams();
+
+  params.set(
+    'status',
+    String(status)
+  );
+  params.set(
+    'limit',
+    String(limit)
+  );
+  params.set(
+    'offset',
+    String(offset)
+  );
+
+  return request(
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}/receipts?${params.toString()}`,
+    {
+      token,
+    }
+  );
+}
+
 export function listUnreadCounts(token) {
   return request('/api/v1/unread-counts', { token });
 }

@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   downloadAttachment,
   listThread,
+  markMessageDelivered,
   sendMessage,
   uploadAttachment,
 } from './api.js';
+import MessageInfoDialog from './MessageInfoDialog.jsx';
 import './threadPanel.css';
 
 const MAX_PENDING_ATTACHMENTS = 4;
@@ -44,12 +46,131 @@ function mergeById(rows) {
   });
 }
 
+function renderThreadMentionText(
+  message,
+  onMentionPress
+) {
+  const value =
+    String(
+      message?.body_text || ''
+    );
+
+  const mentions =
+    (message?.mentions || [])
+      .map((item) => ({
+        mention_type:
+          item.mention_type,
+        target_id:
+          item.target_workspace_member_id ||
+          item.target_channel_conversation_id,
+        display_text:
+          item.display_text,
+      }))
+      .filter(
+        (item) =>
+          item.target_id &&
+          item.display_text &&
+          value.includes(
+            item.display_text
+          )
+      )
+      .sort(
+        (a, b) =>
+          b.display_text.length -
+          a.display_text.length
+      );
+
+  if (!mentions.length) {
+    return value;
+  }
+
+  const parts = [];
+  let cursor = 0;
+
+  while (
+    cursor <
+    value.length
+  ) {
+    let next = null;
+
+    for (
+      const mention of
+      mentions
+    ) {
+      const index =
+        value.indexOf(
+          mention.display_text,
+          cursor
+        );
+
+      if (
+        index >= 0 &&
+        (
+          !next ||
+          index < next.index
+        )
+      ) {
+        next = {
+          index,
+          mention,
+        };
+      }
+    }
+
+    if (!next) {
+      parts.push(
+        value.slice(cursor)
+      );
+      break;
+    }
+
+    if (
+      next.index >
+      cursor
+    ) {
+      parts.push(
+        value.slice(
+          cursor,
+          next.index
+        )
+      );
+    }
+
+    parts.push(
+      <button
+        type="button"
+        key={
+          `${next.index}-${next.mention.target_id}`
+        }
+        className="message-mention-link"
+        onClick={() =>
+          onMentionPress?.(
+            next.mention
+          )
+        }
+      >
+        {next.mention.display_text}
+      </button>
+    );
+
+    cursor =
+      next.index +
+      next.mention
+        .display_text
+        .length;
+  }
+
+  return parts;
+}
+
 function ThreadMessage({
   message,
   token,
   conversationId,
   currentMemberId,
   onApiFailure,
+  onMentionPress,
+  onShowInfo,
   parent = false,
 }) {
   const deleted = Boolean(message.deleted_at);
@@ -97,7 +218,12 @@ function ThreadMessage({
           {deleted ? (
             <div className="thread-deleted">Message deleted</div>
           ) : message.message_type !== 'ATTACHMENT' ? (
-            <div className="thread-message-body">{message.body_text || ''}</div>
+            <div className="thread-message-body">
+              {renderThreadMentionText(
+                message,
+                onMentionPress
+              )}
+            </div>
           ) : null}
 
           {!deleted && Array.isArray(message.attachments) && message.attachments.length ? (
@@ -114,6 +240,20 @@ function ThreadMessage({
                 </button>
               ))}
             </div>
+          ) : null}
+          {own && !deleted ? (
+            <button
+              type="button"
+              className="thread-message-info-link"
+              onClick={() =>
+                onShowInfo?.(
+                  message
+                )
+              }
+              aria-label="Show message info"
+            >
+              ⓘ Info
+            </button>
           ) : null}
         </div>
       </div>
@@ -136,6 +276,7 @@ export default function ThreadPanel({
   onClose,
   onApiFailure,
   onThreadActivity,
+  onNavigateMention,
 }) {
   const [parent, setParent] = useState(parentMessage);
   const [replies, setReplies] = useState([]);
@@ -145,6 +286,8 @@ export default function ThreadPanel({
   const [draft, setDraft] = useState('');
   const [pendingFiles, setPendingFiles] = useState([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [messageInfoTarget, setMessageInfoTarget] = useState(null);
+  const deliveryAckedRef = useRef(new Set());
   const fileInputRef = useRef(null);
   const bottomRef = useRef(null);
   const onApiFailureRef = useRef(onApiFailure);
@@ -158,6 +301,61 @@ export default function ThreadPanel({
   const parentId = parentMessage?.message_id || '';
   const conversationId = conversation?.id || '';
   const currentMemberId = session?.workspace_member_id || '';
+
+  useEffect(() => {
+    if (
+      !token ||
+      !conversationId
+    ) {
+      return;
+    }
+
+    for (
+      const message of
+      [
+        parent,
+        ...replies,
+      ].filter(Boolean)
+    ) {
+      const own =
+        message?.sender_type === 'HUMAN' &&
+        message?.sender_member_id ===
+          currentMemberId;
+
+      const messageId =
+        message?.message_id;
+
+      if (
+        !messageId ||
+        own ||
+        deliveryAckedRef.current.has(
+          messageId
+        )
+      ) {
+        continue;
+      }
+
+      deliveryAckedRef.current.add(
+        messageId
+      );
+
+      markMessageDelivered(
+        token,
+        conversationId,
+        messageId
+      ).catch(() => {
+        deliveryAckedRef.current.delete(
+          messageId
+        );
+      });
+    }
+  }, [
+    parent,
+    replies,
+    token,
+    conversationId,
+    currentMemberId,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -308,6 +506,8 @@ export default function ThreadPanel({
             conversationId={conversationId}
             currentMemberId={currentMemberId}
             onApiFailure={onApiFailure}
+            onMentionPress={onNavigateMention}
+            onShowInfo={setMessageInfoTarget}
             parent
           />
         ) : null}
@@ -328,12 +528,30 @@ export default function ThreadPanel({
               conversationId={conversationId}
               currentMemberId={currentMemberId}
               onApiFailure={onApiFailure}
+              onMentionPress={onNavigateMention}
+              onShowInfo={setMessageInfoTarget}
             />
           ))}
         </div>
 
         <div ref={bottomRef} className="thread-bottom-anchor" aria-hidden="true" />
       </div>
+
+      <MessageInfoDialog
+        visible={Boolean(
+          messageInfoTarget
+        )}
+        token={token}
+        conversationId={
+          conversationId
+        }
+        message={messageInfoTarget}
+        onClose={() =>
+          setMessageInfoTarget(
+            null
+          )
+        }
+      />
 
       <footer className="thread-composer">
         {error ? <div className="thread-error" role="alert">{error}</div> : null}

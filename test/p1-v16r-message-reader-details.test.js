@@ -41,15 +41,20 @@ test('V16-R reader response exposes display name and read time only', () => {
   assert.doesNotMatch(modal, /reader\.primary_email/);
 });
 
-test('V16-R makes Read by N tappable in main chat and threads', () => {
+test('V20.1 keeps sender message info available before and after read receipts', () => {
   const screen = read('apps/mobile/src/screens/ConversationScreen.jsx');
   const thread = read('apps/mobile/src/screens/ThreadModal.jsx');
+  const modal = read('apps/mobile/src/screens/MessageReadersModal.jsx');
 
   for (const source of [screen, thread]) {
     assert.match(source, /MessageReadersModal/);
-    assert.match(source, /Show readers/);
-    assert.match(source, /Read by \{Number\(message\.read_by_count/);
+    assert.match(source, /Show message info/);
+    assert.match(source, /ⓘ Info/);
+    assert.doesNotMatch(source, /Number\(message\.read_by_count \|\| 0\) > 0/);
   }
+
+  assert.match(modal, /Read by/);
+  assert.match(modal, /Delivered to/);
 });
 
 test('V16-R forwards cursor events and refreshes aggregate/detail receipts in realtime', () => {

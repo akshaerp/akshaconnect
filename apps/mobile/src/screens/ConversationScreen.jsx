@@ -41,6 +41,7 @@ import {
   listMessages,
   listPresenceProfiles,
   listWorkspaceMembers,
+  markMessageDelivered,
   markRead,
   markThreadRead,
   sendMessage,
@@ -473,6 +474,7 @@ export default function ConversationScreen({
   peerPresenceProfile: externalPeerPresenceProfile,
   onConversationRead,
   onUserActivity,
+  onMentionPress,
   onBack,
 }) {
   const { palette, darkMode } = useAppAppearance();
@@ -595,6 +597,58 @@ export default function ConversationScreen({
   const [mentionLoading, setMentionLoading] = useState(false);
   const [mentionLookupError, setMentionLookupError] = useState('');
   const mentionCandidateCacheRef = useRef(new Map());
+  const deliveryAckedRef = useRef(new Set());
+
+  useEffect(() => {
+    if (
+      !serverUrl ||
+      !token ||
+      !conversation?.conversationId
+    ) {
+      return;
+    }
+
+    for (const message of messages) {
+      const messageId =
+        message?.message_id;
+
+      const ownMessage =
+        message?.sender_type === 'HUMAN' &&
+        message?.sender_member_id ===
+          currentMemberId;
+
+      if (
+        !messageId ||
+        ownMessage ||
+        deliveryAckedRef.current.has(
+          messageId
+        )
+      ) {
+        continue;
+      }
+
+      deliveryAckedRef.current.add(
+        messageId
+      );
+
+      markMessageDelivered(
+        serverUrl,
+        token,
+        conversation.conversationId,
+        messageId
+      ).catch(() => {
+        deliveryAckedRef.current.delete(
+          messageId
+        );
+      });
+    }
+  }, [
+    messages,
+    serverUrl,
+    token,
+    conversation?.conversationId,
+    currentMemberId,
+  ]);
 
   useEffect(() => {
     let mounted = true;
@@ -1326,6 +1380,7 @@ export default function ConversationScreen({
     setThreadSearchTargetMessageId('');
     setMessageReadersTarget(null);
     setMessageReadersRefreshEpoch(0);
+    deliveryAckedRef.current.clear();
     setDraftMentions([]);
     setMentionSuggestions([]);
     setMentionLoading(false);
@@ -4291,6 +4346,7 @@ export default function ConversationScreen({
                           onShowReaders={(targetMessage) =>
                             setMessageReadersTarget(targetMessage)
                           }
+                          onMentionPress={onMentionPress}
                         />
                         </View>
                       </React.Fragment>
@@ -5173,6 +5229,7 @@ export default function ConversationScreen({
           pinnedMessageIds={pinnedMessageIds}
           savedMessageIds={savedMessageIds}
           onToggleSavedMessage={toggleSavedMessage}
+          onMentionPress={onMentionPress}
           onClose={() => {
             setThreadParent(null);
             setThreadSearchTargetMessageId('');
@@ -5344,6 +5401,7 @@ function MessageBubble({
   onJumpToMessage,
   onShowReactionUsers,
   onShowReaders,
+  onMentionPress,
 }) {
   const { palette } = useAppAppearance();
 
@@ -5805,6 +5863,7 @@ function MessageBubble({
                 : message.body_text || ''
             }
             mentions={message.mentions || []}
+            onMentionPress={onMentionPress}
             style={[
               styles.body,
               own ? styles.ownBody : null,
@@ -5848,10 +5907,10 @@ function MessageBubble({
           </Text>
         ) : null}
 
-        {own && !deleted && Number(message.read_by_count || 0) > 0 ? (
+        {own && !deleted ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Read by ${Number(message.read_by_count || 0)}. Show readers.`}
+            accessibilityLabel="Show message info"
             onPress={() => onShowReaders?.(message)}
             style={({ pressed }) => [
               styles.readReceiptButton,
@@ -5859,7 +5918,7 @@ function MessageBubble({
             ]}
           >
             <Text style={styles.readReceipt}>
-              ✓✓ Read by {Number(message.read_by_count)} ›
+              ⓘ Info
             </Text>
           </Pressable>
         ) : null}

@@ -80,12 +80,12 @@ test('V16-V saved messages are private local per identity workspace member and o
   assert.match(conversation, /🔖 Saved/);
 });
 
-test('V16-V keeps D UX refinements and fixes thread unread prop runtime gap', () => {
+test('V16-V keeps D UX refinements and current Message Info contract', () => {
   const chrome = read('apps/mobile/src/screens/ConversationChrome.jsx');
   const conversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
   const search = read('apps/mobile/src/screens/ConversationSearchBar.jsx');
   const thread = read('apps/mobile/src/screens/ThreadModal.jsx');
-  const readers = read('apps/mobile/src/screens/MessageReadersModal.jsx');
+  const info = read('apps/mobile/src/screens/MessageReadersModal.jsx');
 
   assert.match(chrome, /All emoji/);
   assert.match(chrome, /\.\.\.COMPOSER_EMOJIS/);
@@ -98,7 +98,12 @@ test('V16-V keeps D UX refinements and fixes thread unread prop runtime gap', ()
   assert.match(thread, /ConversationEmojiPicker/);
   assert.doesNotMatch(thread, /Previous search result/);
   assert.doesNotMatch(thread, /Next search result/);
-  assert.match(readers, /Reader details are unavailable for this message/);
+
+  assert.match(info, /Message info/);
+  assert.match(info, /Read by/);
+  assert.match(info, /Delivered to/);
+  assert.match(info, /RefreshControl/);
+  assert.doesNotMatch(info, /setInterval\s*\(/);
 });
 
 test('V16-V preserves E2 messaging correctness contracts', () => {

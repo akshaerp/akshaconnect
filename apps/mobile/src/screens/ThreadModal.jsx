@@ -23,6 +23,7 @@ import {
   listChannels,
   listThread,
   listWorkspaceMembers,
+  markMessageDelivered,
   sendMessage,
   uploadAttachment,
 } from '../api/client';
@@ -171,6 +172,7 @@ function ThreadMessage({
   onOpenAttachment,
   onShowReaders,
   onToggleSaved,
+  onMentionPress,
 }) {
   const { palette } = useAppAppearance();
   const deleted = Boolean(message.deleted_at);
@@ -241,6 +243,7 @@ function ThreadMessage({
           <MentionText
             value={message.body_text || ''}
             mentions={message.mentions || []}
+            onMentionPress={onMentionPress}
             style={[
               styles.v16oBody,
               { color: own ? palette.ownMessageText : palette.otherMessageText },
@@ -290,10 +293,10 @@ function ThreadMessage({
           </View>
         ) : null}
 
-        {own && !deleted && Number(message.read_by_count || 0) > 0 ? (
+        {own && !deleted ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Read by ${Number(message.read_by_count || 0)}. Show readers.`}
+            accessibilityLabel="Show message info"
             onPress={() => onShowReaders?.(message)}
             style={({ pressed }) => [
               styles.v16oReadReceiptButton,
@@ -301,7 +304,7 @@ function ThreadMessage({
             ]}
           >
             <Text style={styles.v16oReadReceipt}>
-              ✓✓ Read by {Number(message.read_by_count || 0)} ›
+              ⓘ Info
             </Text>
           </Pressable>
         ) : null}
@@ -324,6 +327,7 @@ export default function ThreadModal({
   pinnedMessageIds = new Set(),
   savedMessageIds = new Set(),
   onToggleSavedMessage,
+  onMentionPress,
   onClose,
   onRead,
 }) {
@@ -347,6 +351,65 @@ export default function ThreadModal({
   const [mentionLoading, setMentionLoading] = useState(false);
   const [mentionLookupError, setMentionLookupError] = useState('');
   const mentionCandidateCacheRef = useRef(new Map());
+  const deliveryAckedRef = useRef(new Set());
+
+  useEffect(() => {
+    if (
+      !serverUrl ||
+      !token ||
+      !conversationId
+    ) {
+      return;
+    }
+
+    for (
+      const message of
+      [
+        parent,
+        ...replies,
+      ].filter(Boolean)
+    ) {
+      const messageId =
+        message?.message_id;
+
+      const ownMessage =
+        message?.sender_type === 'HUMAN' &&
+        message?.sender_member_id ===
+          currentMemberId;
+
+      if (
+        !messageId ||
+        ownMessage ||
+        deliveryAckedRef.current.has(
+          messageId
+        )
+      ) {
+        continue;
+      }
+
+      deliveryAckedRef.current.add(
+        messageId
+      );
+
+      markMessageDelivered(
+        serverUrl,
+        token,
+        conversationId,
+        messageId
+      ).catch(() => {
+        deliveryAckedRef.current.delete(
+          messageId
+        );
+      });
+    }
+  }, [
+    parent,
+    replies,
+    serverUrl,
+    token,
+    conversationId,
+    currentMemberId,
+  ]);
   const [previewAttachment, setPreviewAttachment] = useState(null);
   const [attachmentBusyMode, setAttachmentBusyMode] = useState('');
   const lastSequenceRef = useRef(0);
@@ -786,6 +849,7 @@ export default function ThreadModal({
     setHighlightMessageId('');
     setMessageReadersTarget(null);
     setMessageReadersRefreshEpoch(0);
+    deliveryAckedRef.current.clear();
     setShowEmojiPicker(false);
     setNewMessageDividerId(null);
     messageLayoutYRef.current.clear();
@@ -1397,6 +1461,7 @@ export default function ThreadModal({
                   onShowReaders={(targetMessage) =>
                     setMessageReadersTarget(targetMessage)
                   }
+                  onMentionPress={onMentionPress}
                 />
               ) : null}
 
@@ -1471,6 +1536,7 @@ export default function ThreadModal({
                         onShowReaders={(targetMessage) =>
                           setMessageReadersTarget(targetMessage)
                         }
+                        onMentionPress={onMentionPress}
                       />
                     </View>
                   </React.Fragment>

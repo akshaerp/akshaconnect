@@ -12,6 +12,7 @@ import {
   listMembers,
   listMessages,
   listUnreadCounts,
+  markMessageDelivered,
   markRead,
   markThreadRead,
   loginLocal,
@@ -45,6 +46,7 @@ import {
   saveConversationDraft,
 } from './drafts.js';
 import ThreadPanel from './ThreadPanel.jsx';
+import MessageInfoDialog from './MessageInfoDialog.jsx';
 import {
   createRealtimeClient,
   displayBrowserMessageNotification,
@@ -72,14 +74,63 @@ function activeMentionWeb(value) {
 }
 
 function normalizeWebMention(candidate) {
-  const type = String(candidate?.mention_type || '').toUpperCase();
-  const targetId = String(candidate?.target_id || '').trim();
-  const label = String(candidate?.display_name || candidate?.channel_name || '').trim();
-  if (!targetId || !label || !['MEMBER','CHANNEL'].includes(type)) return null;
+  const type =
+    String(
+      candidate?.mention_type ||
+      candidate?.type ||
+      ''
+    ).toUpperCase();
+
+  const targetId =
+    String(
+      candidate?.target_id ||
+      candidate?.target_workspace_member_id ||
+      candidate?.target_channel_conversation_id ||
+      ''
+    ).trim();
+
+  if (
+    !targetId ||
+    !['MEMBER', 'CHANNEL'].includes(type)
+  ) {
+    return null;
+  }
+
+  const prefix =
+    type === 'MEMBER'
+      ? '@'
+      : '#';
+
+  const rawDisplayText =
+    String(
+      candidate?.display_text ||
+      ''
+    ).trim();
+
+  const label =
+    String(
+      candidate?.display_name ||
+      candidate?.channel_name ||
+      candidate?.label ||
+      (
+        rawDisplayText.startsWith(prefix)
+          ? rawDisplayText.slice(1)
+          : rawDisplayText
+      ) ||
+      ''
+    ).trim();
+
+  if (!label) {
+    return null;
+  }
+
   return {
     mention_type: type,
     target_id: targetId,
-    display_text: `${type === 'MEMBER' ? '@' : '#'}${label}`,
+    display_text:
+      rawDisplayText.startsWith(prefix)
+        ? rawDisplayText
+        : `${prefix}${label}`,
   };
 }
 
@@ -97,38 +148,120 @@ function mentionsStillPresentWeb(value, mentions = []) {
     });
 }
 
-function renderWebMentionText(message) {
-  const value = String(message?.body_text || '');
-  const mentions = (message?.mentions || [])
-    .map((item) => ({
-      target_id: item.target_workspace_member_id || item.target_channel_conversation_id,
-      display_text: item.display_text,
-    }))
-    .filter((item) => item.target_id && item.display_text && value.includes(item.display_text))
-    .sort((a,b) => b.display_text.length - a.display_text.length);
+function renderWebMentionText(
+  message,
+  onMentionPress
+) {
+  const value =
+    String(
+      message?.body_text || ''
+    );
 
-  if (!mentions.length) return value;
+  const mentions =
+    (message?.mentions || [])
+      .map((item) => ({
+        mention_type:
+          item.mention_type,
+        target_id:
+          item.target_workspace_member_id ||
+          item.target_channel_conversation_id,
+        display_text:
+          item.display_text,
+      }))
+      .filter(
+        (item) =>
+          item.target_id &&
+          item.display_text &&
+          value.includes(
+            item.display_text
+          )
+      )
+      .sort(
+        (a, b) =>
+          b.display_text.length -
+          a.display_text.length
+      );
+
+  if (!mentions.length) {
+    return value;
+  }
 
   const parts = [];
   let cursor = 0;
-  while (cursor < value.length) {
+
+  while (
+    cursor <
+    value.length
+  ) {
     let next = null;
-    for (const mention of mentions) {
-      const index = value.indexOf(mention.display_text, cursor);
-      if (index >= 0 && (!next || index < next.index)) next = { index, mention };
+
+    for (
+      const mention of
+      mentions
+    ) {
+      const index =
+        value.indexOf(
+          mention.display_text,
+          cursor
+        );
+
+      if (
+        index >= 0 &&
+        (
+          !next ||
+          index < next.index
+        )
+      ) {
+        next = {
+          index,
+          mention,
+        };
+      }
     }
+
     if (!next) {
-      parts.push(value.slice(cursor));
+      parts.push(
+        value.slice(cursor)
+      );
       break;
     }
-    if (next.index > cursor) parts.push(value.slice(cursor, next.index));
+
+    if (
+      next.index >
+      cursor
+    ) {
+      parts.push(
+        value.slice(
+          cursor,
+          next.index
+        )
+      );
+    }
+
     parts.push(
-      <span key={`${next.index}-${next.mention.target_id}`} className="message-mention">
+      <button
+        type="button"
+        key={
+          `${next.index}-${next.mention.target_id}`
+        }
+        className="message-mention-link"
+        onClick={() =>
+          onMentionPress?.(
+            next.mention
+          )
+        }
+      >
         {next.mention.display_text}
-      </span>
+      </button>
     );
-    cursor = next.index + next.mention.display_text.length;
+
+    cursor =
+      next.index +
+      next.mention
+        .display_text
+        .length;
   }
+
   return parts;
 }
 
@@ -1199,6 +1332,7 @@ function ConversationView({
   onViewportState,
   onOpenSidebar,
   onNavigateConversation,
+  onNavigateMention,
 }) {
   const [messages, setMessages] = useState([]);
   const [page, setPage] = useState({ has_more: false, next_before_message_id: null });
@@ -1217,6 +1351,59 @@ function ConversationView({
   const [mentionLoading, setMentionLoading] = useState(false);
   const [mentionLookupError, setMentionLookupError] = useState('');
   const mentionCandidateCacheRef = useRef(new Map());
+  const deliveryAckedRef = useRef(new Set());
+  const [messageInfoTarget, setMessageInfoTarget] = useState(null);
+
+  useEffect(() => {
+    if (
+      !token ||
+      !selected?.id
+    ) {
+      return;
+    }
+
+    for (
+      const message of
+      messages
+    ) {
+      const own =
+        message?.sender_type === 'HUMAN' &&
+        message?.sender_member_id ===
+          session?.workspace_member_id;
+
+      const messageId =
+        message?.message_id;
+
+      if (
+        !messageId ||
+        own ||
+        deliveryAckedRef.current.has(
+          messageId
+        )
+      ) {
+        continue;
+      }
+
+      deliveryAckedRef.current.add(
+        messageId
+      );
+
+      markMessageDelivered(
+        token,
+        selected.id,
+        messageId
+      ).catch(() => {
+        deliveryAckedRef.current.delete(
+          messageId
+        );
+      });
+    }
+  }, [
+    messages,
+    token,
+    selected?.id,
+    session?.workspace_member_id,
+  ]);
   const [editingMessageId, setEditingMessageId] = useState('');
   const [quoteReplyMessage, setQuoteReplyMessage] = useState(null);
   const [editDraft, setEditDraft] = useState('');
@@ -2572,7 +2759,10 @@ function ConversationView({
                       </form>
                     ) : message.message_type !== 'ATTACHMENT' ? (
                       <div className="message-text">
-                        {renderWebMentionText(message)}
+                        {renderWebMentionText(
+                          message,
+                          onNavigateMention
+                        )}
                       </div>
                     ) : null}
 
@@ -2636,10 +2826,19 @@ function ConversationView({
                       </div>
                     ) : null}
 
-                    {own && !deleted && Number(message.read_by_count || 0) > 0 ? (
-                      <div className="message-read-receipt">
-                        ✓✓ Read by {Number(message.read_by_count)}
-                      </div>
+                    {own && !deleted ? (
+                      <button
+                        type="button"
+                        className="message-info-link"
+                        onClick={() =>
+                          setMessageInfoTarget(
+                            message
+                          )
+                        }
+                        aria-label="Show message info"
+                      >
+                        ⓘ Info
+                      </button>
                     ) : null}
 
                     {!deleted && Array.isArray(message.reactions) && message.reactions.length ? (
@@ -2771,6 +2970,22 @@ function ConversationView({
         ) : null}
       </div>
 
+      <MessageInfoDialog
+        visible={Boolean(
+          messageInfoTarget
+        )}
+        token={token}
+        conversationId={
+          selected?.id || ''
+        }
+        message={messageInfoTarget}
+        onClose={() =>
+          setMessageInfoTarget(
+            null
+          )
+        }
+      />
+
       {threadParent ? (
         <ThreadPanel
           token={token}
@@ -2780,6 +2995,7 @@ function ConversationView({
           realtimeMessage={realtimeMessage}
           onClose={() => setThreadParent(null)}
           onApiFailure={onApiFailure}
+          onNavigateMention={onNavigateMention}
           onThreadActivity={(messageId) => {
             const parentId = threadParent?.message_id || '';
             const conversationId = selected?.id || '';
@@ -3456,6 +3672,19 @@ export default function App() {
         const currentSession = sessionRef.current;
         const ownMessage = event.message.sender_type === 'HUMAN'
           && event.message.sender_member_id === currentSession?.workspace_member_id;
+
+        if (
+          !ownMessage &&
+          event.conversation_id &&
+          event.message.message_id
+        ) {
+          markMessageDelivered(
+            token,
+            event.conversation_id,
+            event.message.message_id
+          ).catch(() => {});
+        }
+
         if (ownMessage) return;
 
         const currentSelection = selectedRef.current;
@@ -3607,6 +3836,85 @@ export default function App() {
     } catch (error) {
       handleApiFailure(error);
       throw error;
+    }
+  }
+
+  async function handleMentionNavigation(mention) {
+    const type =
+      String(
+        mention?.mention_type ||
+        ''
+      )
+        .trim()
+        .toUpperCase();
+
+    const targetId =
+      String(
+        mention?.target_id ||
+        mention?.target_workspace_member_id ||
+        mention?.target_channel_conversation_id ||
+        ''
+      ).trim();
+
+    if (!targetId) {
+      return;
+    }
+
+    if (type === 'CHANNEL') {
+      const channel =
+        channels.find(
+          (item) =>
+            item.conversation_id ===
+            targetId
+        );
+
+      if (!channel) {
+        setGlobalError(
+          'This channel is no longer available to you.'
+        );
+        return;
+      }
+
+      selectConversation({
+        kind: 'channel',
+        id:
+          channel.conversation_id,
+        title:
+          channel.channel_name ||
+          String(
+            mention?.display_text ||
+            ''
+          ).replace(/^#/, '') ||
+          'Channel',
+        subtitle:
+          channel.visibility ===
+          'PRIVATE'
+            ? 'Private channel'
+            : 'Public channel',
+      });
+
+      return;
+    }
+
+    if (type === 'MEMBER') {
+      try {
+        await handleStartDm({
+          workspace_member_id:
+            targetId,
+          display_name:
+            String(
+              mention?.display_text ||
+              ''
+            ).replace(/^@/, '') ||
+            'Member',
+          primary_email: '',
+        });
+      } catch (error) {
+        setGlobalError(
+          error?.message ||
+          'This person is no longer available to message.'
+        );
+      }
     }
   }
 
@@ -3856,6 +4164,7 @@ export default function App() {
           onViewportState={handleConversationViewportState}
           onOpenSidebar={() => setMobileSidebarOpen(true)}
           onNavigateConversation={(selection) => setSelected(selection)}
+          onNavigateMention={handleMentionNavigation}
         />
       </main>
 
