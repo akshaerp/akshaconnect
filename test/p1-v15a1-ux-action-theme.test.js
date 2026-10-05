@@ -81,8 +81,8 @@ test('V15-A1 web main conversation exposes copy action', () => {
   assert.match(app, /aria-label="Copy message"/);
 });
 
-test('V15-A1 feature coverage remains valid on the current VC20 Android identity', () => {
+test('V15-A1 feature coverage remains valid on the current VC21 Android identity', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
-  assert.match(gradle, /versionCode 20/);
-  assert.match(gradle, /versionName "0\.3\.0-v20"/);
+  assert.match(gradle, /versionCode 21/);
+  assert.match(gradle, /versionName "0\.3\.0-v21"/);
 });
