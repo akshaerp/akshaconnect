@@ -494,7 +494,7 @@ export default function MessageReadersModal({
             />
 
             <Text style={styles.note}>
-              Recipients move from Delivered to Read after their read receipt is recorded. Pull down to refresh delivery status.
+              Delivery remains recorded after a recipient reads the message. Read confirms the message was opened. Pull down to refresh delivery status.
             </Text>
           </ScrollView>
         )}

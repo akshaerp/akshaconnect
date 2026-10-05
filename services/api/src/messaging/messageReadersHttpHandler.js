@@ -273,7 +273,7 @@ async function listThreadMessageReaders({
   return result.rows || [];
 }
 
-async function listMainDeliveredUnread({
+async function listDeliveredReceipts({
   db,
   actor,
   conversationId,
@@ -300,86 +300,13 @@ async function listMainDeliveredUnread({
       AND dr.conversation_id = $2
       AND dr.message_id = $3
       AND dr.workspace_member_id IS DISTINCT FROM $4::uuid
-      AND NOT EXISTS (
-        SELECT 1
-        FROM ac_read_cursor rc
-        JOIN ac_message cursor_message
-          ON cursor_message.workspace_id = rc.workspace_id
-         AND cursor_message.conversation_id = rc.conversation_id
-         AND cursor_message.message_id = rc.last_read_message_id
-        WHERE rc.workspace_id = dr.workspace_id
-          AND rc.conversation_id = dr.conversation_id
-          AND rc.workspace_member_id = dr.workspace_member_id
-          AND (cursor_message.created_at, cursor_message.message_id)
-                >= ($5::timestamptz, $6::uuid)
-      )
     ORDER BY dr.delivered_at DESC, dr.workspace_member_id
-    LIMIT $7 OFFSET $8
+    LIMIT $5 OFFSET $6
   `, [
     actor.workspaceId,
     conversationId,
     message.message_id,
     actor.workspaceMemberId,
-    message.created_at,
-    message.message_id,
-    limit,
-    offset,
-  ]);
-
-  return result.rows || [];
-}
-
-async function listThreadDeliveredUnread({
-  db,
-  actor,
-  conversationId,
-  message,
-  limit,
-  offset,
-}) {
-  const result = await db.query(`
-    SELECT
-      COALESCE(
-        NULLIF(TRIM(wm.display_name_override), ''),
-        NULLIF(TRIM(i.display_name), ''),
-        'Former member'
-      ) AS display_name,
-      dr.delivered_at,
-      COUNT(*) OVER()::int AS total_count
-    FROM ac_message_delivery_receipt dr
-    LEFT JOIN ac_workspace_member wm
-      ON wm.workspace_id = dr.workspace_id
-     AND wm.workspace_member_id = dr.workspace_member_id
-    LEFT JOIN ac_identity i
-      ON i.identity_id = wm.identity_id
-    WHERE dr.workspace_id = $1
-      AND dr.conversation_id = $2
-      AND dr.message_id = $3
-      AND dr.workspace_member_id IS DISTINCT FROM $4::uuid
-      AND NOT EXISTS (
-        SELECT 1
-        FROM ac_thread_read_cursor trc
-        JOIN ac_message cursor_reply
-          ON cursor_reply.workspace_id = trc.workspace_id
-         AND cursor_reply.conversation_id = trc.conversation_id
-         AND cursor_reply.message_id = trc.last_read_message_id
-        WHERE trc.workspace_id = dr.workspace_id
-          AND trc.conversation_id = dr.conversation_id
-          AND trc.thread_root_message_id = $5
-          AND trc.workspace_member_id = dr.workspace_member_id
-          AND (cursor_reply.created_at, cursor_reply.message_id)
-                >= ($6::timestamptz, $7::uuid)
-      )
-    ORDER BY dr.delivered_at DESC, dr.workspace_member_id
-    LIMIT $8 OFFSET $9
-  `, [
-    actor.workspaceId,
-    conversationId,
-    message.message_id,
-    actor.workspaceMemberId,
-    message.reply_to_message_id,
-    message.created_at,
-    message.message_id,
     limit,
     offset,
   ]);
@@ -476,10 +403,11 @@ async function markDelivered({
     return {
       delivered: false,
       delivered_at: null,
+      created: false,
     };
   }
 
-  const result = await db.query(`
+  const inserted = await db.query(`
     INSERT INTO ac_message_delivery_receipt (
       workspace_id,
       conversation_id,
@@ -493,13 +421,36 @@ async function markDelivered({
       message_id,
       workspace_member_id
     )
-    DO UPDATE
-    SET delivered_at =
-      LEAST(
-        ac_message_delivery_receipt.delivered_at,
-        EXCLUDED.delivered_at
-      )
+    DO NOTHING
     RETURNING delivered_at
+  `, [
+    actor.workspaceId,
+    conversationId,
+    message.message_id,
+    actor.workspaceMemberId,
+  ]);
+
+  const insertedRow =
+    inserted.rows?.[0] || null;
+
+  if (insertedRow) {
+    return {
+      delivered: true,
+      delivered_at:
+        insertedRow.delivered_at ||
+        null,
+      created: true,
+    };
+  }
+
+  const existing = await db.query(`
+    SELECT delivered_at
+    FROM ac_message_delivery_receipt
+    WHERE workspace_id = $1
+      AND conversation_id = $2
+      AND message_id = $3
+      AND workspace_member_id = $4
+    LIMIT 1
   `, [
     actor.workspaceId,
     conversationId,
@@ -510,14 +461,64 @@ async function markDelivered({
   return {
     delivered: true,
     delivered_at:
-      result.rows?.[0]
+      existing.rows?.[0]
         ?.delivered_at || null,
+    created: false,
   };
+}
+
+function publishDeliveryRealtime({
+  eventPublisher,
+  actor,
+  conversationId,
+  message,
+  deliveredAt,
+}) {
+  const senderWorkspaceMemberId =
+    clean(
+      message?.sender_member_id
+    );
+
+  if (
+    !eventPublisher ||
+    typeof eventPublisher.publish !==
+      'function' ||
+    message?.sender_type !==
+      'HUMAN' ||
+    !senderWorkspaceMemberId ||
+    senderWorkspaceMemberId ===
+      actor.workspaceMemberId
+  ) {
+    return;
+  }
+
+  try {
+    eventPublisher.publish(
+      Object.freeze({
+        type:
+          'message.delivery.updated',
+        workspace_id:
+          actor.workspaceId,
+        conversation_id:
+          conversationId,
+        message_id:
+          message.message_id,
+        sender_workspace_member_id:
+          senderWorkspaceMemberId,
+        delivered_at:
+          deliveredAt || null,
+      })
+    );
+  } catch {
+    // Delivery persistence is authoritative.
+    // Realtime fan-out is best effort.
+  }
 }
 
 function createMessageReadersHttpHandler({
   localIdentityService,
   db,
+  eventPublisher = null,
 } = {}) {
   if (!localIdentityService) {
     throw new TypeError('Local identity service is required');
@@ -673,13 +674,27 @@ function createMessageReadersHttpHandler({
             message,
           });
 
+        if (result.created) {
+          publishDeliveryRealtime({
+            eventPublisher,
+            actor,
+            conversationId,
+            message,
+            deliveredAt:
+              result.delivered_at,
+          });
+        }
+
         writeJson(
           res,
           200,
           {
             message_id:
               message.message_id,
-            ...result,
+            delivered:
+              result.delivered,
+            delivered_at:
+              result.delivered_at,
           }
         );
 
@@ -780,23 +795,14 @@ function createMessageReadersHttpHandler({
               });
       } else {
         rows =
-          message.reply_to_message_id
-            ? await listThreadDeliveredUnread({
-                db,
-                actor,
-                conversationId,
-                message,
-                limit,
-                offset,
-              })
-            : await listMainDeliveredUnread({
-                db,
-                actor,
-                conversationId,
-                message,
-                limit,
-                offset,
-              });
+          await listDeliveredReceipts({
+            db,
+            actor,
+            conversationId,
+            message,
+            limit,
+            offset,
+          });
       }
 
       writeJson(

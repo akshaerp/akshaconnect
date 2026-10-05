@@ -287,6 +287,10 @@ export default function ThreadPanel({
   const [pendingFiles, setPendingFiles] = useState([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [messageInfoTarget, setMessageInfoTarget] = useState(null);
+  const [
+    messageInfoRefreshEpoch,
+    setMessageInfoRefreshEpoch,
+  ] = useState(0);
   const deliveryAckedRef = useRef(new Set());
   const fileInputRef = useRef(null);
   const bottomRef = useRef(null);
@@ -392,6 +396,18 @@ export default function ThreadPanel({
 
   useEffect(() => {
     const event = realtimeMessage;
+    if (
+      event?.type ===
+        'message.delivery.updated' &&
+      event.conversation_id ===
+        conversationId
+    ) {
+      setMessageInfoRefreshEpoch(
+        (value) => value + 1
+      );
+      return;
+    }
+
     if (!event?.message || event.conversation_id !== conversationId) return;
     const message = event.message;
 
@@ -545,7 +561,10 @@ export default function ThreadPanel({
         conversationId={
           conversationId
         }
-        message={messageInfoTarget}
+                message={messageInfoTarget}
+        refreshEpoch={
+          messageInfoRefreshEpoch
+        }
         onClose={() =>
           setMessageInfoTarget(
             null

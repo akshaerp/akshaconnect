@@ -1575,6 +1575,30 @@ export default function ConversationScreen({
       }, 250);
     }
 
+    const deliveryReceiptEvents =
+      pending
+        .map(
+          (envelope) =>
+            envelope.payload
+        )
+        .filter(
+          (payload) =>
+            payload?.type ===
+              'message.delivery.updated' &&
+            payload.conversation_id ===
+              conversation
+                ?.conversationId
+        );
+
+    if (
+      deliveryReceiptEvents.length >
+      0
+    ) {
+      setMessageReadersRefreshEpoch(
+        (value) => value + 1
+      );
+    }
+
     const reactionEvents = pending
       .map((envelope) => envelope.payload)
       .filter(

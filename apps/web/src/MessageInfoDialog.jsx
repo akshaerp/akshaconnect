@@ -148,6 +148,7 @@ export default function MessageInfoDialog({
   token,
   conversationId,
   message,
+  refreshEpoch = 0,
   onClose,
 }) {
   const [readers, setReaders] =
@@ -160,8 +161,10 @@ export default function MessageInfoDialog({
     deliveredTotal,
     setDeliveredTotal,
   ] = useState(0);
-  const [loading, setLoading] =
-    useState(false);
+  const [
+    initialLoading,
+    setInitialLoading,
+  ] = useState(false);
   const [error, setError] =
     useState('');
 
@@ -179,10 +182,13 @@ export default function MessageInfoDialog({
     }
 
     let cancelled = false;
+    const initial =
+      refreshEpoch === 0;
 
     async function load() {
-      setLoading(true);
-      setError('');
+      if (initial) {
+        setInitialLoading(true);
+      }
 
       try {
         const [
@@ -217,6 +223,7 @@ export default function MessageInfoDialog({
         setDeliveredTotal(
           deliveredResult.total
         );
+        setError('');
       } catch (requestError) {
         if (cancelled) return;
 
@@ -225,31 +232,26 @@ export default function MessageInfoDialog({
           'Could not load message info'
         );
       } finally {
-        if (!cancelled) {
-          setLoading(false);
+        if (
+          !cancelled &&
+          initial
+        ) {
+          setInitialLoading(false);
         }
       }
     }
 
     load();
 
-    const timer =
-      window.setInterval(
-        load,
-        3000
-      );
-
     return () => {
       cancelled = true;
-      window.clearInterval(
-        timer
-      );
     };
   }, [
     visible,
     token,
     conversationId,
     messageId,
+    refreshEpoch,
   ]);
 
   if (!visible) return null;
@@ -305,7 +307,7 @@ export default function MessageInfoDialog({
           </div>
         ) : null}
 
-        {loading &&
+        {initialLoading &&
         !readers.length &&
         !delivered.length ? (
           <div className="message-info-loading">
@@ -326,13 +328,13 @@ export default function MessageInfoDialog({
               title="Delivered to"
               total={deliveredTotal}
               rows={delivered}
-              empty="No unread recipient delivery confirmations yet."
+              empty="No recipient delivery confirmations yet."
               field="delivered_at"
               fallback="Delivered"
             />
 
             <p className="message-info-note">
-              Recipients move from Delivered to Read after their read receipt is recorded.
+              Delivery remains recorded after a recipient reads the message. Read confirms the message was opened.
             </p>
           </>
         )}

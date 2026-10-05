@@ -935,7 +935,19 @@ export default function ThreadModal({
 
       const payload = event?.payload || event;
 
-      if (
+            if (
+        payload?.type ===
+          'message.delivery.updated' &&
+        payload.conversation_id ===
+          conversationId
+      ) {
+        setMessageReadersRefreshEpoch(
+          (value) => value + 1
+        );
+        continue;
+      }
+
+if (
         payload?.type === 'thread_read_cursor.updated' &&
         payload.conversation_id === conversationId &&
         payload.thread_root_message_id === parentId &&

@@ -1353,6 +1353,10 @@ function ConversationView({
   const mentionCandidateCacheRef = useRef(new Map());
   const deliveryAckedRef = useRef(new Set());
   const [messageInfoTarget, setMessageInfoTarget] = useState(null);
+  const [
+    messageInfoRefreshEpoch,
+    setMessageInfoRefreshEpoch,
+  ] = useState(0);
 
   useEffect(() => {
     if (
@@ -1859,6 +1863,18 @@ function ConversationView({
 
   useEffect(() => {
     const event = realtimeMessage;
+    if (
+      event?.type ===
+        'message.delivery.updated' &&
+      event.conversation_id ===
+        selected?.id
+    ) {
+      setMessageInfoRefreshEpoch(
+        (value) => value + 1
+      );
+      return;
+    }
+
     if (event?.type === 'message.reaction.updated' && event.conversation_id === selected?.id) {
       setMessages((current) => current.map((item) =>
         item.message_id === event.message_id
@@ -2978,7 +2994,10 @@ function ConversationView({
         conversationId={
           selected?.id || ''
         }
-        message={messageInfoTarget}
+                message={messageInfoTarget}
+        refreshEpoch={
+          messageInfoRefreshEpoch
+        }
         onClose={() =>
           setMessageInfoTarget(
             null
@@ -3639,6 +3658,18 @@ export default function App() {
             [event.workspace_member_id]:
               String(event.status || 'NOT_AVAILABLE').toUpperCase(),
           }));
+          return;
+        }
+
+        if (
+          event.type ===
+          'message.delivery.updated'
+        ) {
+          setRealtimeMessage({
+            ...event,
+            received_at:
+              Date.now(),
+          });
           return;
         }
 

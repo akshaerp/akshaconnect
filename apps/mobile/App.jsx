@@ -1354,9 +1354,13 @@ export default function App() {
           return;
         }
 
-        const readCursorEvent =
+                const readCursorEvent =
           payload?.type === 'read_cursor.updated' ||
           payload?.type === 'thread_read_cursor.updated';
+
+        const deliveryReceiptEvent =
+          payload?.type ===
+          'message.delivery.updated';
 
         if (payload?.type === 'read_cursor.updated') {
           const ownReadCursor =
@@ -1389,7 +1393,8 @@ export default function App() {
           Array.isArray(payload?.reactions);
 
         if (
-          !readCursorEvent &&
+                    !readCursorEvent &&
+          !deliveryReceiptEvent &&
           !messageEvent &&
           !reactionEvent
         ) {
@@ -1407,7 +1412,8 @@ export default function App() {
         ]);
 
         if (
-          readCursorEvent ||
+                    readCursorEvent ||
+          deliveryReceiptEvent ||
           reactionEvent
         ) {
           return;

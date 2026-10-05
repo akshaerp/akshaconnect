@@ -184,6 +184,8 @@ async function start() {
     createMessageReadersHttpHandler({
       localIdentityService,
       db: pool,
+      eventPublisher:
+        realtimeEventBus,
     });
 
   let ssoService = null;

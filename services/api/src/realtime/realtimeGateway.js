@@ -364,6 +364,64 @@ function attachRealtimeGateway({
       return;
     }
 
+    if (
+      event.type ===
+      'message.delivery.updated'
+    ) {
+      const targetMemberId =
+        event.sender_workspace_member_id;
+
+      if (!targetMemberId) {
+        return;
+      }
+
+      const payload = {
+        type:
+          'message.delivery.updated',
+        conversation_id:
+          event.conversation_id,
+        message_id:
+          event.message_id,
+        delivered_at:
+          event.delivered_at || null,
+      };
+
+      for (
+        const connection of
+        connections
+      ) {
+        if (
+          !connection.authenticated ||
+          !connection.claims
+        ) {
+          continue;
+        }
+
+        if (
+          connection.claims
+            .workspace_id !==
+          event.workspace_id
+        ) {
+          continue;
+        }
+
+        if (
+          connection.claims
+            .workspace_member_id !==
+          targetMemberId
+        ) {
+          continue;
+        }
+
+        jsonSend(
+          connection.ws,
+          payload
+        );
+      }
+
+      return;
+    }
+
     if (event.type === 'read_cursor.updated') {
       const payload = {
         type: 'read_cursor.updated',
