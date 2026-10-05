@@ -545,7 +545,7 @@ test(
 );
 
 test(
-  'V14.2 requires no database migration and remains valid on the current VC19 Android identity',
+  'V14.2 requires no database migration and remains valid on the current VC20 Android identity',
   () => {
     const schema = fs.readFileSync(
       path.join(
@@ -585,11 +585,11 @@ test(
     );
     assert.match(
       gradle,
-      /versionCode 19/
+      /versionCode 20/
     );
     assert.match(
       gradle,
-      /versionName "0\.3\.0-v19"/
+      /versionName "0\.3\.0-v20"/
     );
   }
 );

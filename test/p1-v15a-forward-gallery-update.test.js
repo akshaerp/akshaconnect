@@ -98,10 +98,10 @@ test('V15-A update policy still honors deployment overrides', () => {
   assert.equal(policy.minimum_version_code, 14);
 });
 
-test('V15-A feature coverage remains valid on the current VC19 Android identity', () => {
+test('V15-A feature coverage remains valid on the current VC20 Android identity', () => {
   const gradle = read('apps/mobile/android/app/build.gradle');
-  assert.match(gradle, /versionCode 19/);
-  assert.match(gradle, /versionName "0\.3\.0-v19"/);
+  assert.match(gradle, /versionCode 20/);
+  assert.match(gradle, /versionName "0\.3\.0-v20"/);
 });
 
 test('V15-A R3 renders authenticated inline image thumbnails and keeps tap/long-press semantics separate', () => {
