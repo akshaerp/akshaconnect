@@ -3,4 +3,7 @@
     <cache-path
         name="akshaconnect_clipboard"
         path="akshaconnect-clipboard/" />
+    <cache-path
+        name="akshaconnect_share"
+        path="akshaconnect-share/" />
 </paths>

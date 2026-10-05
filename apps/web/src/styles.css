@@ -2118,3 +2118,51 @@ select:focus {
   font-weight: 900;
 }
 .thread-reply-summary:has(+ *) { }
+
+/* V20-A mentions */
+.message-mention {
+  color: var(--ac-blue);
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.mention-suggestions {
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--ac-border);
+  border-radius: 12px;
+  background: var(--ac-surface);
+  box-shadow: 0 8px 24px rgba(14,36,85,.12);
+}
+.mention-suggestions-label {
+  margin-bottom: 6px;
+  color: var(--ac-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.mention-suggestions-items {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+}
+.mention-suggestions-items button {
+  flex: 0 0 auto;
+  border: 1px solid var(--ac-border);
+  border-radius: 999px;
+  padding: 7px 11px;
+  color: var(--ac-text);
+  background: var(--ac-background);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+}
+.mention-suggestions-items span {
+  padding: 7px 4px;
+  color: var(--ac-text-muted);
+  font-size: 12px;
+}
+
+.mention-suggestions-error {
+  color: #b42318 !important;
+  font-weight: 700;
+}

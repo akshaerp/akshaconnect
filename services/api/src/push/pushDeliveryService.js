@@ -196,41 +196,58 @@ function createPushDeliveryService({
           : 'New message'
       );
 
-    const tokens =
-      registrations.map(
-        (row) =>
-          row.push_token
-      );
+    const mentionedIds = new Set(
+      (message.mentions || [])
+        .filter((mention) => mention?.mention_type === 'MEMBER')
+        .map((mention) => mention.target_workspace_member_id)
+        .filter(Boolean)
+    );
 
-    const result =
-      await pushSender.send({
-        tokens,
+    const batches = [
+      {
+        rows: registrations.filter((row) => !mentionedIds.has(row.workspace_member_id)),
+        title: sender,
+        mentioned: 'false',
+      },
+      {
+        rows: registrations.filter((row) => mentionedIds.has(row.workspace_member_id)),
+        title: `${sender} mentioned you`,
+        mentioned: 'true',
+      },
+    ].filter((batch) => batch.rows.length > 0);
 
+    const results = [];
+    for (const batch of batches) {
+      results.push(await pushSender.send({
+        tokens: batch.rows.map((row) => row.push_token),
         notification: {
-          title: sender,
+          title: batch.title,
           body: preview(message),
         },
-
         data: {
           conversationId,
           kind,
-          messageId:
-            message.message_id,
+          messageId: message.message_id,
+          mentioned: batch.mentioned,
         },
-      });
-
-    if (
-      result.invalid_tokens?.length
-    ) {
-      await pushRegistrationRepository
-        .revokeTokens({
-          provider: 'FCM',
-          tokens:
-            result.invalid_tokens,
-        });
+      }));
     }
 
-    return result;
+    const invalidTokens = results.flatMap((item) => item.invalid_tokens || []);
+    if (invalidTokens.length) {
+      await pushRegistrationRepository.revokeTokens({
+        provider: 'FCM',
+        tokens: invalidTokens,
+      });
+    }
+
+    return {
+      attempted: results.reduce((sum, item) => sum + Number(item.attempted || 0), 0),
+      success_count: results.reduce((sum, item) => sum + Number(item.success_count || 0), 0),
+      failure_count: results.reduce((sum, item) => sum + Number(item.failure_count || 0), 0),
+      invalid_tokens: invalidTokens,
+      mentioned: batches.find((batch) => batch.mentioned === 'true')?.rows.length || 0,
+    };
   }
 
   return Object.freeze({

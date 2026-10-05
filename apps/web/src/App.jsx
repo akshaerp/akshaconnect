@@ -58,6 +58,80 @@ import {
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
 const COMPOSER_EMOJIS = ['😀','😃','😄','😁','😂','😊','😍','👍','👏','🙏','🎉','✅','❤️','🔥','👀','🤝'];
 
+function activeMentionWeb(value) {
+  const text = String(value || '');
+  const match = /(^|\s)([@#])([^\s@#]*)$/u.exec(text);
+  if (!match) return null;
+  return {
+    kind: match[2] === '@' ? 'MEMBER' : 'CHANNEL',
+    prefix: match[2],
+    query: match[3] || '',
+    start: match.index + match[1].length,
+    end: text.length,
+  };
+}
+
+function normalizeWebMention(candidate) {
+  const type = String(candidate?.mention_type || '').toUpperCase();
+  const targetId = String(candidate?.target_id || '').trim();
+  const label = String(candidate?.display_name || candidate?.channel_name || '').trim();
+  if (!targetId || !label || !['MEMBER','CHANNEL'].includes(type)) return null;
+  return {
+    mention_type: type,
+    target_id: targetId,
+    display_text: `${type === 'MEMBER' ? '@' : '#'}${label}`,
+  };
+}
+
+function mentionsStillPresentWeb(value, mentions = []) {
+  const text = String(value || '');
+  const seen = new Set();
+  return (mentions || [])
+    .map(normalizeWebMention)
+    .filter(Boolean)
+    .filter((mention) => {
+      const key = `${mention.mention_type}:${mention.target_id}`;
+      if (seen.has(key) || !text.includes(mention.display_text)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function renderWebMentionText(message) {
+  const value = String(message?.body_text || '');
+  const mentions = (message?.mentions || [])
+    .map((item) => ({
+      target_id: item.target_workspace_member_id || item.target_channel_conversation_id,
+      display_text: item.display_text,
+    }))
+    .filter((item) => item.target_id && item.display_text && value.includes(item.display_text))
+    .sort((a,b) => b.display_text.length - a.display_text.length);
+
+  if (!mentions.length) return value;
+
+  const parts = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    let next = null;
+    for (const mention of mentions) {
+      const index = value.indexOf(mention.display_text, cursor);
+      if (index >= 0 && (!next || index < next.index)) next = { index, mention };
+    }
+    if (!next) {
+      parts.push(value.slice(cursor));
+      break;
+    }
+    if (next.index > cursor) parts.push(value.slice(cursor, next.index));
+    parts.push(
+      <span key={`${next.index}-${next.mention.target_id}`} className="message-mention">
+        {next.mention.display_text}
+      </span>
+    );
+    cursor = next.index + next.mention.display_text.length;
+  }
+  return parts;
+}
+
 function initials(name = '') {
   return name
     .split(/\s+/)
@@ -1138,6 +1212,11 @@ function ConversationView({
   const [downloadingAttachmentId, setDownloadingAttachmentId] = useState('');
   const [previewingAttachmentId, setPreviewingAttachmentId] = useState('');
   const [attachmentPreview, setAttachmentPreview] = useState(null);
+  const [draftMentions, setDraftMentions] = useState([]);
+  const [mentionSuggestions, setMentionSuggestions] = useState([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [mentionLookupError, setMentionLookupError] = useState('');
+  const mentionCandidateCacheRef = useRef(new Map());
   const [editingMessageId, setEditingMessageId] = useState('');
   const [quoteReplyMessage, setQuoteReplyMessage] = useState(null);
   const [editDraft, setEditDraft] = useState('');
@@ -1189,6 +1268,279 @@ function ConversationView({
     workspaceId: session?.workspace_id || '',
     conversationId: selected?.id || '',
   }), [selected?.id, session?.identity_id, session?.workspace_id]);
+
+  const activeMention = useMemo(() => activeMentionWeb(draft), [draft]);
+
+  useEffect(() => {
+    if (
+      !activeMention ||
+      !selected?.id ||
+      !token
+    ) {
+      setMentionSuggestions([]);
+      setMentionLoading(false);
+      setMentionLookupError('');
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const type =
+      activeMention.kind;
+
+    const query =
+      String(
+        activeMention.query || ''
+      )
+        .trim()
+        .toLowerCase();
+
+    const cacheKey =
+      [
+        selected.id,
+        selected.kind,
+        type,
+      ].join('|');
+
+    function filterSource(
+      source
+    ) {
+      const rows =
+        Array.isArray(source)
+          ? source
+          : [];
+
+      const filtered =
+        !query
+          ? rows
+          : rows.filter(
+              (item) =>
+                [
+                  item.display_name,
+                  item.primary_email,
+                  item.channel_name,
+                  item.channel_code,
+                ]
+                  .filter(Boolean)
+                  .some(
+                    (value) =>
+                      String(value)
+                        .toLowerCase()
+                        .includes(query)
+                  )
+            );
+
+      setMentionSuggestions(
+        filtered.slice(
+          0,
+          12
+        )
+      );
+    }
+
+    let sourcePromise =
+      mentionCandidateCacheRef
+        .current
+        .get(
+          cacheKey
+        );
+
+    if (!sourcePromise) {
+      sourcePromise =
+        (async () => {
+          if (
+            type ===
+            'CHANNEL'
+          ) {
+            const payload =
+              await listChannels(
+                token
+              );
+
+            return (
+              payload?.channels ||
+              []
+            ).map(
+              (channel) => ({
+                mention_type:
+                  'CHANNEL',
+
+                target_id:
+                  channel
+                    .conversation_id,
+
+                channel_name:
+                  channel
+                    .channel_name ||
+                  'Channel',
+
+                channel_code:
+                  channel
+                    .channel_code ||
+                  '',
+              })
+            );
+          }
+
+          if (
+            selected.kind ===
+            'channel'
+          ) {
+            const payload =
+              await listChannelMembers(
+                token,
+                selected.id
+              );
+
+            return (
+              payload?.members ||
+              []
+            )
+              .filter(
+                (member) =>
+                  member
+                    ?.workspace_member_id &&
+                  member
+                    .workspace_member_id !==
+                    session
+                      .workspace_member_id
+              )
+              .map(
+                (member) => ({
+                  mention_type:
+                    'MEMBER',
+
+                  target_id:
+                    member
+                      .workspace_member_id,
+
+                  display_name:
+                    member
+                      .display_name ||
+                    member
+                      .primary_email ||
+                    'Member',
+
+                  primary_email:
+                    member
+                      .primary_email ||
+                    '',
+                })
+              );
+          }
+
+          const payload =
+            await listMembers(
+              token,
+              ''
+            );
+
+          return (
+            payload?.members ||
+            []
+          )
+            .filter(
+              (member) =>
+                member
+                  ?.workspace_member_id &&
+                member
+                  .workspace_member_id !==
+                  session
+                    .workspace_member_id
+            )
+            .map(
+              (member) => ({
+                mention_type:
+                  'MEMBER',
+
+                target_id:
+                  member
+                    .workspace_member_id,
+
+                display_name:
+                  member
+                    .display_name ||
+                  member
+                    .primary_email ||
+                  'Member',
+
+                primary_email:
+                  member
+                    .primary_email ||
+                  '',
+              })
+            );
+        })();
+
+      mentionCandidateCacheRef
+        .current
+        .set(
+          cacheKey,
+          sourcePromise
+        );
+    }
+
+    setMentionLoading(true);
+    setMentionLookupError('');
+
+    Promise.resolve(
+      sourcePromise
+    )
+      .then((source) => {
+        if (!cancelled) {
+          filterSource(
+            source
+          );
+        }
+      })
+      .catch((error) => {
+        mentionCandidateCacheRef
+          .current
+          .delete(
+            cacheKey
+          );
+
+        if (!cancelled) {
+          setMentionSuggestions([]);
+
+          setMentionLookupError(
+            error?.message ||
+              'Could not load suggestions'
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setMentionLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeMention?.kind,
+    activeMention?.query,
+    selected?.id,
+    selected?.kind,
+    session?.workspace_member_id,
+    token,
+  ]);
+
+  function selectWebMention(candidate) {
+    const mention = normalizeWebMention(candidate);
+    if (!mention || !activeMention) return;
+    const next =
+      draft.slice(0, activeMention.start) +
+      mention.display_text +
+      ' ' +
+      draft.slice(activeMention.end);
+    updateDraft(next.slice(0, 8000));
+    setDraftMentions((current) =>
+      mentionsStillPresentWeb(next, [...current, mention])
+    );
+    setMentionSuggestions([]);
+  }
 
   const updateDraft = useCallback((value) => {
     const next = String(value ?? '');
@@ -1288,6 +1640,9 @@ function ConversationView({
     setMessages([]);
     setPage({ has_more: false, next_before_message_id: null });
     setDraft(loadConversationDraft(draftScope));
+    setDraftMentions([]);
+    setMentionSuggestions([]);
+    setMentionLoading(false);
     setPendingFiles([]);
     setEditingMessageId('');
     setEditDraft('');
@@ -1766,6 +2121,7 @@ function ConversationView({
   async function submit(event) {
     event.preventDefault();
     const bodyText = draft.trim();
+    const mentions = mentionsStillPresentWeb(bodyText, draftMentions);
     const quoteMessageId =
       quoteReplyMessage?.message_id || null;
     let quoteConsumed = false;
@@ -1782,6 +2138,7 @@ function ConversationView({
           bodyText,
           clientMessageId: makeClientMessageId(),
           quoteMessageId,
+          mentions,
         });
         if (quoteMessageId) {
           quoteConsumed = true;
@@ -1792,6 +2149,8 @@ function ConversationView({
         // attachment failure cannot cause the acknowledged text to be resent.
         clearConversationDraft(draftScope);
         setDraft('');
+        setDraftMentions([]);
+        setMentionSuggestions([]);
       }
 
       for (const pending of pendingFiles) {
@@ -2213,7 +2572,7 @@ function ConversationView({
                       </form>
                     ) : message.message_type !== 'ATTACHMENT' ? (
                       <div className="message-text">
-                        {message.body_text || ''}
+                        {renderWebMentionText(message)}
                       </div>
                     ) : null}
 
@@ -2626,6 +2985,38 @@ function ConversationView({
               {(recentEmojis.length ? recentEmojis : COMPOSER_EMOJIS).map((emoji) => (
                 <button key={emoji} type="button" onClick={() => insertEmoji(emoji)}>{emoji}</button>
               ))}
+            </div>
+          ) : null}
+
+          {activeMention ? (
+            <div className="mention-suggestions" role="listbox">
+              <div className="mention-suggestions-label">
+                {activeMention.prefix === '@' ? 'Mention a person' : 'Reference a channel'}
+                {mentionLoading ? ' · Loading…' : ''}
+              </div>
+              <div className="mention-suggestions-items">
+                {mentionSuggestions.map((item) => (
+                  <button
+                    type="button"
+                    key={item.target_id}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectWebMention(item)}
+                  >
+                    {activeMention.prefix}
+                    {item.display_name || item.channel_name || 'Mention'}
+                  </button>
+                ))}
+                {mentionLookupError ? (
+                  <span className="mention-suggestions-error">
+                    {mentionLookupError}
+                  </span>
+                ) : null}
+                {!mentionLookupError &&
+                !mentionLoading &&
+                mentionSuggestions.length === 0 ? (
+                  <span>No matches</span>
+                ) : null}
+              </div>
             </div>
           ) : null}
 

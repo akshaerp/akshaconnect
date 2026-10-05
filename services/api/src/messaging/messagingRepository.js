@@ -38,6 +38,187 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     return { ...publicRow, body_text: bodyText };
   }
 
+  async function decorateMentions({ workspaceId, messages }) {
+    const rows = messages || [];
+    const ids = rows.map((item) => item?.message_id).filter(Boolean);
+    if (!ids.length) return rows;
+
+    const result = await db.query(`
+      SELECT
+        mention_id,
+        message_id,
+        mention_type,
+        target_workspace_member_id,
+        target_channel_conversation_id,
+        display_text
+      FROM ac_message_mention
+      WHERE workspace_id = $1
+        AND message_id = ANY($2::uuid[])
+      ORDER BY created_at, mention_id
+    `, [workspaceId, ids]);
+
+    const byMessage = new Map();
+    for (const mention of result.rows || []) {
+      const current = byMessage.get(mention.message_id) || [];
+      current.push(mention);
+      byMessage.set(mention.message_id, current);
+    }
+
+    return rows.map((message) => ({
+      ...message,
+      mentions: byMessage.get(message.message_id) || [],
+    }));
+  }
+
+  async function replaceMessageMentions(client, {
+    workspaceId,
+    conversationId,
+    messageId,
+    mentions = [],
+  }) {
+    await client.query(`
+      DELETE FROM ac_message_mention
+      WHERE workspace_id = $1
+        AND conversation_id = $2
+        AND message_id = $3
+    `, [workspaceId, conversationId, messageId]);
+
+    for (const mention of mentions || []) {
+      await client.query(`
+        INSERT INTO ac_message_mention (
+          mention_id,
+          workspace_id,
+          conversation_id,
+          message_id,
+          mention_type,
+          target_workspace_member_id,
+          target_channel_conversation_id,
+          display_text
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `, [
+        randomUUID(),
+        workspaceId,
+        conversationId,
+        messageId,
+        mention.mention_type,
+        mention.target_workspace_member_id || null,
+        mention.target_channel_conversation_id || null,
+        mention.display_text,
+      ]);
+    }
+  }
+
+  async function getMentionMemberTarget({
+    workspaceId,
+    conversationId,
+    targetMemberId,
+  }) {
+    const eligible = await listConversationRecipientMemberIds({
+      workspaceId,
+      conversationId,
+    });
+    if (!eligible.includes(targetMemberId)) return null;
+    return getActiveWorkspaceMember({
+      workspaceId,
+      workspaceMemberId: targetMemberId,
+    });
+  }
+
+  async function getAccessibleChannelReference({
+    workspaceId,
+    requesterMemberId,
+    targetConversationId,
+  }) {
+    const result = await db.query(`
+      SELECT c.conversation_id, c.channel_name, c.channel_code
+      FROM ac_channel c
+      JOIN ac_conversation conv
+        ON conv.workspace_id = c.workspace_id
+       AND conv.conversation_id = c.conversation_id
+       AND conv.status = 'ACTIVE'
+      JOIN ac_channel_member cm
+        ON cm.workspace_id = c.workspace_id
+       AND cm.channel_id = c.channel_id
+       AND cm.workspace_member_id = $2
+       AND cm.left_at IS NULL
+      WHERE c.workspace_id = $1
+        AND c.conversation_id = $3
+        AND c.status = 'ACTIVE'
+      LIMIT 1
+    `, [workspaceId, requesterMemberId, targetConversationId]);
+    return result.rows?.[0] || null;
+  }
+
+  async function listMentionCandidates({
+    workspaceId,
+    conversationId,
+    requesterMemberId,
+    kind,
+    query,
+    limit,
+  }) {
+    const needle = String(query || '').trim();
+    const like = `%${needle}%`;
+
+    if (kind === 'CHANNEL') {
+      const result = await db.query(`
+        SELECT
+          'CHANNEL'::text AS mention_type,
+          c.conversation_id AS target_id,
+          c.channel_name,
+          c.channel_code
+        FROM ac_channel c
+        JOIN ac_conversation conv
+          ON conv.workspace_id = c.workspace_id
+         AND conv.conversation_id = c.conversation_id
+         AND conv.status = 'ACTIVE'
+        JOIN ac_channel_member cm
+          ON cm.workspace_id = c.workspace_id
+         AND cm.channel_id = c.channel_id
+         AND cm.workspace_member_id = $2
+         AND cm.left_at IS NULL
+        WHERE c.workspace_id = $1
+          AND c.status = 'ACTIVE'
+          AND ($3 = '' OR c.channel_name ILIKE $4 OR c.channel_code ILIKE $4)
+        ORDER BY LOWER(c.channel_name)
+        LIMIT $5
+      `, [workspaceId, requesterMemberId, needle, like, limit]);
+      return result.rows || [];
+    }
+
+    const eligible = await listConversationRecipientMemberIds({
+      workspaceId,
+      conversationId,
+    });
+    if (!eligible.length) return [];
+
+    const result = await db.query(`
+      SELECT
+        'MEMBER'::text AS mention_type,
+        wm.workspace_member_id AS target_id,
+        wm.workspace_member_id,
+        COALESCE(wm.display_name_override, i.display_name) AS display_name,
+        i.primary_email
+      FROM ac_workspace_member wm
+      JOIN ac_identity i
+        ON i.identity_id = wm.identity_id
+       AND i.status = 'ACTIVE'
+      WHERE wm.workspace_id = $1
+        AND wm.workspace_member_id = ANY($2::uuid[])
+        AND wm.status = 'ACTIVE'
+        AND wm.workspace_member_id <> $3
+        AND (
+          $4 = ''
+          OR COALESCE(wm.display_name_override, i.display_name) ILIKE $5
+          OR COALESCE(i.primary_email, '') ILIKE $5
+        )
+      ORDER BY LOWER(COALESCE(wm.display_name_override, i.display_name))
+      LIMIT $6
+    `, [workspaceId, eligible, requesterMemberId, needle, like, limit]);
+    return result.rows || [];
+  }
+
   async function getActiveWorkspaceMember({ workspaceId, workspaceMemberId }) {
     const result = await db.query(`
       SELECT
@@ -294,7 +475,12 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
       messages: [materialized],
     });
 
-    return hydrated[0] || materialized;
+    const withMentions = await decorateMentions({
+      workspaceId,
+      messages: hydrated,
+    });
+
+    return withMentions[0] || materialized;
   }
 
   async function findHumanMessageByClientId({ workspaceId, conversationId, clientMessageId }) {
@@ -319,6 +505,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     clientMessageId,
     replyToMessageId,
     quoteMessageId,
+    mentions = [],
   }) {
     const messageId = randomUUID();
     const encrypted = messageCrypto.encryptText(bodyText, {
@@ -364,6 +551,13 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
         quoteMessageId || null,
       ]);
 
+      await replaceMessageMentions(client, {
+        workspaceId,
+        conversationId,
+        messageId,
+        mentions,
+      });
+
       await client.query(`
         UPDATE ac_conversation
         SET updated_at = NOW()
@@ -390,6 +584,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     messageId,
     editorMemberId,
     bodyText,
+    mentions = null,
   }) {
     const client = await db.connect();
 
@@ -489,7 +684,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
         };
       }
 
-      if (current.body_text === bodyText) {
+      if (current.body_text === bodyText && !Array.isArray(mentions)) {
         await client.query('COMMIT');
         return {
           status: 'UNCHANGED',
@@ -592,6 +787,15 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
         conversationId,
         messageId,
       ]);
+
+      if (Array.isArray(mentions)) {
+        await replaceMessageMentions(client, {
+          workspaceId,
+          conversationId,
+          messageId,
+          mentions,
+        });
+      }
 
       await client.query(`
         UPDATE ac_conversation
@@ -856,10 +1060,19 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
       if (matched.length >= limit) break;
     }
 
-    return decorateReactionSummaries({
+    const withReactions = await decorateReactionSummaries({
       workspaceId,
       workspaceMemberId,
-      messages: await hydrateQuotedMessages({ workspaceId, conversationId, messages: matched }),
+      messages: await hydrateQuotedMessages({
+        workspaceId,
+        conversationId,
+        messages: matched,
+      }),
+    });
+
+    return decorateMentions({
+      workspaceId,
+      messages: withReactions,
     });
   }
 
@@ -1075,7 +1288,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
       ? pageDescending[pageDescending.length - 1].message_id
       : null;
 
-    const rows = await decorateReactionSummaries({
+    const rowsWithReactions = await decorateReactionSummaries({
       workspaceId,
       workspaceMemberId,
       messages: await hydrateQuotedMessages({
@@ -1086,6 +1299,11 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
             .reverse()
             .map(materializeMessage),
       }),
+    });
+
+    const rows = await decorateMentions({
+      workspaceId,
+      messages: rowsWithReactions,
     });
 
     return {
@@ -1165,7 +1383,7 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
       ORDER BY m.created_at, m.message_id
     `, [workspaceId, conversationId, parentMessageId]);
 
-    const replies =
+    const repliesWithReactions =
       await decorateReactionSummaries({
         workspaceId,
         workspaceMemberId,
@@ -1177,6 +1395,11 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
               .map(materializeMessage),
         }),
       });
+
+    const replies = await decorateMentions({
+      workspaceId,
+      messages: repliesWithReactions,
+    });
 
     return {
       parent,
@@ -1702,6 +1925,9 @@ function createMessagingRepository(db, { messageCrypto } = {}) {
     updateMemberPresenceProfile,
     touchMemberLastSeen,
     listConversationRecipientMemberIds,
+    getMentionMemberTarget,
+    getAccessibleChannelReference,
+    listMentionCandidates,
   });
 }
 

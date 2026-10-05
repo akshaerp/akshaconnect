@@ -41,6 +41,7 @@ function validateHumanMessageInput(input = {}) {
   const clientMessageId = clean(input.client_message_id ?? input.clientMessageId);
   const replyToMessageId = clean(input.reply_to_message_id ?? input.replyToMessageId) || null;
   const quoteMessageId = clean(input.quote_message_id ?? input.quoteMessageId) || null;
+  const mentions = Array.isArray(input.mentions) ? input.mentions : [];
 
   if (!bodyText || bodyText.length > MAX_MESSAGE_CHARS) {
     throw boundaryError(
@@ -70,6 +71,7 @@ function validateHumanMessageInput(input = {}) {
     clientMessageId,
     replyToMessageId,
     quoteMessageId,
+    mentions,
   });
 }
 
@@ -155,6 +157,23 @@ function sameNullable(left, right) {
   return (left || null) === (right || null);
 }
 
+function sameMentionSet(left = [], right = []) {
+  const signature = (rows) =>
+    (rows || [])
+      .map((item) =>
+        [
+          item?.mention_type || '',
+          item?.target_workspace_member_id ||
+            item?.target_channel_conversation_id ||
+            item?.target_id ||
+            '',
+        ].join(':')
+      )
+      .sort()
+      .join('|');
+  return signature(left) === signature(right);
+}
+
 function createMessagingService(repository, {
   eventPublisher = null,
   pushPublisher = null,
@@ -210,6 +229,89 @@ function createMessagingService(repository, {
       throw boundaryError('CONVERSATION_ACCESS_DENIED', 'Conversation is unavailable', 404);
     }
     return { conversationId: cleanConversationId, access };
+  }
+
+  async function validateMentionTargets(actor, conversationId, source = []) {
+    if (!Array.isArray(source)) return [];
+    if (source.length > 20) {
+      throw boundaryError('MESSAGE_MENTIONS_INVALID', 'A message can contain at most 20 mentions', 400);
+    }
+
+    const result = [];
+    const seen = new Set();
+
+    for (const raw of source) {
+      const type = clean(raw?.mention_type ?? raw?.type).toUpperCase();
+      const targetId = clean(
+        raw?.target_id ??
+        raw?.target_workspace_member_id ??
+        raw?.target_channel_conversation_id
+      );
+
+      if (!targetId || !['MEMBER','CHANNEL'].includes(type)) {
+        throw boundaryError('MESSAGE_MENTIONS_INVALID', 'Mention target is invalid', 400);
+      }
+
+      const key = `${type}:${targetId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      if (type === 'MEMBER') {
+        const member = await repository.getMentionMemberTarget({
+          workspaceId: actor.workspaceId,
+          conversationId,
+          targetMemberId: targetId,
+        });
+        if (!member) {
+          throw boundaryError('MESSAGE_MENTION_MEMBER_INVALID', 'Mentioned person cannot access this conversation', 400);
+        }
+        result.push({
+          mention_type: 'MEMBER',
+          target_workspace_member_id: member.workspace_member_id,
+          target_channel_conversation_id: null,
+          display_text: `@${member.display_name || member.primary_email || 'Member'}`,
+        });
+        continue;
+      }
+
+      const channel = await repository.getAccessibleChannelReference({
+        workspaceId: actor.workspaceId,
+        requesterMemberId: actor.workspaceMemberId,
+        targetConversationId: targetId,
+      });
+      if (!channel) {
+        throw boundaryError('MESSAGE_MENTION_CHANNEL_INVALID', 'Referenced channel is unavailable', 400);
+      }
+      result.push({
+        mention_type: 'CHANNEL',
+        target_workspace_member_id: null,
+        target_channel_conversation_id: channel.conversation_id,
+        display_text: `#${channel.channel_name}`,
+      });
+    }
+
+    return result;
+  }
+
+  async function listMentionCandidates(claims, conversationId, input = {}) {
+    const { actor } = await requireActiveActor(claims);
+    const allowed = await requireConversationAccess(actor, conversationId);
+    const kind = clean(input.kind || 'MEMBER').toUpperCase();
+    if (!['MEMBER','CHANNEL'].includes(kind)) {
+      throw boundaryError('MENTION_KIND_INVALID', 'Mention kind must be MEMBER or CHANNEL', 400);
+    }
+    const query = clean(input.query).slice(0, 160);
+    const limit = Math.max(1, Math.min(20, Number(input.limit || 10) || 10));
+    return {
+      mention_candidates: await repository.listMentionCandidates({
+        workspaceId: actor.workspaceId,
+        conversationId: allowed.conversationId,
+        requesterMemberId: actor.workspaceMemberId,
+        kind,
+        query,
+        limit,
+      }),
+    };
   }
 
   async function listMessages(claims, conversationId, options = {}) {
@@ -343,6 +445,11 @@ function createMessagingService(repository, {
     const { actor } = await requireActiveActor(claims);
     const allowed = await requireConversationAccess(actor, conversationId);
     const message = validateHumanMessageInput(input);
+    const mentionRows = await validateMentionTargets(
+      actor,
+      allowed.conversationId,
+      message.mentions
+    );
 
     if (message.replyToMessageId) {
       const reply = await repository.getMessageInConversation({
@@ -389,7 +496,8 @@ function createMessagingService(repository, {
         existing.sender_member_id !== actor.workspaceMemberId ||
         existing.body_text !== message.bodyText ||
         !sameNullable(existing.reply_to_message_id, message.replyToMessageId) ||
-        !sameNullable(existing.quote_message_id, message.quoteMessageId)
+        !sameNullable(existing.quote_message_id, message.quoteMessageId) ||
+        !sameMentionSet(existing.mentions, mentionRows)
       ) {
         throw boundaryError(
           'MESSAGE_IDEMPOTENCY_CONFLICT',
@@ -409,6 +517,7 @@ function createMessagingService(repository, {
         clientMessageId: message.clientMessageId,
         replyToMessageId: message.replyToMessageId,
         quoteMessageId: message.quoteMessageId,
+        mentions: mentionRows,
       });
       publishRealtime({
         type: 'message.created',
@@ -437,7 +546,8 @@ function createMessagingService(repository, {
           winner.sender_member_id === actor.workspaceMemberId &&
           winner.body_text === message.bodyText &&
           sameNullable(winner.reply_to_message_id, message.replyToMessageId) &&
-          sameNullable(winner.quote_message_id, message.quoteMessageId)
+          sameNullable(winner.quote_message_id, message.quoteMessageId) &&
+          sameMentionSet(winner.mentions, mentionRows)
         ) {
           return { created: false, message: winner };
         }
@@ -503,6 +613,15 @@ function createMessagingService(repository, {
       );
     }
 
+    const mentionRows =
+      Array.isArray(input.mentions)
+        ? await validateMentionTargets(
+            actor,
+            allowed.conversationId,
+            input.mentions
+          )
+        : null;
+
     const result =
       await repository
         .updateHumanTextMessage({
@@ -515,6 +634,7 @@ function createMessagingService(repository, {
           editorMemberId:
             actor.workspaceMemberId,
           bodyText,
+          mentions: mentionRows,
         });
 
     if (
@@ -975,6 +1095,7 @@ function createMessagingService(repository, {
   return Object.freeze({
     listMessages,
     searchConversationMessages,
+    listMentionCandidates,
     toggleMessageReaction,
     listMessageReactionUsers,
     listThread,

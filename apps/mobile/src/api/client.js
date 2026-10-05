@@ -222,6 +222,20 @@ export function listWorkspaceMembers(baseUrl, token, { query = '', limit = 50 } 
   return request(baseUrl, path, { token });
 }
 
+export function searchMentionCandidates(
+  baseUrl,
+  token,
+  conversationId,
+  { kind = 'MEMBER', query = '', limit = 10 } = {}
+) {
+  const path =
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
+    `/mention-candidates?kind=${encodeURIComponent(String(kind))}` +
+    `&query=${encodeURIComponent(String(query || ''))}` +
+    `&limit=${encodeURIComponent(String(limit))}`;
+  return request(baseUrl, path, { token });
+}
+
 export function startDirectMessage(baseUrl, token, targetWorkspaceMemberId) {
   return request(baseUrl, '/api/v1/direct-messages', {
     token,
@@ -330,6 +344,7 @@ export function sendMessage(
     clientMessageId,
     replyToMessageId = null,
     quoteMessageId = null,
+    mentions = [],
   }
 ) {
   return request(
@@ -343,6 +358,7 @@ export function sendMessage(
         client_message_id: clientMessageId,
         reply_to_message_id: replyToMessageId,
         quote_message_id: quoteMessageId,
+        mentions,
       },
     }
   );
@@ -502,7 +518,14 @@ export async function downloadAttachmentToCache(
   }
 }
 
-export function editMessage(baseUrl, token, conversationId, messageId, bodyText) {
+export function editMessage(
+  baseUrl,
+  token,
+  conversationId,
+  messageId,
+  bodyText,
+  mentions = undefined
+) {
   return request(
     baseUrl,
     `/api/v1/conversations/${encodeURIComponent(conversationId)}` +
@@ -510,7 +533,10 @@ export function editMessage(baseUrl, token, conversationId, messageId, bodyText)
     {
       token,
       method: 'PUT',
-      body: { body_text: bodyText },
+      body: {
+        body_text: bodyText,
+        ...(Array.isArray(mentions) ? { mentions } : {}),
+      },
     }
   );
 }

@@ -32,7 +32,6 @@ test('V15-A mobile message actions expose Forward and route targets through exis
   assert.match(conversation, /filteredForwardTargets/);
 });
 
-
 test('V15-A attachment cards expose the same long-press message actions as text messages', () => {
   const conversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
 
@@ -63,14 +62,19 @@ test('V15-A composer shows actual attachment count and explains the four-file ma
 
 test('V15-A image preview uses conversation gallery position instead of a hard-coded single item count', () => {
   const conversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
+  const viewer = read('apps/mobile/src/screens/ImageViewerModal.jsx');
 
   assert.match(conversation, /conversationImageAttachments/);
   assert.match(conversation, /galleryIndex/);
   assert.match(conversation, /galleryTotal/);
   assert.match(conversation, /openImagePreviewAtIndex/);
-  assert.match(conversation, /accessibilityLabel="Previous image"/);
-  assert.match(conversation, /accessibilityLabel="Next image"/);
-  assert.doesNotMatch(conversation, /['"`]1\s*\/\s*1['"`]/);
+  assert.match(conversation, /<ImageViewerModal/);
+  assert.match(viewer, /accessibilityLabel="Previous image"/);
+  assert.match(viewer, /accessibilityLabel="Next image"/);
+  assert.doesNotMatch(
+    `${conversation}\n${viewer}`,
+    /['"`]1\s*\/\s*1['"`]/
+  );
 });
 
 test('V15-A update policy fallback advertises accepted V14 when deployment env is absent', () => {
@@ -100,7 +104,6 @@ test('V15-A feature coverage remains valid on the current VC19 Android identity'
   assert.match(gradle, /versionName "0\.3\.0-v19"/);
 });
 
-
 test('V15-A R3 renders authenticated inline image thumbnails and keeps tap/long-press semantics separate', () => {
   const conversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
 
@@ -122,7 +125,7 @@ test('V15-A R3 image copy uses explicit image MIME clipboard data and confirms s
   assert.match(conversation, /'Image copied'/);
   assert.match(conversation, /accept image clipboard content/);
   assert.match(clipboard, /ClipData\.newUri/);
-      assert.match(clipboard, /clipboard\.primaryClip/);
+  assert.match(clipboard, /clipboard\.primaryClip/);
   assert.match(clipboard, /AKSHACONNECT_CLIPBOARD_IMAGE_VERIFY_FAILED/);
   assert.match(clipboard, /verifyReadableUri\(uri\)/);
   assert.match(clipboard, /pruneOldClipboardImages/);
@@ -130,8 +133,25 @@ test('V15-A R3 image copy uses explicit image MIME clipboard data and confirms s
 
 test('V15-A R3 shows attachment totals without positional 1-of-N copy and enforces four', () => {
   const conversation = read('apps/mobile/src/screens/ConversationScreen.jsx');
+  const viewer = read('apps/mobile/src/screens/ImageViewerModal.jsx');
 
-  assert.match(conversation, /Maximum \$\{MAX_PENDING_ATTACHMENTS\} attachments can be sent at a time/);
-  assert.match(conversation, /previewAttachment\.galleryTotal[\s\S]*\? 'image'[\s\S]*: 'images'/);
-  assert.doesNotMatch(conversation, /galleryIndex[\s\S]{0,180}\/[\s\S]{0,180}galleryTotal/);
+  assert.match(
+    conversation,
+    /Maximum \$\{MAX_PENDING_ATTACHMENTS\} attachments can be sent at a time/
+  );
+
+  assert.match(
+    conversation,
+    /total=\{[\s\S]*previewAttachment[\s\S]*galleryTotal/
+  );
+
+  assert.match(
+    viewer,
+    /Number\(total\)[\s\S]*=== 1[\s\S]*\? 'image'[\s\S]*: 'images'/
+  );
+
+  assert.doesNotMatch(
+    viewer,
+    /Number\(index\)[\s\S]{0,220}\sof\s/
+  );
 });

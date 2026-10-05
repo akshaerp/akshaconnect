@@ -14,12 +14,14 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     // Cold-start callbacks are captured before React Native initializes.
     AkshaConnectAuthCallbackStore.capture(intent)
+    AkshaConnectInboundShareStore.capture(intent)
     super.onCreate(savedInstanceState)
   }
 
   override fun onNewIntent(intent: Intent) {
     // Warm/resumed browser callbacks are persisted independently of React Native Linking.
     AkshaConnectAuthCallbackStore.capture(intent)
+    AkshaConnectInboundShareStore.capture(intent)
     setIntent(intent)
     super.onNewIntent(intent)
   }
@@ -28,6 +30,7 @@ class MainActivity : ReactActivity() {
     super.onResume()
     // Native lifecycle retry: do not depend on React Native AppState/focus delivery.
     AkshaConnectAuthCallbackStore.notifyPending()
+    AkshaConnectInboundShareStore.notifyPending()
   }
 
   override fun createReactActivityDelegate(): ReactActivityDelegate =

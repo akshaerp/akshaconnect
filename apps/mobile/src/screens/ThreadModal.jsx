@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
+  NativeModules,
   Platform,
   Pressable,
   ScrollView,
@@ -19,10 +20,15 @@ import {
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import {
   downloadAttachmentToCache,
+  listChannels,
   listThread,
+  listWorkspaceMembers,
   sendMessage,
   uploadAttachment,
 } from '../api/client';
+import {
+  listChannelMembers,
+} from '../api/channelMembers';
 import Text from '../theme/AppText';
 import { colors } from '../theme/colors';
 import { useAppAppearance } from '../theme/appearanceStore';
@@ -35,6 +41,14 @@ import {
   JumpToLatestButton,
 } from './ConversationChrome.jsx';
 import MessageReadersModal from './MessageReadersModal.jsx';
+import ImageViewerModal from './ImageViewerModal.jsx';
+import MentionSuggestions from './MentionSuggestions.jsx';
+import MentionText from './MentionText.jsx';
+import {
+  applyMentionCandidate,
+  findActiveMention,
+  mentionsStillPresent,
+} from '../mentions/mentionUtils';
 
 const MAX_PENDING_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -64,6 +78,14 @@ function formatSize(value) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function attachmentIsImage(contentType = '') {
+  return String(contentType || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase()
+    .startsWith('image/');
 }
 
 function mergeById(rows) {
@@ -216,9 +238,14 @@ function ThreadMessage({
         {deleted ? (
           <Text style={[styles.v16oDeleted, { color: palette.textMuted }]}>Message deleted</Text>
         ) : message.message_type !== 'ATTACHMENT' ? (
-          <Text style={[styles.v16oBody, { color: own ? palette.ownMessageText : palette.otherMessageText }]}>
-            {message.body_text || ''}
-          </Text>
+          <MentionText
+            value={message.body_text || ''}
+            mentions={message.mentions || []}
+            style={[
+              styles.v16oBody,
+              { color: own ? palette.ownMessageText : palette.otherMessageText },
+            ]}
+          />
         ) : null}
 
         {!deleted && Array.isArray(message.attachments)
@@ -315,6 +342,13 @@ export default function ThreadModal({
   const [messageReadersRefreshEpoch, setMessageReadersRefreshEpoch] = useState(0);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [recentEmojis, setRecentEmojis] = useState([]);
+  const [draftMentions, setDraftMentions] = useState([]);
+  const [mentionSuggestions, setMentionSuggestions] = useState([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [mentionLookupError, setMentionLookupError] = useState('');
+  const mentionCandidateCacheRef = useRef(new Map());
+  const [previewAttachment, setPreviewAttachment] = useState(null);
+  const [attachmentBusyMode, setAttachmentBusyMode] = useState('');
   const lastSequenceRef = useRef(0);
   const scrollRef = useRef(null);
   const nearBottomRef = useRef(true);
@@ -323,6 +357,341 @@ export default function ThreadModal({
   const highlightTimerRef = useRef(null);
   const readReceiptRefreshTimerRef = useRef(null);
   const parentId = parentMessage?.message_id || '';
+
+  const threadImageAttachments = useMemo(
+    () =>
+      [parent, ...replies].flatMap(
+        (message) =>
+          (
+            message?.attachments ||
+            []
+          )
+            .filter(
+              (attachment) =>
+                attachmentIsImage(
+                  attachment
+                    ?.content_type
+                )
+            )
+            .map(
+              (attachment) => ({
+                ...attachment,
+
+                message_id:
+                  message
+                    ?.message_id,
+
+                sender_display_name:
+                  message
+                    ?.sender_display_name ||
+                  (
+                    message
+                      ?.sender_member_id ===
+                    currentMemberId
+                      ? 'You'
+                      : 'Member'
+                  ),
+
+                created_at:
+                  message
+                    ?.created_at ||
+                  null,
+
+                reactions:
+                  message
+                    ?.reactions ||
+                  [],
+              })
+            )
+      ),
+    [
+      parent,
+      replies,
+      currentMemberId,
+    ]
+  );
+
+  const activeMention = useMemo(() => findActiveMention(draft), [draft]);
+
+  useEffect(() => {
+    if (
+      !visible ||
+      !activeMention ||
+      !conversationId ||
+      !serverUrl ||
+      !token
+    ) {
+      setMentionSuggestions([]);
+      setMentionLoading(false);
+      setMentionLookupError('');
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const type =
+      activeMention.type;
+
+    const query =
+      String(
+        activeMention.query || ''
+      )
+        .trim()
+        .toLowerCase();
+
+    const cacheKey =
+      [
+        conversationId,
+        type,
+      ].join('|');
+
+    function filterSource(
+      source
+    ) {
+      const rows =
+        Array.isArray(source)
+          ? source
+          : [];
+
+      const filtered =
+        !query
+          ? rows
+          : rows.filter(
+              (item) =>
+                [
+                  item.display_name,
+                  item.primary_email,
+                  item.channel_name,
+                  item.channel_code,
+                ]
+                  .filter(Boolean)
+                  .some(
+                    (value) =>
+                      String(value)
+                        .toLowerCase()
+                        .includes(query)
+                  )
+            );
+
+      setMentionSuggestions(
+        filtered.slice(
+          0,
+          12
+        )
+      );
+    }
+
+    let sourcePromise =
+      mentionCandidateCacheRef
+        .current
+        .get(
+          cacheKey
+        );
+
+    if (!sourcePromise) {
+      sourcePromise =
+        (async () => {
+          if (
+            type ===
+            'CHANNEL'
+          ) {
+            const payload =
+              await listChannels(
+                serverUrl,
+                token
+              );
+
+            return (
+              payload?.channels ||
+              []
+            ).map(
+              (channel) => ({
+                mention_type:
+                  'CHANNEL',
+
+                target_id:
+                  channel
+                    .conversation_id,
+
+                channel_name:
+                  channel
+                    .channel_name ||
+                  'Channel',
+
+                channel_code:
+                  channel
+                    .channel_code ||
+                  '',
+              })
+            );
+          }
+
+          try {
+            const payload =
+              await listChannelMembers(
+                serverUrl,
+                token,
+                conversationId
+              );
+
+            return (
+              payload?.members ||
+              []
+            )
+              .filter(
+                (member) =>
+                  member
+                    ?.workspace_member_id &&
+                  member
+                    .workspace_member_id !==
+                    currentMemberId
+              )
+              .map(
+                (member) => ({
+                  mention_type:
+                    'MEMBER',
+
+                  target_id:
+                    member
+                      .workspace_member_id,
+
+                  workspace_member_id:
+                    member
+                      .workspace_member_id,
+
+                  display_name:
+                    member
+                      .display_name ||
+                    member
+                      .primary_email ||
+                    'Member',
+
+                  primary_email:
+                    member
+                      .primary_email ||
+                    '',
+                })
+              );
+          } catch (
+            channelError
+          ) {
+            const payload =
+              await listWorkspaceMembers(
+                serverUrl,
+                token,
+                {
+                  query: '',
+                  limit: 50,
+                }
+              );
+
+            return (
+              payload?.members ||
+              []
+            )
+              .filter(
+                (member) =>
+                  member
+                    ?.workspace_member_id &&
+                  member
+                    .workspace_member_id !==
+                    currentMemberId
+              )
+              .map(
+                (member) => ({
+                  mention_type:
+                    'MEMBER',
+
+                  target_id:
+                    member
+                      .workspace_member_id,
+
+                  workspace_member_id:
+                    member
+                      .workspace_member_id,
+
+                  display_name:
+                    member
+                      .display_name ||
+                    member
+                      .primary_email ||
+                    'Member',
+
+                  primary_email:
+                    member
+                      .primary_email ||
+                    '',
+                })
+              );
+          }
+        })();
+
+      mentionCandidateCacheRef
+        .current
+        .set(
+          cacheKey,
+          sourcePromise
+        );
+    }
+
+    setMentionLoading(true);
+    setMentionLookupError('');
+
+    Promise.resolve(
+      sourcePromise
+    )
+      .then((source) => {
+        if (!cancelled) {
+          filterSource(
+            source
+          );
+        }
+      })
+      .catch((error) => {
+        mentionCandidateCacheRef
+          .current
+          .delete(
+            cacheKey
+          );
+
+        if (!cancelled) {
+          setMentionSuggestions([]);
+
+          setMentionLookupError(
+            error?.message ||
+              'Could not load suggestions'
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setMentionLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeMention?.type,
+    activeMention?.query,
+    conversationId,
+    currentMemberId,
+    serverUrl,
+    token,
+    visible,
+  ]);
+
+  function selectThreadMention(candidate) {
+    const result = applyMentionCandidate(draft, activeMention, candidate);
+    if (!result.mention) return;
+    const next = result.text.slice(0, 8000);
+    setDraft(next);
+    setDraftMentions((current) =>
+      mentionsStillPresent(next, [...current, result.mention])
+    );
+    setMentionSuggestions([]);
+  }
 
   function scrollToLatest(animated = true) {
     nearBottomRef.current = true;
@@ -600,12 +969,264 @@ export default function ThreadModal({
     }
   }
 
+  async function closeThreadImagePreview() {
+    const localPath =
+      previewAttachment
+        ?.localPath ||
+      '';
+
+    setPreviewAttachment(
+      null
+    );
+
+    if (localPath) {
+      await ReactNativeBlobUtil
+        .fs
+        .unlink(
+          localPath
+        )
+        .catch(
+          () => {}
+        );
+    }
+  }
+
+  function openThreadImageAtIndex(index) {
+    if (
+      threadImageAttachments
+        .length === 0
+    ) {
+      return;
+    }
+
+    const normalized =
+      (
+        Number(
+          index ||
+          0
+        ) +
+        threadImageAttachments
+          .length
+      ) %
+      threadImageAttachments
+        .length;
+
+    const attachment =
+      threadImageAttachments[
+        normalized
+      ];
+
+    if (
+      !attachment
+        ?.attachment_id
+    ) {
+      return;
+    }
+
+    setError('');
+
+    setPreviewAttachment({
+      attachment,
+      fileName:
+        attachment
+          .file_name ||
+        'Image',
+      contentType:
+        attachment
+          .content_type ||
+        'image/*',
+      galleryIndex:
+        normalized,
+      galleryTotal:
+        threadImageAttachments
+          .length,
+    });
+  }
+
   async function openAttachment(attachment) {
+    if (
+      attachmentIsImage(
+        attachment
+          ?.content_type
+      )
+    ) {
+      const index =
+        threadImageAttachments
+          .findIndex(
+            (item) =>
+              item
+                .attachment_id ===
+              attachment
+                .attachment_id
+          );
+
+      await openThreadImageAtIndex(
+        index >= 0
+          ? index
+          : 0
+      );
+
+      return;
+    }
+
     try {
-      const downloaded = await downloadAttachmentToCache(serverUrl, token, conversationId, attachment);
-      await ReactNativeBlobUtil.android.actionViewIntent(downloaded.localPath, downloaded.contentType);
+      const downloaded =
+        await downloadAttachmentToCache(
+          serverUrl,
+          token,
+          conversationId,
+          attachment
+        );
+
+      await ReactNativeBlobUtil
+        .android
+        .actionViewIntent(
+          downloaded.localPath,
+          downloaded.contentType
+        );
     } catch (requestError) {
-      setError(requestError?.message || 'Could not open attachment');
+      setError(
+        requestError?.message ||
+          'Could not open attachment'
+      );
+    }
+  }
+
+  async function downloadThreadPreview() {
+    const current =
+      previewAttachment;
+
+    if (
+      !current?.attachment ||
+      attachmentBusyMode
+    ) {
+      return;
+    }
+
+    setAttachmentBusyMode(
+      'download'
+    );
+
+    try {
+      const downloaded =
+        await downloadAttachmentToCache(
+          serverUrl,
+          token,
+          conversationId,
+          current.attachment
+        );
+
+      await ReactNativeBlobUtil
+        .MediaCollection
+        .copyToMediaStore(
+          {
+            name:
+              downloaded
+                .fileName,
+
+            parentFolder:
+              'AkshaConnect',
+
+            mimeType:
+              downloaded
+                .contentType,
+          },
+
+          'Download',
+
+          downloaded.localPath
+        );
+
+      await ReactNativeBlobUtil
+        .fs
+        .unlink(
+          downloaded.localPath
+        )
+        .catch(
+          () => {}
+        );
+    } catch (requestError) {
+      setError(
+        requestError?.message ||
+          'Could not download image'
+      );
+    } finally {
+      setAttachmentBusyMode(
+        ''
+      );
+    }
+  }
+
+  async function shareThreadPreview() {
+    const current =
+      previewAttachment;
+
+    if (
+      !current?.attachment
+        ?.attachment_id ||
+      attachmentBusyMode
+    ) {
+      return;
+    }
+
+    const media =
+      NativeModules
+        .AkshaConnectMedia;
+
+    if (!media?.shareRemoteImage) {
+      setError(
+        'Image sharing is unavailable on this device'
+      );
+      return;
+    }
+
+    setAttachmentBusyMode(
+      'share'
+    );
+
+    try {
+      const root =
+        String(
+          serverUrl || ''
+        ).replace(
+          /\/+$/,
+          ''
+        );
+
+      const remoteUrl =
+        root +
+        '/api/v1/conversations/' +
+        encodeURIComponent(
+          conversationId
+        ) +
+        '/attachments/' +
+        encodeURIComponent(
+          current.attachment
+            .attachment_id
+        ) +
+        '/content';
+
+      await media.shareRemoteImage(
+        remoteUrl,
+        token,
+        current.contentType ||
+          current.attachment
+            .content_type ||
+          'image/*',
+        current.fileName ||
+          current.attachment
+            .file_name ||
+          'image'
+      );
+    } catch (requestError) {
+      setError(
+        requestError?.message ||
+          'Could not share image'
+      );
+    } finally {
+      setAttachmentBusyMode(
+        ''
+      );
     }
   }
 
@@ -632,6 +1253,7 @@ export default function ThreadModal({
 
   async function submit() {
     const bodyText = draft.trim();
+    const mentions = mentionsStillPresent(bodyText, draftMentions);
     if (sending || (!bodyText && pending.length === 0)) return;
     setSending(true);
     setError('');
@@ -642,9 +1264,12 @@ export default function ThreadModal({
           bodyText,
           clientMessageId: makeClientMessageId(),
           replyToMessageId: parentId,
+          mentions,
         });
         if (result?.message) created.push(result.message);
         setDraft('');
+        setDraftMentions([]);
+        setMentionSuggestions([]);
       }
       for (const item of pending) {
         let localPath = '';
@@ -905,6 +1530,15 @@ export default function ThreadModal({
             </View>
           ) : null}
 
+          <MentionSuggestions
+            visible={Boolean(activeMention)}
+            items={mentionSuggestions}
+            loading={mentionLoading}
+            error={mentionLookupError}
+            prefix={activeMention?.prefix || '@'}
+            onSelect={selectThreadMention}
+          />
+
           <ConversationEmojiPicker
             visible={showEmojiPicker}
             recentEmojis={recentEmojis}
@@ -933,6 +1567,122 @@ export default function ThreadModal({
             }
             sending={sending}
             sendLabel="Send"
+          />
+
+          <ImageViewerModal
+            visible={Boolean(previewAttachment)}
+            source={
+              previewAttachment?.attachment
+                ?.attachment_id
+                ? {
+                    uri:
+                      String(
+                        serverUrl ||
+                        ''
+                      ).replace(
+                        /\/+$/,
+                        ''
+                      ) +
+                      '/api/v1/conversations/' +
+                      encodeURIComponent(
+                        conversationId ||
+                          ''
+                      ) +
+                      '/attachments/' +
+                      encodeURIComponent(
+                        previewAttachment
+                          .attachment
+                          .attachment_id
+                      ) +
+                      '/content',
+                    headers:
+                      token
+                        ? {
+                            Authorization:
+                              'Bearer ' +
+                              token,
+                          }
+                        : undefined,
+                  }
+                : null
+            }
+            fileName={
+              previewAttachment?.fileName ||
+              previewAttachment?.attachment
+                ?.file_name ||
+              'Image'
+            }
+            contentType={
+              previewAttachment?.contentType ||
+              previewAttachment?.attachment
+                ?.content_type ||
+              'image/*'
+            }
+            sizeText={
+              formatSize(
+                previewAttachment?.attachment
+                  ?.size_bytes
+              )
+            }
+            sender={
+              previewAttachment?.attachment
+                ?.sender_display_name ||
+              ''
+            }
+            sentAt={
+              previewAttachment?.attachment
+                ?.created_at
+                ? new Date(
+                    previewAttachment
+                      .attachment
+                      .created_at
+                  ).toLocaleString()
+                : ''
+            }
+            index={
+              Number(
+                previewAttachment
+                  ?.galleryIndex ||
+                0
+              )
+            }
+            total={
+              Number(
+                previewAttachment
+                  ?.galleryTotal ||
+                1
+              )
+            }
+            busyMode={
+              attachmentBusyMode
+            }
+            onClose={
+              closeThreadImagePreview
+            }
+            onPrevious={() =>
+              openThreadImageAtIndex(
+                Number(
+                  previewAttachment
+                    ?.galleryIndex ||
+                  0
+                ) - 1
+              )
+            }
+            onNext={() =>
+              openThreadImageAtIndex(
+                Number(
+                  previewAttachment
+                    ?.galleryIndex ||
+                  0
+                ) + 1
+              )
+            }
+            onDownload={
+              downloadThreadPreview
+            }
+            onShare={
+              shareThreadPreview
+            }
           />
 
           <MessageReadersModal

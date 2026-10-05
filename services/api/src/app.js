@@ -867,6 +867,8 @@ function createRequestHandler({
         /^\/api\/v1\/conversations\/([^/]+)\/messages$/.exec(url.pathname);
       const messageSearchRoute =
         /^\/api\/v1\/conversations\/([^/]+)\/search$/.exec(url.pathname);
+      const mentionCandidatesRoute =
+        /^\/api\/v1\/conversations\/([^/]+)\/mention-candidates$/.exec(url.pathname);
       const messageReactionRoute =
         /^\/api\/v1\/conversations\/([^/]+)\/messages\/([^/]+)\/reactions$/.exec(url.pathname);
       const messageMutationRoute =
@@ -881,6 +883,7 @@ function createRequestHandler({
       if (
         messageRoute ||
         messageSearchRoute ||
+        mentionCandidatesRoute ||
         messageReactionRoute ||
         messageMutationRoute ||
         messageThreadRoute ||
@@ -906,6 +909,7 @@ function createRequestHandler({
         const encodedConversationId =
           messageRoute?.[1] ||
           messageSearchRoute?.[1] ||
+          mentionCandidatesRoute?.[1] ||
           messageReactionRoute?.[1] ||
           messageMutationRoute?.[1] ||
           messageThreadRoute?.[1] ||
@@ -918,6 +922,20 @@ function createRequestHandler({
             encodedConversationId
           );
 
+
+        if (mentionCandidatesRoute && req.method === 'GET') {
+          const result = await messagingService.listMentionCandidates(
+            claims,
+            conversationId,
+            {
+              kind: url.searchParams.get('kind') || 'MEMBER',
+              query: url.searchParams.get('query') || '',
+              limit: url.searchParams.get('limit') || undefined,
+            }
+          );
+          writeJson(res, 200, result);
+          return;
+        }
 
         if (messageSearchRoute && req.method === 'GET') {
           const result = await messagingService.searchConversationMessages(

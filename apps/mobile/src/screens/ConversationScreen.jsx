@@ -76,6 +76,14 @@ import {
 } from './ConversationChrome.jsx';
 import ConversationSearchBar from './ConversationSearchBar.jsx';
 import MessageReadersModal from './MessageReadersModal.jsx';
+import ImageViewerModal from './ImageViewerModal.jsx';
+import MentionSuggestions from './MentionSuggestions.jsx';
+import MentionText from './MentionText.jsx';
+import {
+  applyMentionCandidate,
+  findActiveMention,
+  mentionsStillPresent,
+} from '../mentions/mentionUtils';
 import {
   listConversationPins,
   pinConversationMessage,
@@ -582,6 +590,11 @@ export default function ConversationScreen({
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [pinnedMessageIds, setPinnedMessageIds] = useState(() => new Set());
   const [savedMessageIds, setSavedMessageIds] = useState(() => new Set());
+  const [draftMentions, setDraftMentions] = useState([]);
+  const [mentionSuggestions, setMentionSuggestions] = useState([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [mentionLookupError, setMentionLookupError] = useState('');
+  const mentionCandidateCacheRef = useRef(new Map());
 
   useEffect(() => {
     let mounted = true;
@@ -772,6 +785,17 @@ export default function ConversationScreen({
           .map((attachment) => ({
             ...attachment,
             message_id: message.message_id,
+            sender_display_name:
+              message.sender_display_name ||
+              (
+                message.sender_member_id ===
+                currentMemberId
+                  ? 'You'
+                  : 'Member'
+              ),
+            created_at:
+              message.created_at ||
+              null,
           }));
       }),
     [messages]
@@ -787,6 +811,298 @@ export default function ConversationScreen({
     draftUserChangedScopeRef.current = draftScopeKey;
     updateDraft(value);
   }, [draftScopeKey, updateDraft]);
+
+  const activeMention = useMemo(() => findActiveMention(draft), [draft]);
+
+  useEffect(() => {
+    if (
+      !activeMention ||
+      !conversation?.conversationId ||
+      !serverUrl ||
+      !token
+    ) {
+      setMentionSuggestions([]);
+      setMentionLoading(false);
+    setMentionLookupError('');
+      setMentionLookupError('');
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const type =
+      activeMention.type;
+
+    const query =
+      String(
+        activeMention.query || ''
+      )
+        .trim()
+        .toLowerCase();
+
+    const cacheKey =
+      [
+        conversation.conversationId,
+        conversation.kind,
+        type,
+      ].join('|');
+
+    function filterSource(
+      source
+    ) {
+      const rows =
+        Array.isArray(source)
+          ? source
+          : [];
+
+      const filtered =
+        !query
+          ? rows
+          : rows.filter(
+              (item) =>
+                [
+                  item.display_name,
+                  item.primary_email,
+                  item.channel_name,
+                  item.channel_code,
+                ]
+                  .filter(Boolean)
+                  .some(
+                    (value) =>
+                      String(value)
+                        .toLowerCase()
+                        .includes(
+                          query
+                        )
+                  )
+            );
+
+      setMentionSuggestions(
+        filtered.slice(
+          0,
+          12
+        )
+      );
+    }
+
+    let sourcePromise =
+      mentionCandidateCacheRef
+        .current
+        .get(
+          cacheKey
+        );
+
+    if (!sourcePromise) {
+      sourcePromise =
+        (async () => {
+          if (
+            type ===
+            'CHANNEL'
+          ) {
+            const payload =
+              await listChannels(
+                serverUrl,
+                token
+              );
+
+            return (
+              payload?.channels ||
+              []
+            ).map(
+              (channel) => ({
+                mention_type:
+                  'CHANNEL',
+
+                target_id:
+                  channel
+                    .conversation_id,
+
+                channel_name:
+                  channel
+                    .channel_name ||
+                  'Channel',
+
+                channel_code:
+                  channel
+                    .channel_code ||
+                  '',
+              })
+            );
+          }
+
+          if (
+            conversation.kind ===
+            'channel'
+          ) {
+            const payload =
+              await listChannelMembers(
+                serverUrl,
+                token,
+                conversation
+                  .conversationId
+              );
+
+            return (
+              payload?.members ||
+              []
+            )
+              .filter(
+                (member) =>
+                  member
+                    ?.workspace_member_id &&
+                  member
+                    .workspace_member_id !==
+                    currentMemberId
+              )
+              .map(
+                (member) => ({
+                  mention_type:
+                    'MEMBER',
+
+                  target_id:
+                    member
+                      .workspace_member_id,
+
+                  workspace_member_id:
+                    member
+                      .workspace_member_id,
+
+                  display_name:
+                    member
+                      .display_name ||
+                    member
+                      .primary_email ||
+                    'Member',
+
+                  primary_email:
+                    member
+                      .primary_email ||
+                    '',
+                })
+              );
+          }
+
+          const payload =
+            await listWorkspaceMembers(
+              serverUrl,
+              token,
+              {
+                query: '',
+                limit: 50,
+              }
+            );
+
+          return (
+            payload?.members ||
+            []
+          )
+            .filter(
+              (member) =>
+                member
+                  ?.workspace_member_id &&
+                member
+                  .workspace_member_id !==
+                  currentMemberId
+            )
+            .map(
+              (member) => ({
+                mention_type:
+                  'MEMBER',
+
+                target_id:
+                  member
+                    .workspace_member_id,
+
+                workspace_member_id:
+                  member
+                    .workspace_member_id,
+
+                display_name:
+                  member
+                    .display_name ||
+                  member
+                    .primary_email ||
+                  'Member',
+
+                primary_email:
+                  member
+                    .primary_email ||
+                  '',
+              })
+            );
+        })();
+
+      mentionCandidateCacheRef
+        .current
+        .set(
+          cacheKey,
+          sourcePromise
+        );
+    }
+
+    setMentionLoading(true);
+    setMentionLookupError('');
+
+    Promise.resolve(
+      sourcePromise
+    )
+      .then((source) => {
+        if (cancelled) {
+          return;
+        }
+
+        filterSource(
+          source
+        );
+      })
+      .catch((error) => {
+        mentionCandidateCacheRef
+          .current
+          .delete(
+            cacheKey
+          );
+
+        if (cancelled) {
+          return;
+        }
+
+        setMentionSuggestions([]);
+
+        setMentionLookupError(
+          error?.message ||
+            'Could not load suggestions'
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setMentionLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeMention?.type,
+    activeMention?.query,
+    conversation?.conversationId,
+    conversation?.kind,
+    currentMemberId,
+    serverUrl,
+    token,
+  ]);
+
+  function selectMentionSuggestion(candidate) {
+    const result = applyMentionCandidate(draft, activeMention, candidate);
+    if (!result.mention) return;
+    const next = result.text.slice(0, MAX_MESSAGE_CHARS);
+    handleDraftChange(next);
+    setDraftMentions((current) =>
+      mentionsStillPresent(next, [...current, result.mention])
+    );
+    setMentionSuggestions([]);
+    requestAnimationFrame(() => composerInputRef.current?.focus?.());
+  }
 
   useEffect(() => {
     editingMessageRef.current = editingMessage;
@@ -1010,6 +1326,9 @@ export default function ConversationScreen({
     setThreadSearchTargetMessageId('');
     setMessageReadersTarget(null);
     setMessageReadersRefreshEpoch(0);
+    setDraftMentions([]);
+    setMentionSuggestions([]);
+    setMentionLoading(false);
 
     arrivalDividerReadyRef.current = false;
     initialUnreadPositionedRef.current = false;
@@ -1701,11 +2020,10 @@ export default function ConversationScreen({
     }
   }
 
-  async function openImagePreviewAtIndex(
+  function openImagePreviewAtIndex(
     requestedIndex
   ) {
     if (
-      attachmentAction.attachmentId ||
       conversationImageAttachments.length === 0
     ) {
       return;
@@ -1713,68 +2031,48 @@ export default function ConversationScreen({
 
     const total =
       conversationImageAttachments.length;
+
     const normalizedIndex =
-      ((Number(requestedIndex || 0) % total) + total) %
+      (
+        (
+          Number(
+            requestedIndex ||
+            0
+          ) %
+          total
+        ) +
+        total
+      ) %
       total;
+
     const attachment =
       conversationImageAttachments[
         normalizedIndex
       ];
 
-    if (!attachment?.attachment_id) {
+    if (
+      !attachment?.attachment_id
+    ) {
       return;
     }
 
-    setAttachmentAction({
-      attachmentId:
-        attachment.attachment_id,
-      mode: 'preview',
-    });
     setError('');
 
-    let priorPath = '';
-
-    try {
-      priorPath =
-        previewAttachment?.localPath ||
-        '';
-
-      const downloaded =
-        await downloadAttachmentToCache(
-          serverUrl,
-          token,
-          conversation.conversationId,
+    setPreviewAttachment({
+      attachment,
+      fileName:
+        attachmentFileName(
           attachment
-        );
-
-      setPreviewAttachment({
-        ...downloaded,
-        attachment,
-        galleryIndex:
-          normalizedIndex,
-        galleryTotal:
-          total,
-      });
-
-      if (
-        priorPath &&
-        priorPath !== downloaded.localPath
-      ) {
-        await removeAttachmentLocalCopy(
-          priorPath
-        );
-      }
-    } catch (requestError) {
-      setError(
-        requestError?.message ||
-          'Could not preview attachment'
-      );
-    } finally {
-      setAttachmentAction({
-        attachmentId: '',
-        mode: '',
-      });
-    }
+        ),
+      contentType:
+        attachmentContentType(
+          attachment
+        ),
+      galleryIndex:
+        normalizedIndex,
+      galleryTotal:
+        total,
+    });
   }
 
   async function handlePreviewAttachment(
@@ -1934,6 +2232,137 @@ export default function ConversationScreen({
     }
   }
 
+  function previewMessageForAttachment() {
+    const messageId =
+      previewAttachment
+        ?.attachment
+        ?.message_id;
+
+    if (!messageId) {
+      return null;
+    }
+
+    return (
+      messages.find(
+        (message) =>
+          message.message_id ===
+          messageId
+      ) ||
+      null
+    );
+  }
+
+  async function handleSharePreviewAttachment() {
+    const current =
+      previewAttachment;
+
+    if (
+      !current?.attachment
+        ?.attachment_id ||
+      attachmentAction
+        .attachmentId
+    ) {
+      return;
+    }
+
+    const media =
+      NativeModules
+        .AkshaConnectMedia;
+
+    if (!media?.shareRemoteImage) {
+      setError(
+        'Image sharing is unavailable on this device'
+      );
+      return;
+    }
+
+    setAttachmentAction({
+      attachmentId:
+        current.attachment
+          .attachment_id,
+      mode: 'share',
+    });
+
+    setError('');
+
+    try {
+      const root =
+        String(
+          serverUrl || ''
+        ).replace(
+          /\/+$/,
+          ''
+        );
+
+      const remoteUrl =
+        root +
+        '/api/v1/conversations/' +
+        encodeURIComponent(
+          conversation
+            .conversationId
+        ) +
+        '/attachments/' +
+        encodeURIComponent(
+          current.attachment
+            .attachment_id
+        ) +
+        '/content';
+
+      await media.shareRemoteImage(
+        remoteUrl,
+        token,
+        current.contentType ||
+          current.attachment
+            .content_type ||
+          'image/*',
+        current.fileName ||
+          current.attachment
+            .file_name ||
+          'image'
+      );
+    } catch (requestError) {
+      setError(
+        requestError?.message ||
+          'Could not share image'
+      );
+    } finally {
+      setAttachmentAction({
+        attachmentId: '',
+        mode: '',
+      });
+    }
+  }
+
+  async function handleForwardPreviewAttachment() {
+    const message =
+      previewMessageForAttachment();
+
+    if (!message) {
+      return;
+    }
+
+    await closeAttachmentPreview();
+    await openForwardMessage(
+      message
+    );
+  }
+
+  async function handleReactPreviewAttachment(
+    emoji
+  ) {
+    const message =
+      previewMessageForAttachment();
+
+    if (!message) {
+      return;
+    }
+
+    await reactToMessage(
+      message,
+      emoji
+    );
+  }
+
   function toggleAttachmentActions(
     attachmentId
   ) {
@@ -2053,6 +2482,15 @@ export default function ConversationScreen({
 
     setQuoteReplyMessage(null);
     setEditingMessage(message);
+    setDraftMentions(
+      (message.mentions || []).map((mention) => ({
+        mention_type: mention.mention_type,
+        target_id:
+          mention.target_workspace_member_id ||
+          mention.target_channel_conversation_id,
+        display_text: mention.display_text,
+      }))
+    );
     updateDraft(
       String(message.body_text || '')
     );
@@ -2084,6 +2522,8 @@ export default function ConversationScreen({
 
   function cancelEditingMessage() {
     setEditingMessage(null);
+    setDraftMentions([]);
+    setMentionSuggestions([]);
     updateDraft('');
   }
 
@@ -2690,6 +3130,7 @@ export default function ConversationScreen({
 
   async function submitMessage() {
     const bodyText = draft.trim();
+    const mentions = mentionsStillPresent(bodyText, draftMentions);
     const attachmentsToSend =
       pendingAttachments.map((item) => ({
         ...item,
@@ -2718,7 +3159,8 @@ export default function ConversationScreen({
             token,
             conversation.conversationId,
             editingMessage.message_id,
-            bodyText
+            bodyText,
+            mentions
           );
 
         if (result?.message) {
@@ -2728,6 +3170,8 @@ export default function ConversationScreen({
         }
 
         setEditingMessage(null);
+        setDraftMentions([]);
+        setMentionSuggestions([]);
         updateDraft('');
       } catch (requestError) {
         setError(
@@ -2764,6 +3208,7 @@ export default function ConversationScreen({
             clientMessageId:
               makeClientMessageId(),
             quoteMessageId,
+            mentions,
           }
         );
 
@@ -2786,6 +3231,8 @@ export default function ConversationScreen({
         // Clear only after durable acknowledgement so an attachment retry
         // cannot resend already acknowledged text.
         await clearConversationDraft(draftScope).catch(() => {});
+        setDraftMentions([]);
+        setMentionSuggestions([]);
         updateDraft('');
       }
 
@@ -4059,6 +4506,17 @@ export default function ConversationScreen({
         ) : null}
 
         {!showMessageSearch ? (
+          <MentionSuggestions
+            visible={Boolean(activeMention)}
+            items={mentionSuggestions}
+            loading={mentionLoading}
+            error={mentionLookupError}
+            prefix={activeMention?.prefix || '@'}
+            onSelect={selectMentionSuggestion}
+          />
+        ) : null}
+
+        {!showMessageSearch ? (
           <ConversationEmojiPicker
             visible={showEmojiPicker}
             recentEmojis={recentEmojis}
@@ -4722,153 +5180,142 @@ export default function ConversationScreen({
           onRead={handleThreadRead}
         />
 
-        <Modal
+        <ImageViewerModal
           visible={Boolean(previewAttachment)}
-          transparent
-          animationType="fade"
-          onRequestClose={
+          source={
+            previewAttachment?.attachment
+              ?.attachment_id
+              ? {
+                  uri:
+                    String(
+                      serverUrl || ''
+                    ).replace(
+                      /\/+$/,
+                      ''
+                    ) +
+                    '/api/v1/conversations/' +
+                    encodeURIComponent(
+                      conversation
+                        ?.conversationId ||
+                        ''
+                    ) +
+                    '/attachments/' +
+                    encodeURIComponent(
+                      previewAttachment
+                        .attachment
+                        .attachment_id
+                    ) +
+                    '/content',
+                  headers:
+                    token
+                      ? {
+                          Authorization:
+                            'Bearer ' +
+                            token,
+                        }
+                      : undefined,
+                }
+              : null
+          }
+          fileName={
+            previewAttachment?.fileName ||
+            previewAttachment?.attachment
+              ?.file_name ||
+            'Image'
+          }
+          contentType={
+            previewAttachment?.contentType ||
+            previewAttachment?.attachment
+              ?.content_type ||
+            'image/*'
+          }
+          sizeText={
+            formatFileSize(
+              previewAttachment?.attachment
+                ?.size_bytes
+            )
+          }
+          sender={
+            previewAttachment?.attachment
+              ?.sender_display_name ||
+            ''
+          }
+          sentAt={
+            previewAttachment?.attachment
+              ?.created_at
+              ? new Date(
+                  previewAttachment
+                    .attachment
+                    .created_at
+                ).toLocaleString()
+              : ''
+          }
+          index={
+            Number(
+              previewAttachment
+                ?.galleryIndex ||
+              0
+            )
+          }
+          total={
+            Number(
+              previewAttachment
+                ?.galleryTotal ||
+              1
+            )
+          }
+          busyMode={
+            attachmentAction
+              .attachmentId
+              ? attachmentAction
+                  .mode
+              : ''
+          }
+          reactions={
+            QUICK_REACTIONS
+          }
+          reactionState={
+            previewMessageForAttachment()
+              ?.reactions ||
+            []
+          }
+          onClose={
             closeAttachmentPreview
           }
-        >
-          <View style={styles.previewOverlay}>
-            <View style={styles.previewPanel}>
-              <View style={styles.previewHeader}>
-                <View style={styles.previewHeaderCopy}>
-                  <Text
-                    style={styles.previewTitle}
-                    numberOfLines={1}
-                  >
-                    {previewAttachment?.fileName ||
-                      'Attachment'}
-                  </Text>
-                  <Text
-                    style={styles.previewMeta}
-                  >
-                    {previewAttachment?.galleryTotal
-                      ? `${
-                        previewAttachment.galleryTotal
-                      } ${
-                        Number(
-                          previewAttachment.galleryTotal
-                        ) === 1
-                          ? 'image'
-                          : 'images'
-                      } · ${
-                        previewAttachment?.contentType ||
-                        ''
-                      }`
-                      : previewAttachment?.contentType ||
-                        ''}
-                  </Text>
-                </View>
-
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Close attachment preview"
-                  onPress={
-                    closeAttachmentPreview
-                  }
-                  style={({ pressed }) => [
-                    styles.previewCloseButton,
-                    pressed
-                      ? styles.pressed
-                      : null,
-                  ]}
-                >
-                  <Text
-                    style={
-                      styles.previewCloseText
-                    }
-                  >
-                    ×
-                  </Text>
-                </Pressable>
-              </View>
-
-              {previewAttachment?.localPath ? (
-                <View style={styles.previewImageStage}>
-                  {Number(
-                    previewAttachment?.galleryTotal ||
-                    0
-                  ) > 1 ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Previous image"
-                      disabled={Boolean(
-                        attachmentAction.attachmentId
-                      )}
-                      onPress={() =>
-                        openImagePreviewAtIndex(
-                          Number(
-                            previewAttachment.galleryIndex ||
-                            0
-                          ) - 1
-                        )
-                      }
-                      style={({ pressed }) => [
-                        styles.previewNavButton,
-                        styles.previewNavPrevious,
-                        pressed
-                          ? styles.pressed
-                          : null,
-                      ]}
-                    >
-                      <Text
-                        style={styles.previewNavText}
-                      >
-                        ‹
-                      </Text>
-                    </Pressable>
-                  ) : null}
-
-                  <Image
-                    resizeMode="contain"
-                    style={styles.previewImage}
-                    source={{
-                      uri: attachmentFileUri(
-                        previewAttachment.localPath
-                      ),
-                    }}
-                  />
-
-                  {Number(
-                    previewAttachment?.galleryTotal ||
-                    0
-                  ) > 1 ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Next image"
-                      disabled={Boolean(
-                        attachmentAction.attachmentId
-                      )}
-                      onPress={() =>
-                        openImagePreviewAtIndex(
-                          Number(
-                            previewAttachment.galleryIndex ||
-                            0
-                          ) + 1
-                        )
-                      }
-                      style={({ pressed }) => [
-                        styles.previewNavButton,
-                        styles.previewNavNext,
-                        pressed
-                          ? styles.pressed
-                          : null,
-                      ]}
-                    >
-                      <Text
-                        style={styles.previewNavText}
-                      >
-                        ›
-                      </Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-              ) : null}
-            </View>
-          </View>
-        </Modal>
+          onPrevious={() =>
+            openImagePreviewAtIndex(
+              Number(
+                previewAttachment
+                  ?.galleryIndex ||
+                0
+              ) - 1
+            )
+          }
+          onNext={() =>
+            openImagePreviewAtIndex(
+              Number(
+                previewAttachment
+                  ?.galleryIndex ||
+                0
+              ) + 1
+            )
+          }
+          onForward={
+            handleForwardPreviewAttachment
+          }
+          onDownload={() =>
+            handleDownloadAttachment(
+              previewAttachment
+                ?.attachment
+            )
+          }
+          onShare={
+            handleSharePreviewAttachment
+          }
+          onReact={
+            handleReactPreviewAttachment
+          }
+        />
         </KeyboardAvoidingView>
       </SafeAreaView>
     </SafeAreaView>
@@ -5351,22 +5798,19 @@ function MessageBubble({
             )}
           </View>
         ) : (
-          <Text
+          <MentionText
+            value={
+              attachment
+                ? `Attachment: ${message.body_text || 'file'}`
+                : message.body_text || ''
+            }
+            mentions={message.mentions || []}
             style={[
               styles.body,
-              own
-                ? styles.ownBody
-                : null,
+              own ? styles.ownBody : null,
               { color: own ? palette.ownMessageText : palette.otherMessageText },
             ]}
-          >
-            {attachment
-              ? `Attachment: ${
-                  message.body_text ||
-                  'file'
-                }`
-              : message.body_text || ''}
-          </Text>
+          />
         )}
 
         {(pinned || saved) ? (

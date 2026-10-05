@@ -90,6 +90,21 @@ export function listMembers(token, query = '') {
   return request(`/api/v1/workspace/members?${params.toString()}`, { token });
 }
 
+export function searchMentionCandidates(
+  token,
+  conversationId,
+  { kind = 'MEMBER', query = '', limit = 10 } = {}
+) {
+  const params = new URLSearchParams();
+  params.set('kind', String(kind));
+  params.set('query', String(query || ''));
+  params.set('limit', String(limit));
+  return request(
+    `/api/v1/conversations/${encodeURIComponent(conversationId)}/mention-candidates?${params.toString()}`,
+    { token }
+  );
+}
+
 export function listChannels(token) {
   return request('/api/v1/channels', { token });
 }
@@ -173,6 +188,7 @@ export function sendMessage(
     clientMessageId,
     replyToMessageId = null,
     quoteMessageId = null,
+    mentions = [],
   }
 ) {
   return request(`/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`, {
@@ -183,6 +199,7 @@ export function sendMessage(
       client_message_id: clientMessageId,
       reply_to_message_id: replyToMessageId,
       quote_message_id: quoteMessageId,
+      mentions,
     },
   });
 }

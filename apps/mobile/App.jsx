@@ -18,6 +18,7 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -39,6 +40,7 @@ import {
   startDirectMessage,
   switchWorkspace,
   unregisterPush,
+  uploadAttachment,
 } from './src/api/client';
 
 import {
@@ -258,6 +260,416 @@ function mobileUpdateStatus(appVersion, policy) {
   return 'current';
 }
 
+function makeInboundShareClientMessageId() {
+  return `mobile-share-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function InboundShareModal({
+  visible,
+  share,
+  targets,
+  busy,
+  error,
+  onClose,
+  onSend,
+}) {
+  const [query, setQuery] = useState('');
+  const [selectedKeys, setSelectedKeys] = useState([]);
+
+  useEffect(() => {
+    if (visible) {
+      setQuery('');
+      setSelectedKeys([]);
+    }
+  }, [
+    visible,
+    share,
+  ]);
+
+  function toggleInboundShareTarget(target) {
+    if (busy || !target?.key) return;
+
+    setSelectedKeys((current) =>
+      current.includes(target.key)
+        ? current.filter(
+            (key) =>
+              key !== target.key
+          )
+        : [
+            ...current,
+            target.key,
+          ]
+    );
+  }
+
+  const selectedTargets =
+    targets.filter((target) =>
+      selectedKeys.includes(
+        target.key
+      )
+    );
+
+  const normalized =
+    query
+      .trim()
+      .toLowerCase();
+
+  const filtered =
+    normalized
+      ? targets.filter((target) =>
+          [
+            target.title,
+            target.subtitle,
+          ]
+            .filter(Boolean)
+            .some((value) =>
+              String(value)
+                .toLowerCase()
+                .includes(normalized)
+            )
+        )
+      : targets;
+
+  const count =
+    Number(share?.files?.length || 0);
+
+  return (
+    <Modal
+      visible={Boolean(visible)}
+      transparent
+      animationType="slide"
+      onRequestClose={busy ? undefined : onClose}
+      statusBarTranslucent
+    >
+      <View style={inboundShareStyles.backdrop}>
+        <Pressable
+          style={StyleSheet.absoluteFillObject}
+          onPress={busy ? undefined : onClose}
+        />
+
+        <View style={inboundShareStyles.sheet}>
+          <View style={inboundShareStyles.header}>
+            <View style={inboundShareStyles.headerCopy}>
+              <Text style={inboundShareStyles.title}>
+                Share image to
+              </Text>
+              <Text style={inboundShareStyles.subtitle}>
+                {count > 1
+                  ? `${count} images ready to send`
+                  : 'Choose a chat or channel'}
+              </Text>
+            </View>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel share"
+              disabled={busy}
+              onPress={onClose}
+              style={inboundShareStyles.closeButton}
+            >
+              <Text style={inboundShareStyles.closeText}>×</Text>
+            </Pressable>
+          </View>
+
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            editable={!busy}
+            placeholder="Search people or channels"
+            placeholderTextColor="#667085"
+            style={inboundShareStyles.search}
+          />
+
+          {error ? (
+            <Text style={inboundShareStyles.error}>
+              {error}
+            </Text>
+          ) : null}
+
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            style={inboundShareStyles.list}
+          >
+            {filtered.map((target) => (
+              <Pressable
+                key={target.key}
+                disabled={busy}
+                onPress={() =>
+                  toggleInboundShareTarget(
+                    target
+                  )
+                }
+                style={({ pressed }) => [
+                  inboundShareStyles.target,
+                  pressed
+                    ? inboundShareStyles.targetPressed
+                    : null,
+                ]}
+              >
+                <View style={inboundShareStyles.targetCopy}>
+                  <Text
+                    numberOfLines={1}
+                    style={inboundShareStyles.targetTitle}
+                  >
+                    {target.kind === 'channel'
+                      ? `# ${target.title}`
+                      : target.title}
+                  </Text>
+
+                  <Text
+                    numberOfLines={1}
+                    style={inboundShareStyles.targetSubtitle}
+                  >
+                    {target.subtitle}
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    inboundShareStyles.selectionCircle,
+                    selectedKeys.includes(
+                      target.key
+                    )
+                      ? inboundShareStyles.selectionCircleSelected
+                      : null,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      inboundShareStyles.selectionCheck,
+                      selectedKeys.includes(
+                        target.key
+                      )
+                        ? inboundShareStyles.selectionCheckSelected
+                        : null,
+                    ]}
+                  >
+                    {selectedKeys.includes(
+                      target.key
+                    )
+                      ? '✓'
+                      : ''}
+                  </Text>
+                </View>
+              </Pressable>
+            ))}
+
+            {!filtered.length ? (
+              <Text style={inboundShareStyles.empty}>
+                No matching chat or channel
+              </Text>
+            ) : null}
+          </ScrollView>
+
+          <View
+            style={
+              inboundShareStyles.footer
+            }
+          >
+            <Text
+              style={
+                inboundShareStyles.selectedCount
+              }
+            >
+              {selectedKeys.length
+                ? `${selectedKeys.length} selected`
+                : 'Select one or more recipients'}
+            </Text>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Send shared image"
+              disabled={
+                busy ||
+                selectedKeys.length === 0
+              }
+              onPress={() =>
+                onSend(
+                  selectedTargets
+                )
+              }
+              style={[
+                inboundShareStyles.sendButton,
+                (
+                  busy ||
+                  selectedKeys.length === 0
+                )
+                  ? inboundShareStyles.sendButtonDisabled
+                  : null,
+              ]}
+            >
+              <Text
+                style={
+                  inboundShareStyles.sendButtonText
+                }
+              >
+                {busy
+                  ? 'Sending…'
+                  : `Send (${selectedKeys.length})`}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const inboundShareStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(15,23,42,0.48)',
+  },
+  sheet: {
+    maxHeight: '78%',
+    minHeight: 360,
+    paddingTop: 14,
+    paddingHorizontal: 16,
+    paddingBottom: 18,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: '#FFFFFF',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  title: {
+    color: '#0E2455',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  subtitle: {
+    marginTop: 3,
+    color: '#667085',
+    fontSize: 12,
+  },
+  closeButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  closeText: {
+    color: '#0E2455',
+    fontSize: 30,
+  },
+  search: {
+    minHeight: 46,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#D0D5DD',
+    borderRadius: 14,
+    color: '#101828',
+    backgroundColor: '#FFFFFF',
+  },
+  error: {
+    marginTop: 10,
+    color: '#B42318',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  list: {
+    marginTop: 10,
+  },
+  target: {
+    minHeight: 62,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EAECF0',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  targetPressed: {
+    opacity: 0.68,
+  },
+  targetCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  targetTitle: {
+    color: '#101828',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  targetSubtitle: {
+    marginTop: 3,
+    color: '#667085',
+    fontSize: 11,
+  },
+  selectionCircle: {
+    width: 26,
+    height: 26,
+    marginLeft: 10,
+    borderWidth: 2,
+    borderColor: '#98A2B3',
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectionCircleSelected: {
+    borderColor: '#1570EF',
+    backgroundColor: '#1570EF',
+  },
+  selectionCheck: {
+    color: 'transparent',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  selectionCheckSelected: {
+    color: '#FFFFFF',
+  },
+  footer: {
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#EAECF0',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  selectedCount: {
+    flex: 1,
+    minWidth: 0,
+    color: '#667085',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  sendButton: {
+    minWidth: 112,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1570EF',
+  },
+  sendButtonDisabled: {
+    opacity: 0.42,
+  },
+  sendButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  empty: {
+    paddingVertical: 28,
+    textAlign: 'center',
+    color: '#667085',
+  },
+  sending: {
+    paddingTop: 10,
+    textAlign: 'center',
+    color: '#1570EF',
+    fontWeight: '800',
+  },
+});
+
 export default function App() {
   const { darkMode, palette } = useAppAppearance();
   const [showSplash, setShowSplash] = useState(true);
@@ -297,6 +709,9 @@ export default function App() {
   const [updatePolicy, setUpdatePolicy] = useState(null);
   const [updateCheckState, setUpdateCheckState] = useState('idle');
   const [updatePromptDismissed, setUpdatePromptDismissed] = useState(false);
+  const [inboundShare, setInboundShare] = useState(null);
+  const [inboundShareBusy, setInboundShareBusy] = useState(false);
+  const [inboundShareError, setInboundShareError] = useState('');
 
   const [discoveryEmail, setDiscoveryEmail] = useState('');
   const [organizations, setOrganizations] = useState([]);
@@ -466,6 +881,184 @@ export default function App() {
     prepareNativeNotifications().catch(() => {});
     return undefined;
   }, [session]);
+
+  const cleanupInboundShareFiles = useCallback(async (share) => {
+    const paths =
+      (share?.files || [])
+        .map((file) => file?.localPath)
+        .filter(Boolean);
+
+    if (!paths.length || Platform.OS !== 'android') {
+      return;
+    }
+
+    await NativeModules
+      .AkshaConnectInboundShare
+      ?.cleanupFiles?.(paths)
+      .catch(() => {});
+  }, []);
+
+  const consumePendingInboundShare = useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+
+    const bridge =
+      NativeModules
+        .AkshaConnectInboundShare;
+
+    if (!bridge?.consumePendingShare) return;
+
+    try {
+      const pending =
+        await bridge.consumePendingShare();
+
+      if (
+        pending?.files?.length
+      ) {
+        setInboundShare(pending);
+        setInboundShareError('');
+      }
+    } catch (error) {
+      setInboundShareError(
+        error?.message ||
+          'Could not prepare the shared image.'
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return undefined;
+    }
+
+    const subscription =
+      DeviceEventEmitter.addListener(
+        'AkshaConnectInboundShare',
+        consumePendingInboundShare
+      );
+
+    const appStateSubscription =
+      AppState.addEventListener(
+        'change',
+        (nextState) => {
+          if (nextState === 'active') {
+            consumePendingInboundShare();
+          }
+        }
+      );
+
+    consumePendingInboundShare();
+
+    return () => {
+      subscription.remove();
+      appStateSubscription.remove();
+    };
+  }, [consumePendingInboundShare]);
+
+  const closeInboundShare = useCallback(async () => {
+    if (inboundShareBusy) return;
+
+    const current = inboundShare;
+    setInboundShare(null);
+    setInboundShareError('');
+    await cleanupInboundShareFiles(current);
+  }, [
+    cleanupInboundShareFiles,
+    inboundShare,
+    inboundShareBusy,
+  ]);
+
+  const sendInboundShare = useCallback(async (targets) => {
+    const selectedTargets =
+      Array.isArray(targets)
+        ? targets.filter(
+            (target) =>
+              target?.conversationId
+          )
+        : [];
+
+    if (
+      inboundShareBusy ||
+      !inboundShare?.files?.length ||
+      selectedTargets.length === 0 ||
+      !session?.access_token ||
+      !serverUrl
+    ) {
+      return;
+    }
+
+    setInboundShareBusy(true);
+    setInboundShareError('');
+
+    try {
+      for (
+        const target of
+        selectedTargets
+      ) {
+        for (
+          const file of
+          inboundShare.files.slice(
+            0,
+            4
+          )
+        ) {
+          await uploadAttachment(
+            serverUrl,
+            session.access_token,
+            target.conversationId,
+            {
+              localPath:
+                file.localPath,
+              fileName:
+                file.fileName ||
+                'shared-image',
+              contentType:
+                file.contentType ||
+                'image/*',
+              clientMessageId:
+                makeInboundShareClientMessageId(),
+            }
+          );
+        }
+      }
+
+      const completedShare =
+        inboundShare;
+
+      setInboundShare(null);
+
+      await cleanupInboundShareFiles(
+        completedShare
+      );
+
+      if (
+        selectedTargets.length ===
+        1
+      ) {
+        setSelectedConversation(
+          selectedTargets[0]
+            .selection
+        );
+      }
+
+      setReconcileEpoch(
+        (value) =>
+          value + 1
+      );
+    } catch (error) {
+      setInboundShareError(
+        error?.message ||
+          'Could not send the shared image.'
+      );
+    } finally {
+      setInboundShareBusy(false);
+    }
+  }, [
+    cleanupInboundShareFiles,
+    inboundShare,
+    inboundShareBusy,
+    serverUrl,
+    session?.access_token,
+  ]);
 
   const clearAuthenticatedState = useCallback(() => {
     setSession(null);
@@ -1720,6 +2313,60 @@ export default function App() {
 
   const showLogin = !session || addingOrganization;
 
+  const inboundShareTargets = [
+    ...(directMessages || []).map((dm) => ({
+      key: `dm-${dm.conversation_id}`,
+      kind: 'dm',
+      conversationId:
+        dm.conversation_id,
+      title:
+        dm.other_display_name ||
+        'Member',
+      subtitle:
+        dm.other_primary_email ||
+        'Direct message',
+      selection: {
+        kind: 'dm',
+        conversationId:
+          dm.conversation_id,
+        title:
+          dm.other_display_name ||
+          'Member',
+        subtitle:
+          dm.other_primary_email ||
+          'Direct message',
+        otherWorkspaceMemberId:
+          dm.other_workspace_member_id ||
+          '',
+      },
+    })),
+    ...(channels || []).map((channel) => ({
+      key: `channel-${channel.conversation_id}`,
+      kind: 'channel',
+      conversationId:
+        channel.conversation_id,
+      title:
+        channel.channel_name ||
+        'Channel',
+      subtitle:
+        channel.visibility === 'PRIVATE'
+          ? 'Private channel'
+          : 'Public channel',
+      selection: {
+        kind: 'channel',
+        conversationId:
+          channel.conversation_id,
+        title:
+          channel.channel_name ||
+          'Channel',
+        subtitle:
+          channel.visibility === 'PRIVATE'
+            ? 'Private channel'
+            : 'Public channel',
+      },
+    })),
+  ];
+
   return (
     <SafeAreaProvider>
       <View
@@ -1799,6 +2446,20 @@ export default function App() {
           />
         </View>
       )}
+
+      <InboundShareModal
+        visible={Boolean(
+          inboundShare &&
+          session &&
+          !addingOrganization
+        )}
+        share={inboundShare}
+        targets={inboundShareTargets}
+        busy={inboundShareBusy}
+        error={inboundShareError}
+        onClose={closeInboundShare}
+        onSend={sendInboundShare}
+      />
 
       <AppUpdateModal
         visible={
